@@ -372,3 +372,22 @@ public interface IOrderPaymentsReader
 {
     Task<IReadOnlyList<OrderPaymentDto>> ListAsync(Guid orderId, CancellationToken cancellationToken);
 }
+
+/// O `order` resumido das respostas de pagamento e estorno (06 §6.10).
+public sealed record OrderBalanceDto(Guid Id, int Version, Money TotalAmount, Money PaidAmount, Money Balance, bool IsPaid);
+
+/// Pedido como o Payments precisa para validar um pagamento.
+public sealed record OrderPaymentSnapshot(Guid Id, int Version, int OrderNumber, Money TotalAmount, Money PaidAmount, Money Balance, bool IsCanceled);
+
+/// Para o Payments (07 §7.8). Trabalha no mesmo AppDbContext e transação: o pedido carregado aqui é o mesmo
+/// agregado rastreado que `Apply`/`Undo` alteram, e o token de versão protege contra edição concorrente.
+public interface IOrderPaymentPort
+{
+    /// NotFound, `VersionConflict` (If-Match = versão do pedido) e `OrderCanceled`.
+    Task<OrderPaymentSnapshot> LoadForPaymentAsync(Guid orderId, int expectedVersion, CancellationToken cancellationToken);
+
+    /// `PaymentExceedsBalance` (com `balance`).
+    Task<OrderBalanceDto> ApplyPaymentAsync(Guid orderId, Money amount, CancellationToken cancellationToken);
+
+    Task<OrderBalanceDto> UndoPaymentAsync(Guid orderId, Money amount, CancellationToken cancellationToken);
+}

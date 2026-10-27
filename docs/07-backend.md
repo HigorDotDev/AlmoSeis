@@ -432,6 +432,8 @@ RecordChange(kind, details, affectsProduction) → OrderChangeEvent + Touch(Orde
 | `ReversePaymentHandler` [I][M] | Carrega o pagamento → versão do pedido via port → `Reverse` → `UndoPaymentAsync` → auditoria `PaymentReversed` → `OrderPaymentReversed` |
 | `ListOrderPaymentsQuery`, `GetPaymentQuery` | Projeções com `reversal` |
 
+**Implementado:** `Payment` e `PaymentReversal` são `Entity` + `ISyncTracked`, não `AggregateRoot`: as tabelas não têm `version`, e a concorrência é a do pedido (`If-Match` = versão do pedido, checada em `IOrderPaymentPort.LoadForPaymentAsync`). Dois estornos simultâneos do mesmo pagamento: o segundo cai no token de versão do pedido (`409 VersionConflict`). A porta usa `FindAsync`, então `Load` e `Apply`/`Undo` mexem na mesma instância rastreada, sem carregar itens. Os eventos `OrderPaymentRegistered`/`Confirmed`/`Reversed` nascem no agregado `Order` (entidade `ORDER` no envelope). `ClosingUpdated` ainda não é emitido: entra com o dispatcher, que agrupa por tenant.
+
 ### Closing
 
 | Classe | Responsabilidade |

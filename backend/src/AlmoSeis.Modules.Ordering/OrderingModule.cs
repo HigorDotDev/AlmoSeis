@@ -22,6 +22,7 @@ public static class OrderingModule
         services.AddScoped<CustomerDtoBuilder>();
         services.AddScoped<AlertCounter>();
         services.AddScoped<IProductUsageCheck, OrderProductUsageCheck>();
+        services.AddScoped<IOrderPaymentPort, OrderPaymentPort>();
         // O Payments registra a implementação real; até lá, pedidos sem pagamentos.
         services.TryAddScoped<IOrderPaymentsReader, NoOrderPayments>();
 

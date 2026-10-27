@@ -6,6 +6,7 @@ using AlmoSeis.Modules.Closing;
 using AlmoSeis.Modules.Identity;
 using AlmoSeis.Modules.Menu;
 using AlmoSeis.Modules.Ordering;
+using AlmoSeis.Modules.Payments;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -16,6 +17,7 @@ builder.Services.AddCatalogModule();
 builder.Services.AddMenuModule();
 builder.Services.AddClosingModule();
 builder.Services.AddOrderingModule();
+builder.Services.AddPaymentsModule();
 // Demais módulos entram aqui à medida que forem implementados (07 §7.5), sempre antes do decorator.
 builder.Services.DecorateCommandHandlers();
 

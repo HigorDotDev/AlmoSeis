@@ -5,6 +5,7 @@ using AlmoSeis.Modules.Catalog.Contracts;
 using AlmoSeis.Modules.Ordering.Contracts;
 using AlmoSeis.Modules.Ordering.Domain;
 using AlmoSeis.SharedKernel.Domain;
+using AlmoSeis.SharedKernel.Errors;
 using Microsoft.EntityFrameworkCore;
 
 namespace AlmoSeis.Modules.Ordering.Infrastructure;
@@ -182,4 +183,65 @@ internal sealed class OrderAlertCreatedMapper(ITenantContext tenant) : Integrati
             affectsProduction = e.AffectsProduction,
         });
     }
+}
+
+internal sealed class OrderPaymentRegisteredMapper(ITenantContext tenant) : IntegrationEventMapper<OrderPaymentRegistered>
+{
+    protected override IEnumerable<IntegrationEnvelope> Map(OrderPaymentRegistered e)
+    {
+        yield return new IntegrationEnvelope("OrderPaymentRegistered", "ORDER", e.OrderId, tenant.EmployeeId,
+            new { orderNumber = e.OrderNumber, paidAmount = e.PaidAmount.ToString(), balance = e.Balance.ToString() });
+    }
+}
+
+internal sealed class OrderPaymentConfirmedMapper(ITenantContext tenant) : IntegrationEventMapper<OrderPaymentConfirmed>
+{
+    protected override IEnumerable<IntegrationEnvelope> Map(OrderPaymentConfirmed e)
+    {
+        yield return new IntegrationEnvelope("OrderPaymentConfirmed", "ORDER", e.OrderId, tenant.EmployeeId, new { orderNumber = e.OrderNumber });
+    }
+}
+
+internal sealed class OrderPaymentReversedMapper(ITenantContext tenant) : IntegrationEventMapper<OrderPaymentReversed>
+{
+    protected override IEnumerable<IntegrationEnvelope> Map(OrderPaymentReversed e)
+    {
+        yield return new IntegrationEnvelope("OrderPaymentReversed", "ORDER", e.OrderId, tenant.EmployeeId,
+            new { orderNumber = e.OrderNumber, isPaid = e.IsPaid });
+    }
+}
+
+internal sealed class OrderPaymentPort(AppDbContext db, TimeProvider time) : IOrderPaymentPort
+{
+    public async Task<OrderPaymentSnapshot> LoadForPaymentAsync(Guid orderId, int expectedVersion, CancellationToken cancellationToken)
+    {
+        var order = await LoadAsync(orderId, cancellationToken);
+        order.EnsureVersion(expectedVersion);
+        if (order.CancellationStatus == CancellationStatus.Canceled)
+        {
+            throw new BusinessException(ErrorCodes.OrderCanceled);
+        }
+
+        return new OrderPaymentSnapshot(order.Id, order.Version, order.OrderNumber, order.TotalAmount, order.PaidAmount, order.Balance, IsCanceled: false);
+    }
+
+    public async Task<OrderBalanceDto> ApplyPaymentAsync(Guid orderId, Money amount, CancellationToken cancellationToken)
+    {
+        var order = await LoadAsync(orderId, cancellationToken);
+        order.ApplyPayment(amount, time.GetUtcNow());
+        return Balance(order);
+    }
+
+    public async Task<OrderBalanceDto> UndoPaymentAsync(Guid orderId, Money amount, CancellationToken cancellationToken)
+    {
+        var order = await LoadAsync(orderId, cancellationToken);
+        order.UndoPayment(amount, time.GetUtcNow());
+        return Balance(order);
+    }
+
+    // Itens não são carregados: pagamento não recalcula total. FindAsync devolve a instância já rastreada.
+    private async Task<Order> LoadAsync(Guid orderId, CancellationToken cancellationToken) =>
+        await db.Set<Order>().FindAsync([orderId], cancellationToken) ?? throw new NotFoundException("ORDER", orderId);
+
+    private static OrderBalanceDto Balance(Order o) => new(o.Id, o.Version, o.TotalAmount, o.PaidAmount, o.Balance, o.IsPaid);
 }

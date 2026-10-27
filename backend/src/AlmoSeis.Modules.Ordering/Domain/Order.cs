@@ -373,6 +373,43 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
         RecordChange(OrderChangeKind.OrderCanceled, HasProduction, new { reason = CancellationReason }, by, newId, now);
     }
 
+    /// Chamado só pelo Payments, via IOrderPaymentPort (07 §7.8). Vale para pedido de expediente já fechado (fiado).
+    public void ApplyPayment(Money amount, DateTimeOffset now)
+    {
+        EnsureNotCanceled();
+        if (amount > Balance)
+        {
+            throw new BusinessException(
+                ErrorCodes.PaymentExceedsBalance,
+                extensions: new Dictionary<string, object?> { ["balance"] = Balance });
+        }
+
+        var wasPaid = IsPaid;
+        PaidAmount += amount;
+        IsPaid = TotalAmount > Money.Zero && PaidAmount == TotalAmount;
+        UpdatedAt = now;
+        Touch(new OrderPaymentRegistered(Id, OrderNumber, PaidAmount, Balance, now));
+        if (IsPaid && !wasPaid)
+        {
+            // Só quando quita (ADR-0021).
+            Raise(new OrderPaymentConfirmed(Id, OrderNumber, now));
+        }
+    }
+
+    /// Estorno: o saldo volta e, se sobrar, o pedido destrava a edição (ADR-0022 §4).
+    public void UndoPayment(Money amount, DateTimeOffset now)
+    {
+        if (amount > PaidAmount)
+        {
+            throw new InvalidOperationException("Estorno maior que o valor pago.");
+        }
+
+        PaidAmount -= amount;
+        IsPaid = TotalAmount > Money.Zero && PaidAmount == TotalAmount;
+        UpdatedAt = now;
+        Touch(new OrderPaymentReversed(Id, OrderNumber, IsPaid, now));
+    }
+
     /// ADR-0024 §3: snapshot do cliente anonimizado junto com o cadastro, em qualquer estado do pedido (pago ou
     /// cancelado). Valores financeiros ficam. Sobe a versão para o feed levar a mudança aos aparelhos.
     public void AnonymizeCustomer(string anonymizedName, DateTimeOffset now)
@@ -753,3 +790,9 @@ internal sealed record OrderStatusChanged(Guid OrderId, int OrderNumber, Product
 internal sealed record OrderCanceled(Guid OrderId, int OrderNumber, DateTimeOffset OccurredAt) : IDomainEvent;
 
 internal sealed record OrderAlertCreated(Guid OrderId, Guid EventId, int OrderNumber, OrderChangeKind ChangeKind, bool AffectsProduction, DateTimeOffset OccurredAt) : IDomainEvent;
+
+internal sealed record OrderPaymentRegistered(Guid OrderId, int OrderNumber, Money PaidAmount, Money Balance, DateTimeOffset OccurredAt) : IDomainEvent;
+
+internal sealed record OrderPaymentConfirmed(Guid OrderId, int OrderNumber, DateTimeOffset OccurredAt) : IDomainEvent;
+
+internal sealed record OrderPaymentReversed(Guid OrderId, int OrderNumber, bool IsPaid, DateTimeOffset OccurredAt) : IDomainEvent;
