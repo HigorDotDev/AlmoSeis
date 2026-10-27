@@ -95,7 +95,7 @@ Conflito de versão (`409`) traz o estado atual em `current` (ADR-0034):
 | 401 | `InvalidCredentials` | login, senha ou PIN errados |
 | 401 | `InvalidRefreshToken` | refresh inválido, expirado ou reutilizado (revoga a família) |
 | 401 | `InvalidDeviceSecret` | segredo do dispositivo compartilhado inválido ou revogado |
-| 402 | `SubscriptionInactive` | escrita com assinatura `SUSPENDED`/`CANCELED` (ADR-0017) |
+| 402 | `SubscriptionInactive` | escrita com assinatura `SUSPENDED`/`CANCELED` (ADR-0017); extensão `subscriptionStatus`. Fora do bloqueio: leituras, `/auth`, `/admin`, `/webhooks` e, com `SUSPENDED`, `POST /closing/finalize` |
 | 403 | `PermissionDenied` | falta permissão (a extensão `permission` diz qual) |
 | 403 | `NoActiveMembership` | usuário sem vínculo ativo em nenhum estabelecimento |
 | 404 | `NotFound` | recurso inexistente **ou de outro tenant** (nunca 403, para não revelar existência) |
@@ -428,7 +428,7 @@ Campos ausentes não mudam. → `200` com as configurações. Mudar o preço do 
 }
 ```
 
-**Sem preço, plano ou link de compra** (ADR-0017).
+**Sem preço, plano ou link de compra** (ADR-0017). `message` por estado: teste (dias restantes), atraso (o texto acima), suspensa (só consulta), cancelada (exportação); `null` quando ativa.
 
 ### Funcionários
 
@@ -1602,7 +1602,7 @@ Toda ação gera auditoria com `origin = PLATFORM_ADMIN`.
 
 ### `POST /webhooks/asaas` — público + header `asaas-access-token`
 
-O corpo é o do Asaas, repassado como veio. O servidor valida o token, grava `billing_webhook_events` (único por `gateway_event_id`) e responde `200` **antes** de processar: o processamento é assíncrono e idempotente. Os eventos tratados no MVP são `PAYMENT_CONFIRMED`, `PAYMENT_RECEIVED`, `PAYMENT_OVERDUE`, `SUBSCRIPTION_DELETED` e `SUBSCRIPTION_INACTIVATED`. Os demais são gravados e ignorados.
+Token ausente ou errado → `401 Unauthenticated`; corpo sem `id` ou `event` → `400 MalformedRequest`. O corpo é o do Asaas, repassado como veio. O servidor valida o token, grava `billing_webhook_events` (único por `gateway_event_id`) e responde `200` **antes** de processar: o processamento é assíncrono e idempotente. Os eventos tratados no MVP são `PAYMENT_CONFIRMED`, `PAYMENT_RECEIVED`, `PAYMENT_OVERDUE`, `SUBSCRIPTION_DELETED` e `SUBSCRIPTION_INACTIVATED`. Os demais são gravados e ignorados.
 
 ### Saúde — públicos
 

@@ -5,14 +5,18 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace AlmoSeis.IntegrationTests;
 
 /// A API inteira sobre o PostgreSQL do fixture, conectando com os logins reais (almoseis_app / platform).
-public sealed class ApiFactory(PostgresFixture db) : WebApplicationFactory<Program>
+public sealed class ApiFactory(PostgresFixture db, Action<IServiceCollection>? services = null) : WebApplicationFactory<Program>
 {
+    public const string WebhookToken = "test-webhook-token";
+
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     /// Erros logados pela API durante o teste: anexados às falhas para diagnóstico.
@@ -26,7 +30,13 @@ public sealed class ApiFactory(PostgresFixture db) : WebApplicationFactory<Progr
             ["ConnectionStrings:App"] = db.AppConnectionString,
             ["ConnectionStrings:Platform"] = db.PlatformConnectionString,
             ["Jwt:AllowEphemeralKey"] = "true",
+            ["Billing:Asaas:WebhookToken"] = WebhookToken,
         }));
+        if (services is not null)
+        {
+            builder.ConfigureTestServices(services);
+        }
+
         builder.ConfigureLogging(logging => logging.AddProvider(new CapturingLoggerProvider(ServerErrors)));
     }
 

@@ -13,7 +13,7 @@ using AlmoSeis.Modules.Sync;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddAlmoSeisInfrastructure(builder.Configuration);
-builder.Services.AddBillingModule();
+builder.Services.AddBillingModule(builder.Configuration);
 builder.Services.AddIdentityModule();
 builder.Services.AddCatalogModule();
 builder.Services.AddMenuModule();
@@ -29,9 +29,11 @@ builder.Services.AddAlmoSeisAuthentication();
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ProblemDetailsExceptionHandler>();
 builder.Services.AddScoped<ValidationFilter>();
+builder.Services.AddScoped<SubscriptionWriteGuardFilter>();
 builder.Services
     .AddControllers(o =>
     {
+        o.Filters.AddService<SubscriptionWriteGuardFilter>();
         o.Filters.AddService<ValidationFilter>();
         o.Filters.Add<ETagResultFilter>();
         o.ModelBinderProviders.Insert(0, new UpperSnakeEnumModelBinderProvider());

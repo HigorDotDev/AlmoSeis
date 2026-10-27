@@ -105,6 +105,7 @@ public sealed class ArchitectureRulesTests
             .Where(t => t.IsClass && !t.IsAbstract && t.Namespace?.EndsWith(".Domain", StringComparison.Ordinal) == true)
             .Where(t => t.GetProperty("TenantId")?.PropertyType == typeof(Guid))
             .Where(t => !typeof(ITenantOwned).IsAssignableFrom(t))
+            .Where(t => !typeof(IDomainEvent).IsAssignableFrom(t)) // eventos carregam o tenant, mas não são gravados
             .Select(t => t.FullName!)
             .Except(TenantRuleExceptions)
             .ToList();

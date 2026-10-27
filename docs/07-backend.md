@@ -302,6 +302,14 @@ AlmoSeis.Modules.Ordering/
 | `ISubscriptionStatusCache` | Usado pelo `SubscriptionWriteGuardFilter` |
 | Contracts: `IBillingPort` | `StartTrialAsync(tenantId)`, `GetStatusAsync()` |
 
+**Implementado:**
+- Transições do `Subscription` devolvem se mudou e levantam `SubscriptionStatusChanged`; transição inválida (ex.: ativar cancelada) é `InvalidOperationException`, que o processador registra em log e ignora.
+- Webhook e job rodam no `PlatformDbContext`, sem `UnitOfWork`: o `SubscriptionChangeRecorder` grava auditoria (`BILLING_WEBHOOK`/`SYSTEM`), o `SubscriptionStatusChanged` no outbox **sem `seq`** (a assinatura não entra no feed) e invalida o cache.
+- `PAYMENT_CONFIRMED`/`RECEIVED`: `currentPeriodEndsAt` = `payment.dueDate` + 1 mês. A assinatura é achada por `gateway_subscription_id` (`payment.subscription` ou `subscription.id`).
+- O job cria a assinatura no gateway quando faltam `TrialEndingNoticeDays` (2) para o fim do teste e o gateway está configurado; lê nome, documento e contato do proprietário por SQL (job de plataforma).
+- `ISubscriptionAccess` (cache de 60 s por tenant, invalidado no mesmo processo) alimenta o `SubscriptionWriteGuardFilter`.
+- Rotas `/admin/*` ainda não existem: dependem do token de administrador de plataforma (sem tenant), que o login ainda não emite.
+
 ### Catalog
 
 `Product` (agregado [S]):
