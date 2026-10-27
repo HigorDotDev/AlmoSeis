@@ -22,16 +22,18 @@ public sealed class R2Options
 
     public string? SecretAccessKey { get; set; }
 
-    /// Domínio público das imagens, sem barra final: "https://img.almoseis.app". Com o domínio `r2.dev`,
-    /// inclua o bucket no caminho (`https://pub-<hash>.r2.dev/<bucket>`): a chave não leva o bucket.
+    /// Domínio público das imagens, sem barra final: "https://img.almoseis.app" ou "https://pub-<hash>.r2.dev".
+    /// Sem o bucket no caminho: o domínio público já aponta para o bucket.
     public string PublicBaseUrl { get; set; } = "https://img.almoseis.app";
 
     public int UploadUrlMinutes { get; set; } = 15;
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(AccessKeyId) && !string.IsNullOrWhiteSpace(SecretAccessKey) && Endpoint is not null;
 
+    /// Só protocolo e host. Um `ServiceUrl` com o bucket no caminho (`.../almoseis-images`) faria o SDK, em
+    /// path-style, gravar as chaves como `<bucket>/t/...` dentro do bucket (visto no teste contra o R2 real).
     public string? Endpoint => !string.IsNullOrWhiteSpace(ServiceUrl)
-        ? ServiceUrl
+        ? Uri.TryCreate(ServiceUrl, UriKind.Absolute, out var uri) ? uri.GetLeftPart(UriPartial.Authority) : ServiceUrl
         : string.IsNullOrWhiteSpace(AccountId) ? null : $"https://{AccountId}.r2.cloudflarestorage.com";
 }
 
