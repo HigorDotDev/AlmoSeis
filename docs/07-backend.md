@@ -458,6 +458,8 @@ RecordChange(kind, details, affectsProduction) → OrderChangeEvent + Touch(Orde
 
 O `FOR UPDATE` no expediente durante a finalização faz pagamentos e movimentações concorrentes esperarem. Toda escrita que exige expediente aberto lê o `business_day` com `FOR SHARE`, então não há venda "entre" o cálculo e o fechamento.
 
+**Implementado:** `CashMovement`, `DailyClosing` (+ linhas) e `ClosingAdjustment` são `Entity` + `ISyncTracked` imutáveis; só o `BusinessDay` é agregado versionado. A movimentação sobe a versão do expediente com `UPDATE ... SET version = version + 1 RETURNING id` atômico (duas sangrias simultâneas não conflitam; só a finalização com o resumo antigo leva `409`). A finalização faz `SELECT ... FOR UPDATE` por SQL antes de carregar o agregado. `ClosingInputsQuery` usa linhas com `decimal` e converte para `Money` no código, sem depender de conversor em tipo não mapeado.
+
 `ClosingUpdated` é emitido por pagamentos, estornos e movimentações, e agrupado no dispatcher em no máximo 1 a cada 5 s por tenant (06 §6.14).
 
 ---

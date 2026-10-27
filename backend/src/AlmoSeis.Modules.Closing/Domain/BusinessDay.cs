@@ -42,7 +42,28 @@ internal sealed class BusinessDay : AggregateRoot, ITenantOwned, ISyncTracked
         day.Raise(new BusinessDayOpened(id, businessDate, now));
         return day;
     }
+
+    /// Finalização do fechamento (ADR-0013): o expediente passa a CLOSED.
+    public void Close(Guid dailyClosingId, Guid by, DateTimeOffset now)
+    {
+        EnsureOpen();
+        Status = BusinessDayStatus.Closed;
+        ClosedByEmployeeId = by;
+        ClosedAt = now;
+        Touch(new ClosingFinalized(Id, dailyClosingId, BusinessDate, now));
+    }
+
+    private void EnsureOpen()
+    {
+        if (Status != BusinessDayStatus.Open)
+        {
+            throw new BusinessException(ErrorCodes.ClosingAlreadyFinalized);
+        }
+    }
 }
 
 /// Vira `BusinessDayOpened` para todo o tenant (06 §6.14).
 internal sealed record BusinessDayOpened(Guid BusinessDayId, DateOnly BusinessDate, DateTimeOffset OccurredAt) : IDomainEvent;
+
+/// Vira `ClosingFinalized` para todo o tenant (06 §6.14).
+internal sealed record ClosingFinalized(Guid BusinessDayId, Guid DailyClosingId, DateOnly BusinessDate, DateTimeOffset OccurredAt) : IDomainEvent;

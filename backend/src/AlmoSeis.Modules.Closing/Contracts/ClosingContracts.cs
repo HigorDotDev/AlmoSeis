@@ -50,3 +50,114 @@ public interface IBusinessDayReader
 {
     Task<BusinessDayRef?> GetOpenAsync(CancellationToken cancellationToken);
 }
+
+// ---------- Caixa e fechamento (06 §6.11) ----------
+
+public enum CashMovementType
+{
+    Supply,
+    Withdrawal,
+}
+
+public enum AdjustmentType
+{
+    CashCountCorrection,
+    Other,
+}
+
+public sealed record CashMovementDto(
+    Guid Id, Guid BusinessDayId, CashMovementType MovementType, Money Amount, string Description, DateTimeOffset CreatedAt, AuthorDto CreatedBy)
+    : IHasResourceId
+{
+    Guid IHasResourceId.ResourceId => Id;
+}
+
+public sealed record ClosingBusinessDayDto(Guid Id, int Version, DateOnly BusinessDate, BusinessDayStatus Status);
+
+public sealed record CountTotalDto(int Count, Money Total);
+
+public sealed record OrderTypeLineDto(string OrderType, int Count, Money Sold, Money Received, Money Pending, Money Reversed);
+
+public sealed record PaymentMethodLineDto(string PaymentMethod, int Count, Money Received, Money Reversed);
+
+public sealed record ClosingCashDto(
+    Money OpeningBalance,
+    Money CashReceived,
+    Money CashReversed,
+    Money Supplies,
+    Money Withdrawals,
+    Money ExpectedCash,
+    Money? CountedCash,
+    Money? CashDifference,
+    string? Justification);
+
+public sealed record ClosingAdjustmentDto(
+    Guid Id, Guid RelatedClosingId, Guid BusinessDayId, AdjustmentType AdjustmentType, Money Amount, string Reason, DateTimeOffset CreatedAt, AuthorDto CreatedBy)
+    : IHasResourceId
+{
+    Guid IHasResourceId.ResourceId => Id;
+}
+
+/// Resumo parcial (`isFinal: false`) e `DailyClosing` (`isFinal: true`) têm o mesmo formato; `closedAt`/`closedBy`
+/// só são preenchidos no fechamento finalizado.
+public sealed record ClosingSummaryDto(
+    ClosingBusinessDayDto BusinessDay,
+    bool IsFinal,
+    Guid? DailyClosingId,
+    DateTimeOffset ComputedAt,
+    int OrderCount,
+    Money TotalSold,
+    Money DeliveryFeesTotal,
+    Money TotalReceived,
+    Money ReceivedFromPreviousDays,
+    Money TotalPending,
+    CountTotalDto Canceled,
+    CountTotalDto Reversed,
+    IReadOnlyList<OrderTypeLineDto> ByOrderType,
+    IReadOnlyList<PaymentMethodLineDto> ByPaymentMethod,
+    ClosingCashDto Cash,
+    IReadOnlyList<ClosingAdjustmentDto> Adjustments,
+    DateTimeOffset? ClosedAt,
+    AuthorDto? ClosedBy) : IHasResourceId
+{
+    Guid IHasResourceId.ResourceId => DailyClosingId ?? BusinessDay.Id;
+}
+
+public sealed record ClosingHistoryItemDto(
+    Guid DailyClosingId, Guid BusinessDayId, DateOnly BusinessDate, Money TotalSold, Money TotalReceived, Money TotalPending,
+    Money CashDifference, DateTimeOffset ClosedAt, AuthorDto ClosedBy, int AdjustmentCount);
+
+public sealed record MonthlyOrderTypeDto(string OrderType, Money Sold, Money Received);
+
+public sealed record MonthlyPaymentMethodDto(string PaymentMethod, Money Received);
+
+public sealed record MonthlyDayDto(DateOnly BusinessDate, IReadOnlyList<Guid> DailyClosingIds, Money TotalSold, Money TotalReceived);
+
+public sealed record MonthlyClosingDto(
+    string Month,
+    int ClosingCount,
+    Money TotalSold,
+    Money TotalReceived,
+    Money TotalPendingAtClosings,
+    Money CashDifferenceTotal,
+    IReadOnlyList<MonthlyOrderTypeDto> ByOrderType,
+    IReadOnlyList<MonthlyPaymentMethodDto> ByPaymentMethod,
+    IReadOnlyList<MonthlyDayDto> Days);
+
+public sealed record RegisterCashMovementCommand(CashMovementType MovementType, Money Amount, string Description);
+
+public sealed record ListCashMovementsQuery(Guid? BusinessDayId);
+
+public sealed record GetClosingSummaryQuery(Guid? BusinessDayId);
+
+public sealed record FinalizeClosingCommand(Guid BusinessDayId, Money CountedCash, string? Justification);
+
+public sealed record CreateClosingAdjustmentRequest(AdjustmentType AdjustmentType, Money Amount, string Reason);
+
+public sealed record CreateClosingAdjustmentCommand(Guid DailyClosingId, CreateClosingAdjustmentRequest Request);
+
+public sealed record GetClosingQuery(Guid DailyClosingId);
+
+public sealed record ListClosingHistoryQuery(DateOnly? From, DateOnly? To, int Limit, string? Cursor);
+
+public sealed record GetMonthlyClosingQuery(string Month);

@@ -15,6 +15,8 @@ public static class ClosingModule
     {
         services.AddSingleton<IModuleModelConfiguration, ClosingModelConfiguration>();
         services.AddScoped<BusinessDayDtoBuilder>();
+        services.AddScoped<ClosingDtoBuilder>();
+        services.AddScoped<ClosingInputsQuery>();
         services.AddScoped<IBusinessDayReader, BusinessDayReader>();
         services.AddScoped<IOpenBusinessDate, OpenBusinessDate>();
 

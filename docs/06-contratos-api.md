@@ -1371,6 +1371,12 @@ O fechamento **parcial**, calculado na hora (RN-010.1). Padrão: o expediente ab
 }
 ```
 
+- Sem `businessDayId` e sem expediente aberto → `404 NoOpenBusinessDay`.
+- `closedAt` e `closedBy` existem nos dois formatos e só são preenchidos no fechamento finalizado.
+- `byOrderType` e `byPaymentMethod` sempre trazem as três chaves, mesmo zeradas.
+- `adjustments`: no resumo parcial, os ajustes **registrados** neste expediente; no `DailyClosing`, os que **corrigem** aquele fechamento.
+- Toda movimentação de caixa sobe a `version` do expediente (é ela que dá o `409` da finalização). Pagamentos não sobem: a finalização trava o expediente e calcula com o que já foi confirmado.
+
 `byOrderType[].received` agrupa os pagamentos recebidos **neste** expediente pelo tipo do pedido. Por isso o "recebido" de marmita pode incluir fiado de dias anteriores (`receivedFromPreviousDays`). Para o exemplo fechar com o épico, os R$ 35 de fiado estão contidos nos R$ 1.100 de marmita.
 
 ### `POST /closing/finalize` — `closing.finalize` [I][M]

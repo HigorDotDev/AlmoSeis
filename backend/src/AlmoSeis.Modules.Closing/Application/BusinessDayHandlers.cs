@@ -1,4 +1,3 @@
-using System.Buffers.Text;
 using AlmoSeis.Infrastructure.Audit;
 using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Tenancy;
@@ -108,29 +107,14 @@ internal sealed class ListBusinessDaysQueryHandler(AppDbContext db, BusinessDayD
 
         if (query.Cursor is { } cursor)
         {
-            var after = DecodeCursor(cursor);
+            var after = ClosingPaging.DecodeCursor(cursor);
             days = days.Where(d => d.Id.CompareTo(after) < 0);
         }
 
         var page = await days.OrderByDescending(d => d.Id).Take(query.Limit + 1).ToListAsync(cancellationToken);
         var hasMore = page.Count > query.Limit;
         var items = await dtos.BuildManyAsync(page.Take(query.Limit).ToList(), cancellationToken);
-        return new PageDto<BusinessDayDto>(items, hasMore ? EncodeCursor(items[^1].Id) : null);
-    }
-
-    private static string EncodeCursor(Guid id) => Base64Url.EncodeToString(id.ToByteArray());
-
-    private static Guid DecodeCursor(string cursor)
-    {
-        try
-        {
-            var bytes = Base64Url.DecodeFromChars(cursor);
-            return bytes.Length == 16 ? new Guid(bytes) : throw new FormatException();
-        }
-        catch (FormatException)
-        {
-            throw new BusinessException(ErrorCodes.MalformedRequest, "Cursor inválido.");
-        }
+        return new PageDto<BusinessDayDto>(items, hasMore ? ClosingPaging.EncodeCursor(items[^1].Id) : null);
     }
 }
 
@@ -144,7 +128,7 @@ internal sealed class BusinessDayCurrentReader(IQueryHandler<GetBusinessDayQuery
 }
 
 /// Monta o `BusinessDay` de 06 §6.6 com os autores do Identity.
-internal sealed class BusinessDayDtoBuilder(IEmployeeDirectory employees)
+internal sealed class BusinessDayDtoBuilder(AppDbContext db, IEmployeeDirectory employees)
 {
     public async Task<BusinessDayDto> BuildAsync(BusinessDay day, CancellationToken cancellationToken) =>
         (await BuildManyAsync([day], cancellationToken))[0];
@@ -154,15 +138,18 @@ internal sealed class BusinessDayDtoBuilder(IEmployeeDirectory employees)
         var authorIds = days.Select(d => d.OpenedByEmployeeId)
             .Concat(days.Where(d => d.ClosedByEmployeeId is not null).Select(d => d.ClosedByEmployeeId!.Value));
         var names = await employees.GetDisplayNamesAsync(authorIds, cancellationToken);
+        var dayIds = days.Select(d => d.Id).ToArray();
+        var closings = await db.Set<DailyClosing>().AsNoTracking()
+            .Where(c => dayIds.Contains(c.BusinessDayId))
+            .ToDictionaryAsync(c => c.BusinessDayId, c => c.Id, cancellationToken);
 
-        // dailyClosingId entra com a finalização do fechamento (DailyClosing ainda não é mapeado).
         return days
             .Select(d => new BusinessDayDto(
                 d.Id, d.Version, d.BusinessDate, d.Status, d.OpeningBalance, d.OpenedAt,
                 new AuthorDto(d.OpenedByEmployeeId, names.GetValueOrDefault(d.OpenedByEmployeeId, string.Empty)),
                 d.ClosedAt,
                 d.ClosedByEmployeeId is { } closedBy ? new AuthorDto(closedBy, names.GetValueOrDefault(closedBy, string.Empty)) : null,
-                DailyClosingId: null))
+                closings.TryGetValue(d.Id, out var closingId) ? closingId : null))
             .ToList();
     }
 }
