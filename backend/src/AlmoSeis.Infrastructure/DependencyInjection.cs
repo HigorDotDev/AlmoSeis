@@ -3,6 +3,7 @@ using AlmoSeis.Infrastructure.Concurrency;
 using AlmoSeis.Infrastructure.Idempotency;
 using AlmoSeis.Infrastructure.Storage;
 using AlmoSeis.Infrastructure.Persistence;
+using AlmoSeis.Infrastructure.Realtime;
 using AlmoSeis.Infrastructure.Security;
 using AlmoSeis.Infrastructure.Tenancy;
 using AlmoSeis.SharedKernel.Application;
@@ -41,6 +42,13 @@ public static class DependencyInjection
 
         services.AddOptions<IdempotencyOptions>().Bind(configuration.GetSection(IdempotencyOptions.Section));
         services.AddScoped<IIdempotencyStore, IdempotencyStore>();
+
+        // O IRealtimePublisher é registrado pelo host (SignalR na Api).
+        services.AddOptions<OutboxOptions>().Bind(configuration.GetSection(OutboxOptions.Section));
+        services.AddSingleton<OutboxDispatcher>();
+        services.AddHostedService(sp => sp.GetRequiredService<OutboxDispatcher>());
+        services.AddSingleton<SyncRetentionJob>();
+        services.AddHostedService(sp => sp.GetRequiredService<SyncRetentionJob>());
 
         services.AddOptions<ObjectStorageOptions>().Bind(configuration.GetSection(ObjectStorageOptions.Section));
         services.AddSingleton<IObjectStorage, PublicUrlObjectStorage>();

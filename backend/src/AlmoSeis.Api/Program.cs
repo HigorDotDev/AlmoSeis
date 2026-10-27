@@ -1,5 +1,6 @@
 using AlmoSeis.Api.Infrastructure;
 using AlmoSeis.Infrastructure;
+using AlmoSeis.Infrastructure.Realtime;
 using AlmoSeis.Modules.Billing;
 using AlmoSeis.Modules.Catalog;
 using AlmoSeis.Modules.Closing;
@@ -39,6 +40,8 @@ builder.Services
     .AddJsonOptions(o => ApiJson.Configure(o.JsonSerializerOptions));
 // ProblemDetails (inclusive o `current` do 409) usa as opções de JSON do HTTP, não as do MVC.
 builder.Services.ConfigureHttpJsonOptions(o => ApiJson.Configure(o.SerializerOptions));
+builder.Services.AddSignalR().AddJsonProtocol(o => ApiJson.Configure(o.PayloadSerializerOptions));
+builder.Services.AddSingleton<IRealtimePublisher, SignalRRealtimePublisher>();
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
 
 var app = builder.Build();
@@ -53,6 +56,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<RealtimeHub>("/hubs/realtime");
 app.MapHealthChecks("/health/live", new() { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new() { Predicate = c => c.Tags.Contains("ready") });
 

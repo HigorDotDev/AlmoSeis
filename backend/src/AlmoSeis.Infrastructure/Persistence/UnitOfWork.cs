@@ -11,6 +11,10 @@ public interface IUnitOfWork
 {
     /// Etapa 3 do ciclo de escrita (07 §7.3): feed, outbox e SaveChanges, dentro da transação corrente.
     Task CommitAsync(CancellationToken cancellationToken);
+
+    /// Evento de tempo real de uma entidade que não é agregado (ex.: `ClosingUpdated` de uma movimentação de caixa).
+    /// Vai para o outbox no commit, com o `seq` da entidade, que precisa ter sido alterada nesta transação.
+    void Enqueue(IntegrationEnvelope envelope, DateTimeOffset occurredAt);
 }
 
 /// Envelope de tempo real de 06 §6.14, montado pelos mappers de cada módulo.
@@ -51,6 +55,10 @@ internal sealed class UnitOfWork(
     private readonly Dictionary<Type, IIntegrationEventMapper[]> _mappers =
         mappers.GroupBy(m => m.EventType).ToDictionary(g => g.Key, g => g.ToArray());
 
+    private readonly List<(IntegrationEnvelope Envelope, DateTimeOffset OccurredAt)> _queued = [];
+
+    public void Enqueue(IntegrationEnvelope envelope, DateTimeOffset occurredAt) => _queued.Add((envelope, occurredAt));
+
     public async Task CommitAsync(CancellationToken cancellationToken)
     {
         // Captura antes do primeiro SaveChanges, que zera os estados.
@@ -68,12 +76,16 @@ internal sealed class UnitOfWork(
         // 1º save: grava o estado (inclusive contadores de um tenant recém-criado no autocadastro).
         await SaveAsync(cancellationToken);
 
-        if (synced.Count > 0 || events.Count > 0)
+        if (synced.Count > 0 || events.Count > 0 || _queued.Count > 0)
         {
             var seqByEntity = await WriteChangeFeedAsync(synced, cancellationToken);
-            WriteOutbox(events, seqByEntity);
+            WriteOutbox(
+                events.SelectMany(e => Map(e).Select(envelope => (envelope, e.OccurredAt))).Concat(_queued),
+                seqByEntity);
             await SaveAsync(cancellationToken);
         }
+
+        _queued.Clear();
 
         foreach (var aggregate in aggregates)
         {
@@ -121,47 +133,44 @@ internal sealed class UnitOfWork(
         return result;
     }
 
-    private void WriteOutbox(List<IDomainEvent> events, Dictionary<Guid, (Guid TenantId, long Seq, int Version)> seqByEntity)
+    private IEnumerable<IntegrationEnvelope> Map(IDomainEvent domainEvent) =>
+        _mappers.TryGetValue(domainEvent.GetType(), out var eventMappers) ? eventMappers.SelectMany(m => m.Map(domainEvent)) : [];
+
+    private void WriteOutbox(
+        IEnumerable<(IntegrationEnvelope Envelope, DateTimeOffset OccurredAt)> envelopes,
+        Dictionary<Guid, (Guid TenantId, long Seq, int Version)> seqByEntity)
     {
-        foreach (var domainEvent in events)
+        foreach (var (envelope, occurredAt) in envelopes)
         {
-            if (!_mappers.TryGetValue(domainEvent.GetType(), out var eventMappers))
+            if (!seqByEntity.TryGetValue(envelope.EntityId, out var feed))
             {
-                continue;
+                throw new InvalidOperationException(
+                    $"Evento {envelope.EventType} referencia {envelope.EntityType} {envelope.EntityId}, que não foi alterado nesta transação.");
             }
 
-            foreach (var envelope in eventMappers.SelectMany(m => m.Map(domainEvent)))
+            var eventId = ids.New();
+            db.Add(new OutboxMessage
             {
-                if (!seqByEntity.TryGetValue(envelope.EntityId, out var feed))
-                {
-                    throw new InvalidOperationException(
-                        $"Evento {envelope.EventType} referencia {envelope.EntityType} {envelope.EntityId}, que não foi alterado nesta transação.");
-                }
-
-                var eventId = ids.New();
-                db.Add(new OutboxMessage
-                {
-                    Id = eventId,
-                    TenantId = feed.TenantId,
-                    EventType = envelope.EventType,
-                    Seq = feed.Seq,
-                    OccurredAt = domainEvent.OccurredAt,
-                    Payload = JsonSerializer.Serialize(
-                        new
-                        {
-                            eventId,
-                            eventType = envelope.EventType,
-                            seq = feed.Seq,
-                            occurredAt = domainEvent.OccurredAt,
-                            entityType = envelope.EntityType,
-                            entityId = envelope.EntityId,
-                            entityVersion = feed.Version,
-                            actorEmployeeId = envelope.ActorEmployeeId,
-                            data = envelope.Data,
-                        },
-                        EnvelopeJson),
-                });
-            }
+                Id = eventId,
+                TenantId = feed.TenantId,
+                EventType = envelope.EventType,
+                Seq = feed.Seq,
+                OccurredAt = occurredAt,
+                Payload = JsonSerializer.Serialize(
+                    new
+                    {
+                        eventId,
+                        eventType = envelope.EventType,
+                        seq = feed.Seq,
+                        occurredAt,
+                        entityType = envelope.EntityType,
+                        entityId = envelope.EntityId,
+                        entityVersion = feed.Version,
+                        actorEmployeeId = envelope.ActorEmployeeId,
+                        data = envelope.Data,
+                    },
+                    EnvelopeJson),
+            });
         }
     }
 

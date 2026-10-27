@@ -21,6 +21,7 @@ internal sealed class RegisterCashMovementHandler(
     AppDbContext db,
     ITenantContext tenant,
     IIdGenerator ids,
+    IUnitOfWork unitOfWork,
     IAuditWriter audit,
     ClosingDtoBuilder dtos,
     TimeProvider time) : ICommandHandler<RegisterCashMovementCommand, CashMovementDto>
@@ -45,6 +46,8 @@ internal sealed class RegisterCashMovementHandler(
         var movement = CashMovement.Register(
             ids.New(), tenantId, dayId, command.MovementType, command.Amount, command.Description, tenant.EmployeeId!.Value, time.GetUtcNow());
         db.Add(movement);
+        // Movimentação não é agregado: o aviso de "recarregue o resumo" vai direto para o outbox (06 §6.14).
+        unitOfWork.Enqueue(new IntegrationEnvelope("ClosingUpdated", movement.SyncEntityType, movement.Id, movement.CreatedByEmployeeId, null), movement.CreatedAt);
         audit.Add("CashMovementRegistered", movement.SyncEntityType, movement.Id, after: new
         {
             movementType = UpperSnakeEnumConverter<CashMovementType>.ToText(movement.MovementType),
@@ -155,6 +158,7 @@ internal sealed class CreateClosingAdjustmentHandler(
     AppDbContext db,
     ITenantContext tenant,
     IIdGenerator ids,
+    IUnitOfWork unitOfWork,
     IAuditWriter audit,
     ClosingDtoBuilder dtos,
     TimeProvider time) : ICommandHandler<CreateClosingAdjustmentCommand, ClosingAdjustmentDto>
@@ -171,6 +175,7 @@ internal sealed class CreateClosingAdjustmentHandler(
         var adjustment = ClosingAdjustment.Create(
             ids.New(), tenant.TenantId!.Value, command.DailyClosingId, dayId, r.AdjustmentType, r.Amount, r.Reason, tenant.EmployeeId!.Value, time.GetUtcNow());
         db.Add(adjustment);
+        unitOfWork.Enqueue(new IntegrationEnvelope("ClosingUpdated", adjustment.SyncEntityType, adjustment.Id, adjustment.CreatedByEmployeeId, null), adjustment.CreatedAt);
         audit.Add("ClosingAdjustmentCreated", adjustment.SyncEntityType, adjustment.Id, after: new
         {
             adjustment.RelatedClosingId,
