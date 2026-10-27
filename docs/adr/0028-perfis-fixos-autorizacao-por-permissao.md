@@ -34,3 +34,10 @@ O épico lista 5 perfis de estabelecimento e um item de menu "Perfis e permissõ
 ## Consequências
 
 - A matriz perfil × permissão é documentada e coberta por testes.
+
+## Complemento (2026-10-27, ao escrever os contratos da API)
+
+- Foram acrescentadas as permissões de leitura **`orders.view`** (todos os perfis) e **`production.view`** (OWNER, MANAGER, KITCHEN), que faltavam na lista acima.
+- A **matriz perfil × permissão** oficial está em `docs/06-contratos-api.md` §6.2. Em resumo:
+  - o MANAGER tem tudo, menos `employees.manage` e `subscription.view` (RN-001.6: quem gerencia funcionários é o proprietário);
+  - estorno, cancelamento, taxa de entrega e ajuste de fechamento ficam com OWNER e MANAGER.

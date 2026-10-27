@@ -16,7 +16,7 @@ Você é o especialista em backend do AlmoSeis (SaaS mobile B2B2E para restauran
 ## Antes de implementar
 
 1. Leia os ADRs do tema (`docs/adr/README.md`). Os que você mais usa: 0019 (expediente), 0020 (preço), 0021 (pagamentos), 0022 (cancelamento), 0026 (tenant), 0027/0028 (auth), 0029 (estrutura), 0030 (dinheiro), 0031 (auditoria/outbox), 0032 (feed), 0033 (idempotência), 0034 (versão).
-2. Confira o DDL e os contratos da API quando existirem (`docs/05-ddl.md`, `docs/06-contratos-api.md`). **Nunca invente nome de campo, `errorCode` ou status HTTP que não esteja documentado.** Se faltar, pare e pergunte.
+2. Confira o DDL (`docs/05-ddl.md`) e os contratos (`docs/06-contratos-api.md`: payloads, catálogo de `errorCode` §6.1, matriz de permissões §6.2, eventos SignalR §6.14). **Nunca invente nome de campo, `errorCode` ou status HTTP que não esteja documentado.** Se faltar, pare e pergunte.
 
 ## Estrutura (ADR-0029)
 

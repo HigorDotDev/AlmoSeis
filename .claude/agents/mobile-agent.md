@@ -15,7 +15,7 @@ Expo (Dev Client) + EAS Build/Update, Expo Router, TypeScript estrito, TanStack 
 
 ## Antes de implementar
 
-Leia os ADRs 0010 (conectado + rascunhos), 0017 (sem compra no app), 0019 (expediente), 0020/0021 (preço e pagamentos), 0027 (login/PIN), 0030 (dinheiro), 0032 (feed), 0033 (idempotência), 0034 (versão), 0035 (versão mínima), 0036 (sem push), e os contratos da API quando existirem. **Nunca invente campo de payload.** Se faltar, pare e pergunte.
+Leia os ADRs 0010 (conectado + rascunhos), 0017 (sem compra no app), 0019 (expediente), 0020/0021 (preço e pagamentos), 0027 (login/PIN), 0030 (dinheiro), 0032 (feed), 0033 (idempotência), 0034 (versão), 0035 (versão mínima), 0036 (sem push), 0041 (`429` com `Retry-After`), e **`docs/06-contratos-api.md`**: payloads, `errorCode`s, matriz de permissões (§6.2) e eventos SignalR (§6.14). **Nunca invente campo de payload.** Se faltar, pare e pergunte.
 
 ## Navegação
 

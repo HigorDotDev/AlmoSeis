@@ -84,6 +84,10 @@ CREATE TABLE tenants (
   city             varchar(80)  NOT NULL,
   state            char(2)      NOT NULL CHECK (state ~ '^[A-Z]{2}$'),
   time_zone        varchar(64)  NOT NULL DEFAULT 'America/Sao_Paulo',
+  -- Aceite dos Termos e do contrato de tratamento de dados no autocadastro (ADR-0018, ADR-0024)
+  terms_version              varchar(20)  NOT NULL,
+  terms_accepted_at          timestamptz  NOT NULL,
+  terms_accepted_by_user_id  uuid         NOT NULL,  -- FK adicionada após users
   created_at       timestamptz  NOT NULL,
   version          integer      NOT NULL DEFAULT 1,
   CONSTRAINT ck_tenants_document CHECK (
@@ -113,6 +117,9 @@ CREATE TABLE users (
 );
 CREATE UNIQUE INDEX ux_users_normalized_email ON users (normalized_email) WHERE normalized_email IS NOT NULL;
 CREATE UNIQUE INDEX ux_users_phone_number ON users (phone_number) WHERE phone_number IS NOT NULL;
+
+ALTER TABLE tenants ADD CONSTRAINT fk_tenants_terms_accepted_by
+  FOREIGN KEY (terms_accepted_by_user_id) REFERENCES users (id);
 
 CREATE TABLE tenant_settings (
   tenant_id                   uuid           PRIMARY KEY REFERENCES tenants (id),
@@ -191,6 +198,7 @@ CREATE TABLE shared_devices (
   installation_id            varchar(64)  NOT NULL,
   name                       varchar(40)  NOT NULL,
   platform                   text         NOT NULL CHECK (platform IN ('ANDROID', 'IOS')),
+  secret_hash                char(64)     NOT NULL,  -- SHA-256 do deviceSecret; o segredo só aparece no registro (06 §6.3)
   registered_by_employee_id  uuid         NOT NULL,
   registered_at              timestamptz  NOT NULL,
   revoked_at                 timestamptz,

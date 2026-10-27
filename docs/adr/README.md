@@ -69,6 +69,15 @@ Quando um ADR conflita com o texto do épico (`docs/01-epico-ep001.md`), **o ADR
 
 O ADR-0026 também recebeu o item 9 (RLS das tabelas de vínculo por `user_id`).
 
+### Surgidas na escrita dos contratos da API
+
+| ADR | Decisão | Status |
+|---|---|---|
+| [0040](0040-email-transacional-azure-communication-services.md) | E-mail transacional (recuperação de senha do proprietário) via Azure Communication Services | Aceito |
+| [0041](0041-limite-requisicoes-endpoints-publicos.md) | Rate limiting nativo do ASP.NET Core em login, PIN, convites e webhooks | Aceito |
+
+Complementos: ADR-0027 (`deviceSecret` do aparelho compartilhado) e ADR-0028 (permissões `orders.view`/`production.view` e matriz em `06-contratos-api.md` §6.2).
+
 ## Impacto no modelo do épico (§6)
 
 O modelo consolidado, com todos os campos, invariantes e o mapeamento épico → modelo, está em [`docs/04-modelo-dados.md`](../04-modelo-dados.md).

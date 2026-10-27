@@ -28,7 +28,7 @@ Na mesma linha do UrbanCarePlatform, antes de gerar código:
 1. ~~Revisar os ADRs `Proposto`~~ — concluído em 2026-10-27: todas as recomendações (0018, 0024, 0026, 0029–0036) foram aceitas.
 2. ~~`04-modelo-dados.md`~~ — concluído em 2026-10-27 (gerou os ADRs 0038 e 0039).
 3. ~~`05-ddl.md`~~ — concluído em 2026-10-27, validado num PostgreSQL 16 com `05-ddl-smoke-test.sql`.
-4. `06-contratos-api.md`: exemplos JSON literais de cada endpoint, `errorCode`s e o mapa cenário → status HTTP (fonte de verdade de payload).
+4. ~~`06-contratos-api.md`~~ — concluído em 2026-10-27 (gerou os ADRs 0040 e 0041 e dois ajustes de DDL revalidados).
 5. `07-backend.md` e `08-mobile.md`: arquitetura classe por classe e tela por tela.
 6. `09-devops.md`: ambientes, pipeline e procedimento de restauração.
 7. UX/UI (wireframes das 4 abas).

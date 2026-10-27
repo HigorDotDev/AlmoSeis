@@ -6,10 +6,10 @@ SET ROLE almoseis_app;
 SELECT set_config('app.tenant_id', 'aaaaaaaa-0000-0000-0000-000000000001', false),
        set_config('app.user_id',   'aaaaaaaa-0000-0000-0000-0000000000a1', false);
 
-INSERT INTO tenants (id, name, document_type, document_number, city, state, created_at)
-VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'Marmitaria A', 'CNPJ', '11222333000181', 'Uberlandia', 'MG', now());
 INSERT INTO users (id, full_name, email, normalized_email, password_hash, security_stamp, concurrency_stamp, created_at)
 VALUES ('aaaaaaaa-0000-0000-0000-0000000000a1', 'Dona A', 'a@x.com', 'A@X.COM', 'h', 's', 'c', now());
+INSERT INTO tenants (id, name, document_type, document_number, city, state, terms_version, terms_accepted_at, terms_accepted_by_user_id, created_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'Marmitaria A', 'CNPJ', '11222333000181', 'Uberlandia', 'MG', '2026-10', now(), 'aaaaaaaa-0000-0000-0000-0000000000a1', now());
 INSERT INTO tenant_employees (id, tenant_id, user_id, display_name, status, security_stamp, joined_at)
 VALUES ('aaaaaaaa-0000-0000-0000-0000000000e1', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000a1', 'Dona A', 'ACTIVE', gen_random_uuid(), now());
 INSERT INTO tenant_employee_roles VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000e1', 'OWNER');
@@ -60,6 +60,9 @@ VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-000
 -- 250 g x 1,42 = 0,355 -> 0,36 (metade para longe do zero)
 INSERT INTO weighing_entries (id, tenant_id, order_id, weight_grams, price_per_kg, amount, status, created_by_employee_id, created_at)
 VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c02', 250, 1.42, 0.36, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+
+INSERT INTO shared_devices (id, tenant_id, installation_id, name, platform, secret_hash, registered_by_employee_id, registered_at)
+VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'inst_tablet', 'Tablet cozinha', 'ANDROID', repeat('a', 64), 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
 
 -- ===== Falhas esperadas (tenant A) =====
 DO $$ BEGIN
@@ -171,10 +174,10 @@ EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'ok: auditoria append-on
 -- ===== Tenant B =====
 SELECT set_config('app.tenant_id', 'bbbbbbbb-0000-0000-0000-000000000002', false),
        set_config('app.user_id',   'bbbbbbbb-0000-0000-0000-0000000000b2', false);
-INSERT INTO tenants (id, name, document_type, document_number, city, state, created_at)
-VALUES ('bbbbbbbb-0000-0000-0000-000000000002', 'Restaurante B', 'CPF', '12345678901', 'Uberlandia', 'MG', now());
 INSERT INTO users (id, full_name, phone_number, password_hash, security_stamp, concurrency_stamp, created_at)
 VALUES ('bbbbbbbb-0000-0000-0000-0000000000b2', 'Seu B', '+5534999990000', 'h', 's', 'c', now());
+INSERT INTO tenants (id, name, document_type, document_number, city, state, terms_version, terms_accepted_at, terms_accepted_by_user_id, created_at)
+VALUES ('bbbbbbbb-0000-0000-0000-000000000002', 'Restaurante B', 'CPF', '12345678901', 'Uberlandia', 'MG', '2026-10', now(), 'bbbbbbbb-0000-0000-0000-0000000000b2', now());
 INSERT INTO tenant_employees (id, tenant_id, user_id, display_name, status, security_stamp, joined_at)
 VALUES ('bbbbbbbb-0000-0000-0000-0000000000e2', 'bbbbbbbb-0000-0000-0000-000000000002', 'bbbbbbbb-0000-0000-0000-0000000000b2', 'Seu B', 'ACTIVE', gen_random_uuid(), now());
 INSERT INTO employee_invitations (id, tenant_id, purpose, code, roles, status, expires_at, created_by_employee_id, created_at)

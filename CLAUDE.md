@@ -17,7 +17,8 @@ ADRs com status `Proposto` já orientam a implementação, mas precisam ser revi
 | `docs/03-claude-code-agents.md` | Agentes, fluxo de desenvolvimento e próximas fases da documentação |
 | `docs/04-modelo-dados.md` | Modelo de dados conceitual: entidades, campos, invariantes, cálculos derivados |
 | `docs/05-ddl.md` | **DDL executável** PostgreSQL 16: tabelas, RLS, grants. Fonte de verdade do schema físico (+ `05-ddl-smoke-test.sql`) |
-| `docs/adr/` | Decisões ADR-0001 a ADR-0039 |
+| `docs/06-contratos-api.md` | **Contratos da API** com exemplos JSON literais, `errorCode`s, matriz de permissões e eventos SignalR. Fonte de verdade de payload |
+| `docs/adr/` | Decisões ADR-0001 a ADR-0041 |
 
 ## Decisões que mais pegam de surpresa
 
@@ -50,7 +51,7 @@ Toda funcionalidade segue esta ordem:
 
 1. Confirmar regras e ADRs (`domain-agent` se houver lacuna);
 2. Modelar entidades e migration (`database-agent`);
-3. Definir o contrato da API (exemplos JSON no documento de contratos, quando existir);
+3. Definir/confirmar o contrato da API em `docs/06-contratos-api.md` (exemplos JSON literais);
 4. Implementar o backend (`backend-agent`);
 5. Implementar o mobile (`mobile-agent`);
 6. Escrever os testes;

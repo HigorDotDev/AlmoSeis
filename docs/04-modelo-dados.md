@@ -99,6 +99,7 @@ Identidade autenticada (ASP.NET Core Identity, ADR-0027).
 | DocumentNumber | string(14) | só dígitos |
 | City, State | string(80), string(2) | |
 | TimeZone | string(64) | IANA, padrão `America/Sao_Paulo` |
+| TermsVersion, TermsAcceptedAt, TermsAcceptedByUserId | string(20), DateTimeOffset, Guid | aceite dos Termos e do contrato de tratamento no autocadastro (ADR-0018, ADR-0024) |
 | CreatedAt | DateTimeOffset | |
 | Version | int | [V] |
 
@@ -159,6 +160,7 @@ Aparelho registrado como compartilhado (ADR-0027).
 | InstallationId | string(64) | id da instalação do app, gerado pelo cliente; único por tenant |
 | Name | string(40) | ex.: "Tablet cozinha" |
 | Platform | enum `ANDROID`, `IOS` | |
+| SecretHash | string(64) | SHA-256 do `deviceSecret` entregue uma única vez no registro. O aparelho se autentica com ele para listar funcionários e fazer o login por PIN (`06-contratos-api.md` §6.3) |
 | RegisteredByEmployeeId, RegisteredAt | | |
 | RevokedAt | DateTimeOffset? | |
 
