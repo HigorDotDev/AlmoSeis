@@ -1,3 +1,4 @@
+using AlmoSeis.SharedKernel.Errors;
 using AlmoSeis.SharedKernel.Domain;
 using AlmoSeis.SharedKernel.Security;
 
@@ -100,6 +101,20 @@ internal sealed class Tenant : AggregateRoot
         TermsAcceptedByUserId = acceptedBy,
         CreatedAt = now,
     };
+
+    /// PATCH /tenant: documento não muda pelo app (06 §6.4).
+    public bool Update(string name, string city, string state, string timeZone)
+    {
+        var next = (name.Trim(), city.Trim(), state.ToUpperInvariant(), timeZone);
+        if (next == (Name, City, State, TimeZone))
+        {
+            return false;
+        }
+
+        (Name, City, State, TimeZone) = next;
+        Touch();
+        return true;
+    }
 }
 
 /// tenant_settings: a chave é o próprio tenant (Id = TenantId).
@@ -119,6 +134,47 @@ internal sealed class TenantSettings : AggregateRoot, ITenantOwned, ISyncTracked
     public int SharedDeviceIdleSeconds { get; private set; } = 120;
 
     public static TenantSettings CreateDefault(Guid tenantId) => new() { Id = tenantId };
+
+    /// PATCH /tenant/settings. Pelo menos uma forma de pagamento; ocioso do aparelho compartilhado entre 30 s e 1 h.
+    public bool Update(Money? kiloPrice, Money deliveryFee, IReadOnlyCollection<string> methods, int idleSeconds, DateTimeOffset now)
+    {
+        var errors = new Dictionary<string, string[]>();
+        if (kiloPrice is { } price && price <= Money.Zero)
+        {
+            errors["kiloPricePerKg"] = ["O preço do quilo deve ser maior que zero."];
+        }
+
+        if (deliveryFee.IsNegative)
+        {
+            errors["defaultDeliveryFee"] = ["A taxa de entrega não pode ser negativa."];
+        }
+
+        if (methods.Count == 0 || methods.Any(m => !AllPaymentMethods.Contains(m)))
+        {
+            errors["enabledPaymentMethods"] = ["Habilite pelo menos uma forma de pagamento entre CASH, PIX e CARD."];
+        }
+
+        if (idleSeconds is < 30 or > 3600)
+        {
+            errors["sharedDeviceIdleSeconds"] = ["Use entre 30 e 3600 segundos."];
+        }
+
+        if (errors.Count > 0)
+        {
+            throw BusinessException.Validation(errors);
+        }
+
+        var ordered = AllPaymentMethods.Where(methods.Contains).ToList();
+        if (kiloPrice == KiloPricePerKg && deliveryFee == DefaultDeliveryFee && ordered.SequenceEqual(EnabledPaymentMethods)
+            && idleSeconds == SharedDeviceIdleSeconds)
+        {
+            return false;
+        }
+
+        (KiloPricePerKg, DefaultDeliveryFee, EnabledPaymentMethods, SharedDeviceIdleSeconds) = (kiloPrice, deliveryFee, ordered, idleSeconds);
+        Touch(new TenantSettingsChanged(Id, now));
+        return true;
+    }
 }
 
 internal sealed class TenantEmployee : AggregateRoot, ITenantOwned, ISyncTracked
@@ -164,6 +220,111 @@ internal sealed class TenantEmployee : AggregateRoot, ITenantOwned, ISyncTracked
         }
 
         return employee;
+    }
+
+    public bool IsOwner => _roles.Any(r => r.Role == Role.Owner.ToApiName());
+
+    public void Rename(string displayName)
+    {
+        var name = displayName.Trim();
+        if (name != DisplayName)
+        {
+            DisplayName = name;
+            Touch();
+        }
+    }
+
+    /// Troca de perfis invalida os tokens em uso (novo security stamp, ADR-0027).
+    public bool AssignRoles(IReadOnlyCollection<Role> roles)
+    {
+        var next = roles.Distinct().Select(r => r.ToApiName()).Order().ToList();
+        if (next.Count == 0)
+        {
+            throw BusinessException.Validation("roles", "Escolha pelo menos um perfil.");
+        }
+
+        if (next.SequenceEqual(_roles.Select(r => r.Role).Order()))
+        {
+            return false;
+        }
+
+        _roles.RemoveAll(r => !next.Contains(r.Role));
+        foreach (var role in next.Where(n => _roles.All(r => r.Role != n)))
+        {
+            _roles.Add(new TenantEmployeeRole(TenantId, Id, role));
+        }
+
+        RotateSecurityStamp();
+        return true;
+    }
+
+    public bool Deactivate(Guid by, DateTimeOffset now)
+    {
+        if (!IsActive)
+        {
+            return false;
+        }
+
+        (Status, DeactivatedAt, DeactivatedByEmployeeId) = (EmployeeStatus.Inactive, now, by);
+        RotateSecurityStamp();
+        return true;
+    }
+
+    public bool Reactivate()
+    {
+        if (IsActive)
+        {
+            return false;
+        }
+
+        (Status, DeactivatedAt, DeactivatedByEmployeeId) = (EmployeeStatus.Active, null, null);
+        RotateSecurityStamp();
+        return true;
+    }
+
+    /// Aceite de convite de quem já teve vínculo inativo: volta com os perfis do convite (06 §6.4).
+    public void Rejoin(IReadOnlyCollection<Role> roles, string displayName)
+    {
+        Reactivate();
+        AssignRoles(roles);
+        Rename(displayName);
+    }
+
+    public void SetPin(string pinHash)
+    {
+        (PinHash, PinFailedAttempts, PinLockedUntil) = (pinHash, 0, null);
+        Touch();
+    }
+
+    /// 5 erros seguidos → bloqueio de 15 min (07 §7.6). Devolve as tentativas restantes.
+    public int RegisterPinFailure(DateTimeOffset now)
+    {
+        PinFailedAttempts++;
+        Touch();
+        if (PinFailedAttempts < PinPolicy.MaxAttempts)
+        {
+            return PinPolicy.MaxAttempts - PinFailedAttempts;
+        }
+
+        (PinFailedAttempts, PinLockedUntil) = (0, now + PinPolicy.LockDuration);
+        return 0;
+    }
+
+    public void RegisterPinSuccess()
+    {
+        if (PinFailedAttempts != 0 || PinLockedUntil is not null)
+        {
+            (PinFailedAttempts, PinLockedUntil) = (0, null);
+            Touch();
+        }
+    }
+
+    public bool IsPinLocked(DateTimeOffset now) => PinLockedUntil > now;
+
+    private void RotateSecurityStamp()
+    {
+        SecurityStamp = Guid.NewGuid();
+        Touch();
     }
 }
 

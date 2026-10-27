@@ -83,3 +83,65 @@ internal sealed class SwitchTenantCommandValidator : AbstractValidator<SwitchTen
 {
     public SwitchTenantCommandValidator() => RuleFor(x => x.TenantId).NotEmpty();
 }
+
+internal sealed class UpdateTenantRequestValidator : AbstractValidator<UpdateTenantRequest>
+{
+    public UpdateTenantRequestValidator()
+    {
+        RuleFor(x => x.Name.Value).NotEmpty().MaximumLength(120).When(x => x.Name.HasValue).OverridePropertyName("name");
+        RuleFor(x => x.City.Value).NotEmpty().MaximumLength(80).When(x => x.City.HasValue).OverridePropertyName("city");
+        RuleFor(x => x.State.Value).Matches("^[A-Za-z]{2}$").WithMessage("Use a sigla do estado, ex.: MG.").When(x => x.State.HasValue).OverridePropertyName("state");
+        RuleFor(x => x.TimeZone.Value).NotEmpty().MaximumLength(64).When(x => x.TimeZone.HasValue).OverridePropertyName("timeZone");
+    }
+}
+
+internal sealed class UpdateEmployeeRequestValidator : AbstractValidator<UpdateEmployeeRequest>
+{
+    public UpdateEmployeeRequestValidator()
+    {
+        RuleFor(x => x.DisplayName.Value).NotEmpty().MaximumLength(60).When(x => x.DisplayName.HasValue).OverridePropertyName("displayName");
+        RuleFor(x => x.Roles.Value).NotEmpty().WithMessage("Escolha pelo menos um perfil.").When(x => x.Roles.HasValue).OverridePropertyName("roles");
+    }
+}
+
+internal sealed class CreateInvitationCommandValidator : AbstractValidator<CreateInvitationCommand>
+{
+    public CreateInvitationCommandValidator()
+    {
+        RuleFor(x => x.Roles).NotEmpty().WithMessage("Escolha pelo menos um perfil.");
+    }
+}
+
+internal sealed class AcceptInvitationRequestValidator : AbstractValidator<AcceptInvitationRequest>
+{
+    public AcceptInvitationRequestValidator()
+    {
+        RuleFor(x => x).Must(x => (x.NewAccount is null) != (x.ExistingAccount is null))
+            .WithMessage("Informe uma conta nova ou uma conta existente.").OverridePropertyName("newAccount");
+        RuleFor(x => x.NewAccount!.FullName).NotEmpty().MaximumLength(120).When(x => x.NewAccount is not null).OverridePropertyName("newAccount.fullName");
+        RuleFor(x => x.NewAccount!.Password).StrongPassword().When(x => x.NewAccount is not null).OverridePropertyName("newAccount.password");
+        RuleFor(x => x.NewAccount!.PhoneNumber).Matches(IdentityRules.PhonePattern).When(x => x.NewAccount?.PhoneNumber is not null)
+            .OverridePropertyName("newAccount.phoneNumber");
+        RuleFor(x => x.NewAccount!).Must(a => a.Email is not null || a.PhoneNumber is not null)
+            .WithMessage("Informe e-mail ou telefone.").When(x => x.NewAccount is not null).OverridePropertyName("newAccount");
+        RuleFor(x => x.DisplayName).NotEmpty().MaximumLength(60);
+        RuleFor(x => x.InstallationId).InstallationId();
+    }
+}
+
+internal sealed class SetOwnPinCommandValidator : AbstractValidator<SetOwnPinCommand>
+{
+    public SetOwnPinCommandValidator()
+    {
+        RuleFor(x => x.Pin).NotEmpty();
+        RuleFor(x => x.CurrentPassword).NotEmpty();
+    }
+}
+
+internal sealed class ResetPasswordCommandValidator : AbstractValidator<ResetPasswordCommand>
+{
+    public ResetPasswordCommandValidator()
+    {
+        RuleFor(x => x.NewPassword).StrongPassword();
+    }
+}

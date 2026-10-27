@@ -20,7 +20,9 @@ public static class AuthenticationSetup
     {
         services.AddMemoryCache();
         services.AddScoped<IPermissionChecker, HttpPermissionChecker>();
-        services.AddScoped<IEmployeeAccessCache, EmployeeAccessCache>();
+        services.AddScoped<EmployeeAccessCache>();
+        services.AddScoped<IEmployeeAccessCache>(sp => sp.GetRequiredService<EmployeeAccessCache>());
+        services.AddScoped<IEmployeeAccessInvalidator>(sp => sp.GetRequiredService<EmployeeAccessCache>());
 
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
         services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
@@ -68,7 +70,7 @@ public interface IEmployeeAccessCache
     void Invalidate(Guid employeeId);
 }
 
-internal sealed class EmployeeAccessCache(IMemoryCache cache, IEmployeeAccessReader reader) : IEmployeeAccessCache
+internal sealed class EmployeeAccessCache(IMemoryCache cache, IEmployeeAccessReader reader) : IEmployeeAccessCache, IEmployeeAccessInvalidator
 {
     private static readonly TimeSpan Ttl = TimeSpan.FromSeconds(30);
 

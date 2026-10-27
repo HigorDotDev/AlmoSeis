@@ -21,11 +21,18 @@ public static class IdentityModule
         services.AddScoped<IEmployeeDirectory, EmployeeDirectory>();
         services.AddScoped<ITenantCalendar, TenantCalendar>();
         services.AddScoped<ITenantSettingsReader, TenantSettingsReader>();
+        services.AddOptions<InvitationOptions>().BindConfiguration(InvitationOptions.Section);
+        services.AddScoped<InvitationLookup>();
+        services.AddScoped<InvitationWriter>();
+        services.AddScoped<ManagementDtos>();
+        services.AddScoped<EmployeeAccessRevoker>();
 
         services.Scan(scan => scan
             .FromAssemblyOf<AuthSessionIssuer>()
             .AddClasses(c => c.AssignableTo(typeof(ICommandHandler<,>)), publicOnly: false).AsImplementedInterfaces().WithScopedLifetime()
-            .AddClasses(c => c.AssignableTo(typeof(IQueryHandler<,>)), publicOnly: false).AsImplementedInterfaces().WithScopedLifetime());
+            .AddClasses(c => c.AssignableTo(typeof(IQueryHandler<,>)), publicOnly: false).AsImplementedInterfaces().WithScopedLifetime()
+            .AddClasses(c => c.AssignableTo<IIntegrationEventMapper>(), publicOnly: false).As<IIntegrationEventMapper>().WithScopedLifetime()
+            .AddClasses(c => c.AssignableTo<ICurrentResourceReader>(), publicOnly: false).As<ICurrentResourceReader>().WithScopedLifetime());
 
         services.AddValidatorsFromAssemblyContaining<AuthSessionIssuer>(includeInternalTypes: true);
         return services;

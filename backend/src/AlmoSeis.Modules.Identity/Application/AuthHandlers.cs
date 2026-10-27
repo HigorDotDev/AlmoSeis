@@ -32,7 +32,7 @@ internal sealed class SignUpHandler(
         var user = command.ExistingAccount is { } existing
             ? await Credentials.VerifyAsync(db, passwords, existing.Login, existing.Password, now, cancellationToken)
                 ?? throw new BusinessException(ErrorCodes.InvalidCredentials)
-            : await CreateUserAsync(command.NewAccount!, now, cancellationToken);
+            : await Credentials.CreateUserAsync(db, passwords, ids, command.NewAccount!, now, cancellationToken);
 
         // O tenant nasce aqui: a sessão do banco passa a usá-lo antes de qualquer INSERT com RLS.
         var tenantId = ids.New();
@@ -55,25 +55,6 @@ internal sealed class SignUpHandler(
 
         audit.Add("TenantSignedUp", "TENANT", tenantId, after: new { tenantId, input.Name, termsVersion = command.AcceptedTermsVersion });
         return await sessions.IssueAsync(user, owner, command.InstallationId, null, null, cancellationToken);
-    }
-
-    private async Task<User> CreateUserAsync(NewAccountInput account, DateTimeOffset now, CancellationToken cancellationToken)
-    {
-        var normalizedEmail = User.NormalizeEmail(account.Email);
-        if (normalizedEmail is not null && await db.Set<User>().AnyAsync(u => u.NormalizedEmail == normalizedEmail, cancellationToken))
-        {
-            throw new BusinessException(ErrorCodes.EmailAlreadyRegistered);
-        }
-
-        if (account.PhoneNumber is not null && await db.Set<User>().AnyAsync(u => u.PhoneNumber == account.PhoneNumber, cancellationToken))
-        {
-            throw new BusinessException(ErrorCodes.PhoneAlreadyRegistered);
-        }
-
-        var user = User.Create(ids.New(), account.FullName, account.Email, account.PhoneNumber, now);
-        user.SetPasswordHash(passwords.HashPassword(user, account.Password));
-        db.Add(user);
-        return user;
     }
 
     private static string[] ClaimSources(TenantInput tenantInput, User user) =>
@@ -231,6 +212,26 @@ internal sealed class SwitchTenantHandler(
 
 internal static class Credentials
 {
+    public static async Task<User> CreateUserAsync(
+        AppDbContext db, IPasswordHasher<User> passwords, IIdGenerator ids, NewAccountInput account, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var normalizedEmail = User.NormalizeEmail(account.Email);
+        if (normalizedEmail is not null && await db.Set<User>().AnyAsync(u => u.NormalizedEmail == normalizedEmail, cancellationToken))
+        {
+            throw new BusinessException(ErrorCodes.EmailAlreadyRegistered);
+        }
+
+        if (account.PhoneNumber is not null && await db.Set<User>().AnyAsync(u => u.PhoneNumber == account.PhoneNumber, cancellationToken))
+        {
+            throw new BusinessException(ErrorCodes.PhoneAlreadyRegistered);
+        }
+
+        var user = User.Create(ids.New(), account.FullName, account.Email, account.PhoneNumber, now);
+        user.SetPasswordHash(passwords.HashPassword(user, account.Password));
+        db.Add(user);
+        return user;
+    }
+
     public static Task<User?> FindByLoginAsync(AppDbContext db, string login, CancellationToken cancellationToken)
     {
         var trimmed = login.Trim();

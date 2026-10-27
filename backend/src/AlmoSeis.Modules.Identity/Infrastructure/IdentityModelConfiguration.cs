@@ -1,5 +1,6 @@
 using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Persistence.Entities;
+using AlmoSeis.Infrastructure.Tenancy;
 using AlmoSeis.Modules.Identity.Domain;
 using Microsoft.EntityFrameworkCore;
 
@@ -75,6 +76,25 @@ internal sealed class IdentityModelConfiguration : IModuleModelConfiguration
             b.HasOne<RefreshToken>().WithMany().HasForeignKey(x => x.ReplacedByTokenId); // INSERT do novo antes do UPDATE do antigo
         });
 
+        modelBuilder.Entity<EmployeeInvitation>(b =>
+        {
+            b.ToTable("employee_invitations");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Code).HasMaxLength(6).IsFixedLength();
+            b.Property(x => x.Roles).HasColumnType("text[]");
+            b.Ignore(x => x.RoleValues);
+            b.HasOne<User>().WithMany().HasForeignKey(x => x.AcceptedByUserId); // aceite com conta nova: usuário antes do UPDATE
+        });
+
         modelBuilder.Entity<TenantSyncCounter>().HasOne<Tenant>().WithOne().HasForeignKey<TenantSyncCounter>(x => x.TenantId);
+    }
+}
+
+/// TenantSettingsChanged → `CatalogUpdated` com `entityType: TENANT_SETTINGS` (06 §6.14).
+internal sealed class TenantSettingsChangedMapper(ITenantContext tenant) : IntegrationEventMapper<TenantSettingsChanged>
+{
+    protected override IEnumerable<IntegrationEnvelope> Map(TenantSettingsChanged e)
+    {
+        yield return new IntegrationEnvelope("CatalogUpdated", "TENANT_SETTINGS", e.TenantId, tenant.EmployeeId, new { entityType = "TENANT_SETTINGS" });
     }
 }

@@ -62,6 +62,28 @@ public sealed class AuthController : ControllerBase
         CancellationToken cancellationToken) =>
         Ok(await handler.HandleAsync(new GetMeQuery(), cancellationToken));
 
+    [HttpPut("me/pin")]
+    [Authorize]
+    public async Task<IActionResult> SetPin(
+        [FromBody] SetOwnPinCommand command,
+        [FromServices] ICommandHandler<SetOwnPinCommand, bool> handler,
+        CancellationToken cancellationToken)
+    {
+        await handler.HandleAsync(command, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("password/reset")]
+    [AllowAnonymous]
+    public async Task<IActionResult> ResetPassword(
+        [FromBody] ResetPasswordCommand command,
+        [FromServices] ICommandHandler<ResetPasswordCommand, bool> handler,
+        CancellationToken cancellationToken)
+    {
+        await handler.HandleAsync(command, cancellationToken);
+        return NoContent();
+    }
+
     /// A falha só vira erro aqui, depois do commit do contador de tentativas / revogação.
     private static ActionResult<T> Unwrap<T>(AuthOutcome<T> outcome)
         where T : class =>
