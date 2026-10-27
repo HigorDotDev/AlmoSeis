@@ -50,3 +50,11 @@ A estrutura do §5.3 separa o código **por camada** (`Restaurant.Application/Or
 
 - Substitui a estrutura do §5.3 do épico.
 - Nomes `Restaurant.*` do épico passam a ser `AlmoSeis.*`.
+
+## Complemento (2026-10-27, detalhado em `docs/07-backend.md`)
+
+- **Fronteira por visibilidade:** em cada módulo, tudo é `internal`, exceto `Contracts/` e a classe de registro `XModule`. Os controllers ficam em `AlmoSeis.Api` e chamam `ICommandHandler<,>`/`IQueryHandler<,>` com comandos públicos de `Contracts`.
+- **`AppDbContext` em `AlmoSeis.Infrastructure`**, sem conhecer os módulos. Cada módulo registra uma `IModuleModelConfiguration` por DI. A transação única do item 3 é coordenada por um decorator transacional + `UnitOfWork`, que também grava o feed (ADR-0032) e o outbox (ADR-0031).
+- **Sem `Result<T>`:** erros de negócio são `BusinessException` com um `ErrorCode` que espelha o catálogo de `06-contratos-api.md` §6.1, mapeado para `ProblemDetails` num único handler.
+- **Tempo:** `TimeProvider` da BCL, sem abstração própria (`ITimeProvider` sai do SharedKernel).
+- **Fora:** FluentAssertions (licença comercial), AutoMapper e Serilog (logs via `ILogger` + OpenTelemetry).

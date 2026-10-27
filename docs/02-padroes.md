@@ -14,7 +14,7 @@ Estas são as regras "sempre/nunca" que todo agente segue. Cada regra cita o ADR
 - Seguir o fluxo `Controller → Handler → Domain (agregado) → DbContext/Repository` (ADR-0029).
 - Colocar as regras de negócio no agregado ou em serviço de domínio, nunca em Controller nem em Repository.
 - Injetar dependências por interface e usar `async`/`await`.
-- Usar `TimeProvider`/`ITimeProvider` em vez de `DateTime.Now`/`UtcNow`. Instantes em UTC (`timestamptz`).
+- Usar `TimeProvider` (BCL, injetado) em vez de `DateTime.Now`/`UtcNow`. Instantes em UTC (`timestamptz`).
 - Validar com FluentValidation (nunca DataAnnotations) e mapear o EF com Fluent API.
 - Implementar `ITenantOwned` em toda entidade de tenant. O tenant vem **só** do `ITenantContext` (JWT) (ADR-0026).
 - Autorizar por **permissão** (`[Authorize(Policy = Permissions.Orders.Create)]`), nunca por perfil (ADR-0028).

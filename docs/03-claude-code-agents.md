@@ -29,7 +29,7 @@ Na mesma linha do UrbanCarePlatform, antes de gerar código:
 2. ~~`04-modelo-dados.md`~~ — concluído em 2026-10-27 (gerou os ADRs 0038 e 0039).
 3. ~~`05-ddl.md`~~ — concluído em 2026-10-27, validado num PostgreSQL 16 com `05-ddl-smoke-test.sql`.
 4. ~~`06-contratos-api.md`~~ — concluído em 2026-10-27 (gerou os ADRs 0040 e 0041 e dois ajustes de DDL revalidados).
-5. `07-backend.md` e `08-mobile.md`: arquitetura classe por classe e tela por tela.
+5. ~~`07-backend.md`~~ — concluído em 2026-10-27. Falta `08-mobile.md`: arquitetura tela por tela.
 6. `09-devops.md`: ambientes, pipeline e procedimento de restauração.
 7. UX/UI (wireframes das 4 abas).
 8. Desenvolvimento na ordem Identity/Tenancy → Catalog/Menu → BusinessDay → Ordering → Payments → Closing → Sync → Billing.

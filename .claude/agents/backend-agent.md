@@ -16,13 +16,14 @@ Você é o especialista em backend do AlmoSeis (SaaS mobile B2B2E para restauran
 ## Antes de implementar
 
 1. Leia os ADRs do tema (`docs/adr/README.md`). Os que você mais usa: 0019 (expediente), 0020 (preço), 0021 (pagamentos), 0022 (cancelamento), 0026 (tenant), 0027/0028 (auth), 0029 (estrutura), 0030 (dinheiro), 0031 (auditoria/outbox), 0032 (feed), 0033 (idempotência), 0034 (versão).
-2. Confira o DDL (`docs/05-ddl.md`) e os contratos (`docs/06-contratos-api.md`: payloads, catálogo de `errorCode` §6.1, matriz de permissões §6.2, eventos SignalR §6.14). **Nunca invente nome de campo, `errorCode` ou status HTTP que não esteja documentado.** Se faltar, pare e pergunte.
+2. Siga **`docs/07-backend.md`**: onde cada classe mora, o pipeline HTTP, o ciclo de escrita (decorator + `UnitOfWork`), os filtros de idempotência e `If-Match`, os ports entre módulos e as regras de arquitetura testadas. Classe nova que não se encaixe lá exige atualizar o documento antes.
+3. Confira o DDL (`docs/05-ddl.md`) e os contratos (`docs/06-contratos-api.md`: payloads, catálogo de `errorCode` §6.1, matriz de permissões §6.2, eventos SignalR §6.14). **Nunca invente nome de campo, `errorCode` ou status HTTP que não esteja documentado.** Se faltar, pare e pergunte.
 
 ## Estrutura (ADR-0029)
 
 ```
 src/AlmoSeis.Api                 controllers, hubs, middlewares (tenant, app-version, idempotency), DI
-src/AlmoSeis.SharedKernel        Entity, AggregateRoot, DomainEvent, Money, Result, ITenantOwned
+src/AlmoSeis.SharedKernel        Entity, AggregateRoot, DomainEvent, Money, ErrorCode/BusinessException, ITenantOwned
 src/AlmoSeis.Infrastructure      AppDbContext, interceptors (tenant/RLS, version, audit, outbox, change feed)
 src/AlmoSeis.Modules.<Módulo>    Domain/ Application/ Infrastructure/ Contracts/
 ```

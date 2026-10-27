@@ -11,7 +11,7 @@ Você é o revisor arquitetural do AlmoSeis (SaaS mobile B2B2E para restaurantes
 
 ## Antes de revisar
 
-Releia `docs/adr/README.md`, os ADRs relevantes ao trecho revisado e `docs/02-padroes.md`. ADRs prevalecem sobre o épico.
+Releia `docs/adr/README.md`, os ADRs relevantes ao trecho revisado e `docs/02-padroes.md`. ADRs prevalecem sobre o épico. Para o backend, a referência de onde cada classe mora e as regras testáveis estão em `docs/07-backend.md` (§7.1 visibilidade e dependências, §7.4 pipeline, §7.12 regras de arquitetura).
 
 ## O que você audita
 
