@@ -48,6 +48,15 @@ public sealed class ProductsController : ControllerBase
         [FromServices] ICommandHandler<UpdateProductCommand, ProductDto> handler,
         CancellationToken cancellationToken) =>
         Ok(await handler.HandleAsync(new UpdateProductCommand(id, request), cancellationToken));
+
+    [HttpPost("{id:guid}/image-upload")]
+    [HasPermission(Permissions.CatalogManage)]
+    public async Task<ActionResult<ImageUploadDto>> RequestImageUpload(
+        Guid id,
+        [FromBody] RequestImageUploadRequest request,
+        [FromServices] ICommandHandler<RequestImageUploadCommand, ImageUploadDto> handler,
+        CancellationToken cancellationToken) =>
+        StatusCode(StatusCodes.Status201Created, await handler.HandleAsync(new RequestImageUploadCommand(id, request), cancellationToken));
 }
 
 /// Tamanhos de marmita (06 §6.5).

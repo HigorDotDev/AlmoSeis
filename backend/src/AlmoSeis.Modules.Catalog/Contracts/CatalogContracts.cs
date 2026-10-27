@@ -54,6 +54,13 @@ public sealed record UpdateProductRequest(
 
 public sealed record UpdateProductCommand(Guid ProductId, UpdateProductRequest Changes);
 
+/// POST /products/{id}/image-upload (06 §6.5).
+public sealed record RequestImageUploadRequest(string ContentType, long SizeBytes);
+
+public sealed record RequestImageUploadCommand(Guid ProductId, RequestImageUploadRequest Request);
+
+public sealed record ImageUploadDto(string UploadUrl, string Method, IReadOnlyDictionary<string, string> Headers, string StorageKey, DateTimeOffset ExpiresAt);
+
 public sealed record GetProductQuery(Guid ProductId);
 
 public sealed record ListProductsQuery(ProductKind? Kind, bool IncludeInactive);

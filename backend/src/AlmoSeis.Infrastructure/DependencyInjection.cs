@@ -52,8 +52,8 @@ public static class DependencyInjection
         services.AddSingleton<SyncRetentionJob>();
         services.AddHostedService(sp => sp.GetRequiredService<SyncRetentionJob>());
 
-        services.AddOptions<ObjectStorageOptions>().Bind(configuration.GetSection(ObjectStorageOptions.Section));
-        services.AddSingleton<IObjectStorage, PublicUrlObjectStorage>();
+        services.AddOptions<R2Options>().Bind(configuration.GetSection(R2Options.Section));
+        services.AddSingleton<IObjectStorage, R2ObjectStorage>();
 
         services.AddOptions<JwtOptions>().Bind(configuration.GetSection(JwtOptions.Section));
         services.AddSingleton<IJwtTokenIssuer, JwtTokenIssuer>();

@@ -55,6 +55,11 @@ internal sealed class UpdateProductHandler(
             throw BusinessException.Validation("imageStorageKey", "A imagem não pertence a este produto.");
         }
 
+        if (changes.ImageStorageKey is { HasValue: true, Value: { } uploadedKey } && uploadedKey != product.ImageStorageKey)
+        {
+            await ProductImages.EnsureUploadedAsync(storage, uploadedKey, cancellationToken);
+        }
+
         var kindLocked = false;
         if (changes.Kind.HasValue && changes.Kind.Value != product.Kind)
         {
@@ -160,4 +165,67 @@ internal static class ProductMapping
     public static ProductDto ToDto(Product p, IObjectStorage storage) => new(
         p.Id, p.Version, p.Kind, p.Name, p.Description, p.Category, p.DefaultPrice, p.RequiresPreparation,
         storage.PublicUrl(p.ImageStorageKey), p.IsActive, p.IsAvailable, p.CreatedAt, p.UpdatedAt);
+}
+
+/// POST /products/{id}/image-upload: URL pré-assinada de PUT direto no R2 (06 §6.5). Nada é gravado aqui: o app envia
+/// o arquivo e depois grava `imageStorageKey` no PATCH, que confere o objeto.
+internal sealed class RequestImageUploadHandler(AppDbContext db, ITenantContext tenant, IObjectStorage storage, TimeProvider time)
+    : ICommandHandler<RequestImageUploadCommand, ImageUploadDto>
+{
+    public async Task<ImageUploadDto> HandleAsync(RequestImageUploadCommand command, CancellationToken cancellationToken)
+    {
+        if (!await db.Set<Product>().AnyAsync(p => p.Id == command.ProductId, cancellationToken))
+        {
+            throw new NotFoundException("PRODUCT", command.ProductId);
+        }
+
+        var request = command.Request;
+        ProductImages.EnsureAllowed(request.ContentType, request.SizeBytes, "contentType", "sizeBytes");
+
+        // Chave nova a cada pedido: a imagem antiga continua válida até o PATCH trocar.
+        var suffix = Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(3));
+        var key = $"t/{tenant.TenantId}/p/{command.ProductId}-{time.GetUtcNow():yyyyMMddHHmmss}-{suffix}.{ProductImages.Extensions[request.ContentType]}";
+        var upload = storage.CreateUploadUrl(key, request.ContentType);
+        return new ImageUploadDto(upload.Url, upload.Method, upload.Headers, key, upload.ExpiresAt);
+    }
+}
+
+/// Regras da imagem de produto (06 §6.5): JPEG, PNG ou WebP, até 2 MB.
+internal static class ProductImages
+{
+    public const long MaxBytes = 2 * 1024 * 1024;
+
+    public static readonly IReadOnlyDictionary<string, string> Extensions = new Dictionary<string, string>
+    {
+        ["image/jpeg"] = "jpg",
+        ["image/png"] = "png",
+        ["image/webp"] = "webp",
+    };
+
+    public static void EnsureAllowed(string? contentType, long sizeBytes, string typeField, string sizeField)
+    {
+        if (contentType is null || !Extensions.ContainsKey(contentType))
+        {
+            throw BusinessException.Validation(typeField, "Use uma imagem JPEG, PNG ou WebP.");
+        }
+
+        if (sizeBytes is <= 0 or > MaxBytes)
+        {
+            throw BusinessException.Validation(sizeField, "A imagem deve ter até 2 MB.");
+        }
+    }
+
+    /// A URL pré-assinada não limita o tamanho: o objeto é conferido no bucket antes de a chave ser aceita.
+    /// Sem R2 configurado (desenvolvimento e testes), não há o que conferir.
+    public static async Task EnsureUploadedAsync(IObjectStorage storage, string key, CancellationToken cancellationToken)
+    {
+        if (!storage.IsConfigured)
+        {
+            return;
+        }
+
+        var stored = await storage.GetAsync(key, cancellationToken)
+            ?? throw BusinessException.Validation("imageStorageKey", "Envie a imagem antes de gravá-la no produto.");
+        EnsureAllowed(stored.ContentType, stored.SizeBytes, "imageStorageKey", "imageStorageKey");
+    }
 }
