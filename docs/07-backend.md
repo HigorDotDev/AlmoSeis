@@ -212,7 +212,7 @@ MapHealthChecks("/health/live" | "/health/ready")
 | `[HasPermission(Permissions.Orders.Create)]` | Atributo usado nos controllers |
 | `IPermissionChecker` (scoped) | `bool Has(string permission)` sobre o mesmo cache. Usado em handlers quando a permissão depende do **valor** enviado (ex.: `orders.delivery-fee.edit` só se a taxa difere da padrão) |
 | `DeviceSecretAuthenticationHandler` (esquema `DeviceSecret`) | Só para `GET /devices/shared/{installationId}/employees` e `POST /auth/pin-login`: valida `X-Device-Secret` + `X-Tenant-Id` |
-| `PlatformAdminRequirement` | Política `PlatformAdmin`: `users.is_platform_admin`, token sem tenant |
+| `PlatformAdminRequirement` / `[PlatformAdmin]` | Política `PlatformAdmin` (ADR-0043): só tokens de `POST /auth/admin/login`. O `EmployeeAccessValidator` reconhece o token sem `tenant_id` com `platform_admin`, aceita-o **só** em `/api/v1/admin` e confere, a cada requisição, `is_platform_admin` e o `security_stamp` do usuário (`IPlatformAdminCheck`). Token de estabelecimento em `/admin/*` → `403`; token de admin fora de `/admin` → `401` |
 
 **JSON** (`AddControllers().AddJsonOptions`):
 - `camelCase`;
@@ -308,7 +308,7 @@ AlmoSeis.Modules.Ordering/
 - `PAYMENT_CONFIRMED`/`RECEIVED`: `currentPeriodEndsAt` = `payment.dueDate` + 1 mês. A assinatura é achada por `gateway_subscription_id` (`payment.subscription` ou `subscription.id`).
 - O job cria a assinatura no gateway quando faltam `TrialEndingNoticeDays` (2) para o fim do teste e o gateway está configurado; lê nome, documento e contato do proprietário por SQL (job de plataforma).
 - `ISubscriptionAccess` (cache de 60 s por tenant, invalidado no mesmo processo) alimenta o `SubscriptionWriteGuardFilter`.
-- Rotas `/admin/*` ainda não existem: dependem do token de administrador de plataforma (sem tenant), que o login ainda não emite.
+- Rotas `/admin/*` (ADR-0043): `IPlatformAdminService` no `PlatformDbContext`, **fora** do decorator transacional (não é `ICommandHandler`: não há tenant). Consultas por SQL com só cadastro, assinatura e contagens. Ações: `Subscription.ExtendTrial` (teste: soma dias; suspensa sem período pago: volta ao teste), `Suspend`, `Activate(agora + 1 mês)`; cada uma grava uma auditoria semântica (`TrialExtended`, `SubscriptionSuspendedByAdmin`, `SubscriptionReactivatedByAdmin`) com `actor_user_id` e, quando o estado muda, o `SubscriptionChangeRecorder` grava `SubscriptionStatusChanged` e o evento de tempo real. Reprocessar webhook = `processed_at = null`.
 
 ### Catalog
 
@@ -583,6 +583,8 @@ O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5
 | JSON do ProblemDetails | `ConfigureHttpJsonOptions` recebe as mesmas convenções do MVC | O writer de ProblemDetails usa as opções HTTP, e o `current` sairia com dinheiro como objeto |
 | Envelope de tempo real | `seq` e `entityVersion` vêm da entrada do feed da mesma transação (o mapper só informa tipo, entidade, ator e `data`) | O evento é montado antes do incremento de versão |
 | Regras por campo no domínio | `BusinessException.Validation(campo, mensagem)` devolve o mesmo `422 { errors }` do FluentValidation, com o caminho da API (`items[1].pfPrice`) | Regras que dependem de estado (preço × tipo, produto do cardápio) não cabem no validator |
+| Login de admin | `AdminLoginHandler` emite só access token (sem refresh, porque `refresh_tokens` exige tenant) com `security_stamp` do **usuário**. Tokens de estabelecimento não levam mais `platform_admin` | ADR-0043 |
+| Colunas com número | A convenção snake_case do EF gera `orders_last30days` para `OrdersLast30Days` (sem `_` antes do número); aliases de `SqlQuery` seguem isso | Pego pelo teste do detalhe de tenant no admin |
 | Produto em uso | `IProductUsageCheck` (Contracts do Catalog) implementado por Menu (e, depois, Ordering): produto em cardápio ou vendido não muda de `kind` | Catalog não pode depender de quem o referencia |
 | Versão mínima do app | `AppVersionMiddleware`: compara `X-App-Version` (ou `appVersion` na query do hub) com `App:MinSupportedAppVersion:{plataforma}`. **Sem o header, passa** | Ferramentas, webhooks e testes não mandam o header; o app sempre manda (ADR-0035) |
 | Rate limiting | `GlobalLimiter` com `PartitionedRateLimiter.CreateChained`: um elo por limite do ADR-0041, cada um devolve "sem limite" fora das suas rotas. `RateLimitKeyMiddleware` lê `login`/`installationId` do corpo de `/auth/login` e `/auth/pin-login` antes do limiter. `RateLimiting:Enabled = false` nos testes, exceto no teste dedicado | O particionamento nativo descarta partições ociosas; por réplica e em memória, como o ADR decide |

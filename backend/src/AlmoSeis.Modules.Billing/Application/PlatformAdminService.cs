@@ -60,7 +60,7 @@ internal sealed class PlatformAdminService(
             SELECT t.id, t.name, t.document_number, t.created_at, s.status, s.trial_ends_at, s.current_period_ends_at,
                    (SELECT count(*) FROM tenant_employees e WHERE e.tenant_id = t.id AND e.status = 'ACTIVE')::int AS active_employee_count,
                    (SELECT max(o.created_at) FROM orders o WHERE o.tenant_id = t.id) AS last_order_at,
-                   (SELECT count(*) FROM orders o WHERE o.tenant_id = t.id AND o.created_at >= {since})::int AS orders_last30_days,
+                   (SELECT count(*) FROM orders o WHERE o.tenant_id = t.id AND o.created_at >= {since})::int AS orders_last30days, -- snake_case do EF: sem "_" antes do número
                    d.id AS open_day_id, d.business_date AS open_day_date, d.opened_at AS open_day_opened_at
               FROM tenants t
               JOIN subscriptions s ON s.tenant_id = t.id
