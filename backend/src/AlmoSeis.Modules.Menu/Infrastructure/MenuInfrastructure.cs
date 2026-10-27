@@ -47,3 +47,15 @@ internal sealed class MenuChangedMapper(ITenantContext tenant) : IntegrationEven
             new { menuType = UpperSnakeEnumConverter<MenuType>.ToText(domainEvent.MenuType), date = domainEvent.Date });
     }
 }
+
+internal sealed class MenuReader(AppDbContext db) : IMenuReader
+{
+    public async Task<DailyMenu?> GetDailyAsync(MenuType menuType, DateOnly date, CancellationToken cancellationToken)
+    {
+        var menu = await db.Set<MenuAggregate>().AsNoTracking().Include(m => m.Items)
+            .SingleOrDefaultAsync(m => m.MenuType == menuType && m.Kind == MenuKind.Daily && m.Date == date, cancellationToken);
+        return menu is null
+            ? null
+            : new DailyMenu(menu.Id, menu.MenuType, date, menu.Items.Select(i => new DailyMenuItem(i.ProductId, i.Section, i.PfPrice, i.IsAvailable)).ToList());
+    }
+}

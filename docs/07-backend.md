@@ -44,6 +44,8 @@ Api ──► Modules.* ──► Infrastructure ──► SharedKernel
 | `Modules.X` | `Domain/`, `Application/`, `Infrastructure/`, `Contracts/`, `XModule.cs` | `SharedKernel`, `Infrastructure`, outros `Modules.*` (**só** o namespace `Contracts`) |
 | `Api` | Host, controllers, hub, middlewares, filtros, composição | todos |
 
+**Ordem entre módulos** (referências de projeto não podem formar ciclo): `Identity`, `Catalog` ← `Menu` ← `Closing` ← `Ordering` ← `Payments`. O `Closing` fica **abaixo** do `Ordering` porque todos dependem do expediente (`IBusinessDayReader`); por isso o fechamento lê pedidos e pagamentos com SQL (`ClosingInputsQuery`), sem referenciar esses módulos.
+
 **Visibilidade:** em cada módulo, tudo é `internal`, exceto `Contracts/*` e a classe `XModule` (registro). Assim um módulo **não consegue** usar o domínio de outro, mesmo referenciando o projeto. `InternalsVisibleTo` só para `AlmoSeis.UnitTests` e `AlmoSeis.IntegrationTests`.
 
 ### Pacotes (versões em `Directory.Packages.props`, sempre a estável alinhada ao .NET 10)
@@ -409,7 +411,10 @@ RecordChange(kind, details, affectsProduction) → OrderChangeEvent + Touch(Orde
   - `ApplyPaymentAsync(orderId, amount)`, `UndoPaymentAsync(orderId, amount)`.
   
   A implementação carrega o agregado **no mesmo `AppDbContext` e transação** e chama `ApplyPayment`/`UndoPayment` + `Touch`.
-- `IOrderReadPort`: `ProductWasSoldAsync`, consultas de agregação para o Closing.
+- `IOrderPaymentsReader`: os `payments` do DTO do pedido. Declarada aqui e implementada pelo Payments; até lá, `NoOrderPayments` (lista vazia, registrada com `TryAdd`).
+- O "produto vendido não muda de `kind`" é o `OrderProductUsageCheck` (`IProductUsageCheck` do Catalog). Não há `IOrderReadPort`: o Closing lê pedidos por SQL (§7.1).
+
+**Implementado:** `OrderChangeEvent` é filho do agregado (coleção nunca carregada; só os novos são inseridos), registrado depois do `Touch`, então `OrderVersion` já é a versão nova. `GET /orders/{id}/history` lê `audit_logs` direto (a entidade `AuditLog` é da Infrastructure); o módulo Audit assume quando `GET /audit-logs` for implementado.
 
 ---
 
@@ -567,6 +572,14 @@ O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5
 | Envelope de tempo real | `seq` e `entityVersion` vêm da entrada do feed da mesma transação (o mapper só informa tipo, entidade, ator e `data`) | O evento é montado antes do incremento de versão |
 | Regras por campo no domínio | `BusinessException.Validation(campo, mensagem)` devolve o mesmo `422 { errors }` do FluentValidation, com o caminho da API (`items[1].pfPrice`) | Regras que dependem de estado (preço × tipo, produto do cardápio) não cabem no validator |
 | Produto em uso | `IProductUsageCheck` (Contracts do Catalog) implementado por Menu (e, depois, Ordering): produto em cardápio ou vendido não muda de `kind` | Catalog não pode depender de quem o referencia |
+| Ids monotônicos | `IdGenerator` gera UUID v7 com contador de 12 bits em `rand_a` dentro do mesmo milissegundo (RFC 9562 §6.2) | `Guid.CreateVersion7` sorteia esses bits: itens criados na mesma requisição saíam em ordem aleatória, e os cursores por id deixavam de seguir a criação |
+| `SqlQuery<T>` com tipo próprio | As colunas do resultado seguem a convenção snake_case (`business_date`), sem alias em PascalCase | A convenção de nomes vale também para o tipo não mapeado |
+| Endereço padrão do cliente | `ux_customer_addresses_default` virou `EXCLUDE ... DEFERRABLE INITIALLY DEFERRED` (05 §5.7) | Trocar o padrão desmarca um e marca outro na mesma transação, e o EF não garante a ordem dos UPDATEs. Índice único parcial não pode ser adiável |
+| Validar antes de mutar | Regras do agregado (ex.: não esvaziar o pedido) são checadas antes de alterar o estado | O rollback esconde o problema na API, mas o agregado nunca deve ficar inválido em memória |
+| Alerta pendente | Literal de 04 §4.7: evento com `affectsProduction` exige `production.view`; os demais, `orders.view`. `ORDER_NOTES_CHANGED` conta como produção quando o pedido tem produção (não é KILO) | A cozinha lê a observação do pedido no painel |
+| Ciência de alerta | `INSERT ... ON CONFLICT DO NOTHING` por SQL; ainda **não** publica `OrderAlertAcknowledged` | O outbox exige uma entidade alterada na transação; o evento entra com o dispatcher |
+| Anonimização de cliente | Snapshots dos pedidos por `UPDATE` em SQL: nome → "Cliente anonimizado", telefone nulo, endereço de entrega → marcador `"Endereço anonimizado"` | `ck_orders_delivery` exige endereço em entrega. **Lacuna:** esse UPDATE não sobe a versão nem grava feed dos pedidos; o app só vê a mudança ao recarregar o pedido |
+| Fiado | `pendingAmount`/`pendingOrderCount` e `/pending-orders` = pedidos ativos não quitados, de qualquer data | ADR-0021: fiado é saldo, não entidade |
 | Idempotência: INSERT do registro | `INSERT ... ON CONFLICT (tenant_id, key) DO NOTHING` com `lock_timeout` local só nesse comando; 0 linhas → lê o registro já confirmado (replay ou `422`). `55P03` → `409 OperationInProgress` | Um INSERT simples aborta a transação na violação de unicidade; o `ON CONFLICT` espera o concorrente e continua utilizável |
 | Idempotência: hash do pedido | SHA-256 dos argumentos `[FromBody]` já desserializados e reserializados com o JSON da API, mais `método + caminho` gravado em `endpoint` | Espaços e ordem das chaves não mudam o hash; a mesma chave em outra rota ou de outro usuário é `422` |
 | Idempotência: replay | `ContentResult` com status e corpo guardados + `Idempotent-Replayed: true`. O corpo sai do `jsonb`, então a ordem das chaves pode mudar; `Location` e `ETag` não são repetidos | Mesmos campos e valores; o app não depende da ordem |

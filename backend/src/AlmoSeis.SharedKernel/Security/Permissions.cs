@@ -103,3 +103,9 @@ public static class RolePermissions
 
     public static Role FromApiName(string name) => Enum.Parse<Role>(name, ignoreCase: true);
 }
+
+/// Permissão que depende do valor enviado (ex.: taxa de entrega diferente da padrão), checada no handler (07 §7.4).
+public interface IPermissionChecker
+{
+    bool Has(string permission);
+}

@@ -28,7 +28,8 @@ internal sealed class BusinessDayReader(AppDbContext db, ITenantContext tenant) 
         var rows = await db.Database
             .SqlQuery<BusinessDayRow>(
                 $"""
-                SELECT id AS "Id", business_date AS "BusinessDate", version AS "Version"
+                -- Colunas em snake_case: a convenção de nomes vale também para o tipo do resultado.
+                SELECT id, business_date, version
                   FROM business_days
                  WHERE tenant_id = {tenantId} AND status = 'OPEN'
                    FOR SHARE

@@ -102,3 +102,13 @@ public interface IMenuMaterializer
 {
     Task<IReadOnlyList<MaterializedMenuDto>> MaterializeForAsync(DateOnly businessDate, CancellationToken cancellationToken);
 }
+
+/// Item do cardápio do dia, como o Ordering precisa para validar e precificar (07 §7.7).
+public sealed record DailyMenuItem(Guid ProductId, MenuSection Section, Money? PfPrice, bool IsAvailable);
+
+public sealed record DailyMenu(Guid Id, MenuType MenuType, DateOnly Date, IReadOnlyList<DailyMenuItem> Items);
+
+public interface IMenuReader
+{
+    Task<DailyMenu?> GetDailyAsync(MenuType menuType, DateOnly date, CancellationToken cancellationToken);
+}

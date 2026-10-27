@@ -3,6 +3,7 @@ using AlmoSeis.Infrastructure.Security;
 using AlmoSeis.Infrastructure.Tenancy;
 using AlmoSeis.Modules.Identity.Contracts;
 using AlmoSeis.SharedKernel.Errors;
+using AlmoSeis.SharedKernel.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
@@ -18,6 +19,7 @@ public static class AuthenticationSetup
     public static IServiceCollection AddAlmoSeisAuthentication(this IServiceCollection services)
     {
         services.AddMemoryCache();
+        services.AddScoped<IPermissionChecker, HttpPermissionChecker>();
         services.AddScoped<IEmployeeAccessCache, EmployeeAccessCache>();
 
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
@@ -115,6 +117,13 @@ internal static class EmployeeAccessValidator
 
         context.HttpContext.Items[ItemKey] = access;
     }
+}
+
+/// Mesmas permissões do token validado, para regras que dependem do valor enviado.
+internal sealed class HttpPermissionChecker(IHttpContextAccessor accessor) : IPermissionChecker
+{
+    public bool Has(string permission) =>
+        accessor.HttpContext?.Items[EmployeeAccessValidator.ItemKey] is EmployeeAccess access && access.Permissions.Contains(permission);
 }
 
 /// [HasPermission("orders.create")] → política "perm:orders.create" (07 §7.4).

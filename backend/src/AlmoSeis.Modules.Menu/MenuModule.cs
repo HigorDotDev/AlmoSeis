@@ -17,6 +17,7 @@ public static class MenuModule
         services.AddScoped<MenuDtoBuilder>();
         services.AddScoped<IProductUsageCheck, MenuProductUsageCheck>();
         services.AddScoped<IMenuMaterializer, MenuMaterializer>();
+        services.AddScoped<IMenuReader, MenuReader>();
 
         services.Scan(scan => scan
             .FromAssemblyOf<MenuDtoBuilder>()

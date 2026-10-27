@@ -1,9 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <PackageReference Include="FluentValidation" />
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\AlmoSeis.SharedKernel\AlmoSeis.SharedKernel.csproj" />
     <ProjectReference Include="..\AlmoSeis.Infrastructure\AlmoSeis.Infrastructure.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Identity\AlmoSeis.Modules.Identity.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Catalog\AlmoSeis.Modules.Catalog.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Menu\AlmoSeis.Modules.Menu.csproj" />
+    <!-- Closing fica abaixo do Ordering: o fechamento lê pedidos por SQL, sem referenciar este projeto. -->
+    <ProjectReference Include="..\AlmoSeis.Modules.Closing\AlmoSeis.Modules.Closing.csproj" />
   </ItemGroup>
 </Project>

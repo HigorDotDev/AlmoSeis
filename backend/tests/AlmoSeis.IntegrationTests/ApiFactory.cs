@@ -132,6 +132,15 @@ public static class ApiScenarios
         return client.SendAsync(request, TestContext.Current.CancellationToken);
     }
 
+    /// Rotas [I][M]: `Idempotency-Key` novo + `If-Match`.
+    public static Task<HttpResponseMessage> SendWithKeyAsync(this HttpClient client, HttpMethod method, string url, object? body, int ifMatch)
+    {
+        var request = new HttpRequestMessage(method, url) { Content = body is null ? null : JsonContent.Create(body) };
+        request.Headers.TryAddWithoutValidation("Idempotency-Key", Guid.NewGuid().ToString());
+        request.Headers.TryAddWithoutValidation("If-Match", $"\"{ifMatch}\"");
+        return client.SendAsync(request, TestContext.Current.CancellationToken);
+    }
+
     /// Lê o corpo exigindo o status esperado; na falha, mostra o corpo e os erros do servidor.
     public static async Task<JsonElement> ExpectAsync(this HttpResponseMessage response, HttpStatusCode expected, ApiFactory factory)
     {

@@ -1,3 +1,5 @@
+using AlmoSeis.SharedKernel.Domain;
+
 namespace AlmoSeis.Modules.Identity.Contracts;
 
 // ===== Comandos e consultas (corpo das requisições de 06 §6.3) =====
@@ -93,4 +95,12 @@ public interface IEmployeeDirectory
 public interface ITenantCalendar
 {
     Task<DateOnly> TodayAsync(CancellationToken cancellationToken);
+}
+
+/// Configuração operacional do tenant corrente (06 §6.4): preço do quilo, taxa padrão e formas de pagamento.
+public sealed record TenantOperationalSettings(Money? KiloPricePerKg, Money DefaultDeliveryFee, IReadOnlyList<string> EnabledPaymentMethods);
+
+public interface ITenantSettingsReader
+{
+    Task<TenantOperationalSettings> GetAsync(CancellationToken cancellationToken);
 }

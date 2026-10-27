@@ -90,3 +90,13 @@ internal sealed class TenantCalendar(AppDbContext db, ITenantContext tenant, Tim
         return DateOnly.FromDateTime(local.DateTime);
     }
 }
+
+internal sealed class TenantSettingsReader(AppDbContext db, ITenantContext tenant) : ITenantSettingsReader
+{
+    public async Task<TenantOperationalSettings> GetAsync(CancellationToken cancellationToken)
+    {
+        var tenantId = tenant.TenantId ?? throw new InvalidOperationException("Configuração sem tenant.");
+        var settings = await db.Set<TenantSettings>().AsNoTracking().SingleAsync(s => s.Id == tenantId, cancellationToken);
+        return new TenantOperationalSettings(settings.KiloPricePerKg, settings.DefaultDeliveryFee, settings.EnabledPaymentMethods);
+    }
+}

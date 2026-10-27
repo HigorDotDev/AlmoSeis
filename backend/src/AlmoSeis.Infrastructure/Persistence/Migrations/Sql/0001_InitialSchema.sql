@@ -316,7 +316,10 @@ CREATE TABLE customer_addresses (
   CONSTRAINT fk_customer_addresses_customer FOREIGN KEY (tenant_id, customer_id) REFERENCES customers (tenant_id, id)
 );
 CREATE INDEX ix_customer_addresses_customer ON customer_addresses (tenant_id, customer_id);
-CREATE UNIQUE INDEX ux_customer_addresses_default ON customer_addresses (customer_id) WHERE is_default;
+-- Um endereço padrão por cliente. Adiável (checado no commit): trocar o padrão desmarca um e marca outro
+-- na mesma transação, e a ordem dos UPDATEs não é garantida pelo EF. Índice único parcial não pode ser adiável.
+ALTER TABLE customer_addresses ADD CONSTRAINT ux_customer_addresses_default
+  EXCLUDE USING btree (customer_id WITH =) WHERE (is_default) DEFERRABLE INITIALLY DEFERRED;
 
 CREATE TABLE business_days (
   id                     uuid           PRIMARY KEY,

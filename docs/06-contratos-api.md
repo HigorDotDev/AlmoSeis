@@ -111,7 +111,7 @@ Conflito de versão (`409`) traz o estado atual em `current` (ADR-0034):
 | 409 | `OrderHasPayments` | cancelamento com pagamentos válidos (ADR-0022) |
 | 409 | `PaymentAlreadyReversed` | estorno repetido |
 | 409 | `ClosingAlreadyFinalized` | finalizar expediente já fechado |
-| 409 | `EmailAlreadyRegistered` / `PhoneAlreadyRegistered` | autocadastro ou aceite com contato já usado (use `existingAccount`) |
+| 409 | `EmailAlreadyRegistered` / `PhoneAlreadyRegistered` | autocadastro ou aceite com contato já usado (use `existingAccount`); `PhoneAlreadyRegistered` também em `POST`/`PATCH /customers` com telefone de outro cliente, com o cliente existente em `current` |
 | 409 | `TrialAlreadyClaimed` | documento ou telefone já usou teste grátis (ADR-0017) |
 | 409 | `LastOwner` | remover ou desativar o último `OWNER` ativo |
 | 409 | `InvitationNotPending` | convite aceito, revogado ou expirado |
@@ -122,7 +122,7 @@ Conflito de versão (`409`) traz o estado atual em `current` (ADR-0034):
 | 422 | `PaymentExceedsBalance` | valor maior que o saldo (ADR-0021) |
 | 422 | `TotalBelowPaidAmount` | edição deixaria o total abaixo do já pago (ADR-0007) |
 | 422 | `PaymentMethodDisabled` | forma de pagamento desabilitada no estabelecimento |
-| 422 | `ProductUnavailable` | produto inativo, indisponível ou fora do cardápio do dia |
+| 422 | `ProductUnavailable` | produto inativo, indisponível ou fora do cardápio do dia (o `detail` diz qual: "Costela não está disponível no cardápio de hoje.") |
 | 422 | `KiloPriceNotConfigured` | pesagem sem preço do quilo configurado |
 | 422 | `JustificationRequired` | fechamento com diferença ≠ 0 sem justificativa |
 | 423 | `PinLocked` | PIN bloqueado (extensão `lockedUntil`) |
@@ -894,6 +894,8 @@ Para gerar um modelo semanal a partir de um dia: `{ "kind": "WEEKLY_TEMPLATE", "
 - `items` traz só itens `ACTIVE`. As remoções aparecem em `GET /orders/{id}/history`.
 - `pendingAlertCount` é **por funcionário** (o de quem chama).
 - `cancellation` (quando cancelado): `{ "canceledAt": "...", "canceledBy": {...}, "reason": "Cliente desistiu" }`.
+- `customer` existe quando há cliente cadastrado **ou** nome avulso. Com nome avulso (ex.: `"Mesa 3"` num pedido por quilo), `customer.id` é `null`. Sem nenhum dos dois, `customer` é `null`.
+- `items` e `addons` saem na ordem de inclusão.
 
 Pedido `PF`: `fulfillmentType: "DINE_IN"`, `tableLabel: "5"`, itens `itemKind: "PF"` com `productId` do prato e `unitPrice` = `pfPrice` do cardápio.
 
@@ -915,7 +917,7 @@ Filtros:
 - `search` (nome do cliente, mesa ou comanda);
 - `limit`, `cursor`.
 
-Ordenação: `createdAt` decrescente.
+Ordenação: `createdAt` decrescente (na prática, pelo id UUID v7, que segue a ordem de criação). Sem `businessDayId` e sem expediente aberto, a lista vem vazia.
 
 ```json
 {
@@ -1169,11 +1171,13 @@ Alertas pendentes **para quem chama**:
 { "eventIds": ["0192d6a0-0000-7000-8000-000000000b01"] }
 ```
 
-→ `204`. A ciência vale só para quem chama (RN-008.7), e repetir não dá erro.
+→ `204`. A ciência vale só para quem chama (RN-008.7), e repetir não dá erro. Ids de outro pedido → `422` em `eventIds`.
+
+O `summary` é montado no servidor a partir de `details`: `+1 Coca-Cola 350ml`, `−1 Coca-Cola 350ml`, `Marmita M: 2 → 3`, `Obs. de PF Frango grelhado: Sem salada`, `Obs. do pedido: ...`, `+ pesagem de 318 g`, `Pesagem de 318 g removida`, `Entrega ou retirada alterada`, `Pedido cancelado: <motivo>`.
 
 ### Produção — `GET /production/orders` — `production.view`
 
-Painel da cozinha (RN-007.4/7.5): só `MARMITA` e `PF` ativos do expediente aberto, agrupados e do mais antigo para o mais novo.
+Painel da cozinha (RN-007.4/7.5): só `MARMITA` e `PF` ativos do expediente aberto, agrupados e do mais antigo para o mais novo. Sem expediente aberto → `409 BusinessDayRequired`.
 
 ```json
 {

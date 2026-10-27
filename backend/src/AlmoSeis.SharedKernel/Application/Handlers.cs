@@ -41,10 +41,51 @@ public interface IIdGenerator
     Guid New();
 }
 
-/// UUID v7 ordenável por tempo (04 §4.0).
+/// UUID v7 ordenável por tempo (04 §4.0) e **monotônico** no processo: dentro do mesmo milissegundo, os 12 bits
+/// de `rand_a` viram contador (RFC 9562 §6.2, método 1). `Guid.CreateVersion7` sorteia esses bits, e a ordem por id
+/// (itens de um pedido, cursores) deixaria de ser a ordem de criação.
 public sealed class IdGenerator(TimeProvider timeProvider) : IIdGenerator
 {
-    public Guid New() => Guid.CreateVersion7(timeProvider.GetUtcNow());
+    private const int MaxCounter = 0xFFF;
+    private readonly Lock _gate = new();
+    private long _lastMs = -1;
+    private int _counter;
+
+    public Guid New()
+    {
+        long ms;
+        int counter;
+        lock (_gate)
+        {
+            ms = timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+            if (ms > _lastMs)
+            {
+                _lastMs = ms;
+                _counter = System.Security.Cryptography.RandomNumberGenerator.GetInt32(0, 0x800);
+            }
+            else if (++_counter > MaxCounter)
+            {
+                // Contador esgotado (ou relógio voltou): avança o milissegundo lógico.
+                _lastMs++;
+                _counter = 0;
+            }
+
+            (ms, counter) = (_lastMs, _counter);
+        }
+
+        Span<byte> bytes = stackalloc byte[16];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(bytes[8..]);
+        bytes[0] = (byte)(ms >> 40);
+        bytes[1] = (byte)(ms >> 32);
+        bytes[2] = (byte)(ms >> 24);
+        bytes[3] = (byte)(ms >> 16);
+        bytes[4] = (byte)(ms >> 8);
+        bytes[5] = (byte)ms;
+        bytes[6] = (byte)(0x70 | (counter >> 8));
+        bytes[7] = (byte)counter;
+        bytes[8] = (byte)(0x80 | (bytes[8] & 0x3F));
+        return new Guid(bytes, bigEndian: true);
+    }
 }
 
 /// Resposta de escrita idempotente: o id gravado em `resource_id`, devolvido por GET /operations/{key} (06 §6.12).
