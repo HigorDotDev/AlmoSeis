@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace AlmoSeis.Api.Controllers;
 
-/// Cardápios (06 §6.7). `GET /menus/current` entra com o expediente (ADR-0038).
+/// Cardápios (06 §6.7).
 [ApiController]
 [Route("api/v1/menus")]
 public sealed class MenusController : ControllerBase
@@ -21,6 +21,14 @@ public sealed class MenusController : ControllerBase
         [FromServices] IQueryHandler<ListMenusQuery, ItemsDto<MenuSummaryDto>> handler,
         CancellationToken cancellationToken) =>
         Ok(await handler.HandleAsync(new ListMenusQuery(menuType, kind, from, to), cancellationToken));
+
+    [HttpGet("current")]
+    [HasPermission(Permissions.Orders.View)]
+    public async Task<ActionResult<MenuDto>> GetCurrent(
+        [FromQuery] MenuType menuType,
+        [FromServices] IQueryHandler<GetCurrentMenuQuery, MenuDto> handler,
+        CancellationToken cancellationToken) =>
+        Ok(await handler.HandleAsync(new GetCurrentMenuQuery(menuType), cancellationToken));
 
     [HttpGet("{id:guid}")]
     [HasPermission(Permissions.Orders.View)]

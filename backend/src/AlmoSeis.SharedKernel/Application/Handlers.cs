@@ -30,6 +30,9 @@ public interface ICurrentResourceReader
 /// Resposta de listagem sem paginação: `{ "items": [...] }` (06 §6.0).
 public sealed record ItemsDto<T>(IReadOnlyList<T> Items);
 
+/// Listagem paginada: `{ "items": [...], "nextCursor": "..." | null }` (06 §6.0).
+public sealed record PageDto<T>(IReadOnlyList<T> Items, string? NextCursor);
+
 /// Autor de qualquer registro: `{ "id": "<employeeId>", "displayName": "Ana" }` (06 §6.0).
 public sealed record AuthorDto(Guid Id, string DisplayName);
 
@@ -42,4 +45,11 @@ public interface IIdGenerator
 public sealed class IdGenerator(TimeProvider timeProvider) : IIdGenerator
 {
     public Guid New() => Guid.CreateVersion7(timeProvider.GetUtcNow());
+}
+
+/// Resposta de escrita idempotente: o id gravado em `resource_id`, devolvido por GET /operations/{key} (06 §6.12).
+/// Implementado de forma explícita para não aparecer no JSON.
+public interface IHasResourceId
+{
+    Guid ResourceId { get; }
 }

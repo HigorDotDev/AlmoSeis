@@ -281,7 +281,7 @@ AlmoSeis.Modules.Ordering/
 | `GetInvitationByCodeQuery`, `AcceptInvitationHandler` | `/invitations/{code}*` | `ISessionVariables.SetAsync("app.invitation_code", code)` → lê o convite → `InitializeForTenant(invitation.TenantId, userId)` → grava |
 | `ListRolesQuery` | `GET /roles` | Lê `RolePermissions` |
 
-**Contracts/Ports públicos:** `IEmployeeDirectory` (`GetDisplayNamesAsync(ids)`, usado por todos os DTOs com `{ id, displayName }`) e `ITenantSettingsReader` (`GetAsync()`: preço do quilo, taxa padrão, métodos habilitados).
+**Contracts/Ports públicos:** `IEmployeeDirectory` (`GetDisplayNamesAsync(ids)`, usado por todos os DTOs com `{ id, displayName }`), `ITenantCalendar` (`TodayAsync()`: data local no fuso do tenant, usada na abertura do expediente) e `ITenantSettingsReader` (`GetAsync()`: preço do quilo, taxa padrão, métodos habilitados).
 
 ---
 
@@ -328,11 +328,11 @@ Regras: `section = product.kind` (recebe os produtos via `ICatalogReader`), `pfP
 
 `MenuMaterializer` (serviço de domínio) aplica o ADR-0038 dentro da transação de abertura do expediente: `MaterializeForAsync(businessDate)`.
 
-Handlers: `CreateMenu`, `ReplaceMenuItems`, `UpdateMenuItem`, `CloneMenu`, `GetMenu`, `ListMenus`, `GetCurrentMenu` (monta `MenuNotFound.sources`). `GetCurrentMenu` e o `MenuMaterializer` entram com o expediente: o Menu declara a porta da data do expediente aberto e o Closing a implementa (o Closing já depende do Menu para materializar).
+Handlers: `CreateMenu`, `ReplaceMenuItems`, `UpdateMenuItem`, `CloneMenu`, `GetMenu`, `ListMenus`, `GetCurrentMenu` (monta `MenuNotFound.sources`: DAILY de ontem, DAILY de 7 dias atrás e o modelo do dia da semana). O Menu declara a porta `IOpenBusinessDate` (data do expediente aberto) e o Closing a implementa, porque o Closing já depende do Menu para materializar.
 
 `ReplaceItems` reaproveita o id do item quando o produto continua na lista. `CloneMenu` não copia produtos desativados depois do original.
 
-Contracts: `IMenuReader.GetDailyAsync(menuType, date)` → itens disponíveis com `pfPrice`, e `IMenuMaterializer`.
+Contracts: `IMenuReader.GetDailyAsync(menuType, date)` → itens disponíveis com `pfPrice` (entra com o Ordering), `IMenuMaterializer` (→ `MaterializedMenuDto[]`, o `materializedMenus` de 06 §6.6) e `IOpenBusinessDate`.
 
 ---
 
@@ -567,6 +567,13 @@ O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5
 | Envelope de tempo real | `seq` e `entityVersion` vêm da entrada do feed da mesma transação (o mapper só informa tipo, entidade, ator e `data`) | O evento é montado antes do incremento de versão |
 | Regras por campo no domínio | `BusinessException.Validation(campo, mensagem)` devolve o mesmo `422 { errors }` do FluentValidation, com o caminho da API (`items[1].pfPrice`) | Regras que dependem de estado (preço × tipo, produto do cardápio) não cabem no validator |
 | Produto em uso | `IProductUsageCheck` (Contracts do Catalog) implementado por Menu (e, depois, Ordering): produto em cardápio ou vendido não muda de `kind` | Catalog não pode depender de quem o referencia |
+| Idempotência: INSERT do registro | `INSERT ... ON CONFLICT (tenant_id, key) DO NOTHING` com `lock_timeout` local só nesse comando; 0 linhas → lê o registro já confirmado (replay ou `422`). `55P03` → `409 OperationInProgress` | Um INSERT simples aborta a transação na violação de unicidade; o `ON CONFLICT` espera o concorrente e continua utilizável |
+| Idempotência: hash do pedido | SHA-256 dos argumentos `[FromBody]` já desserializados e reserializados com o JSON da API, mais `método + caminho` gravado em `endpoint` | Espaços e ordem das chaves não mudam o hash; a mesma chave em outra rota ou de outro usuário é `422` |
+| Idempotência: replay | `ContentResult` com status e corpo guardados + `Idempotent-Replayed: true`. O corpo sai do `jsonb`, então a ordem das chaves pode mudar; `Location` e `ETag` não são repetidos | Mesmos campos e valores; o app não depende da ordem |
+| Idempotência: `resource_id` | DTO de resposta implementa `IHasResourceId` de forma explícita (não aparece no JSON) | `GET /operations/{key}` devolve o recurso sem conhecer cada DTO |
+| Abertura concorrente | `pg_advisory_xact_lock(hashtextextended('business-day-open:{tenant}', 0))` antes de checar o expediente aberto | A segunda abertura espera e responde `409 BusinessDayAlreadyOpen` com `current`, em vez de estourar `ux_business_days_open` no commit |
+| Cursor de `GET /business-days` | Base64url do último id da página; ordem por `id` decrescente (UUID v7 = ordem de abertura) | Opaco, estável e sem `OFFSET` |
+| `dailyClosingId` | Sempre `null` até a finalização do fechamento ser implementada | `DailyClosing` ainda não é mapeado |
 
 ## 7.14 Exemplo de ponta a ponta: `POST /orders/{id}/payments`
 

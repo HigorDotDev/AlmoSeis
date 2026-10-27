@@ -75,3 +75,18 @@ internal sealed class EmployeeDirectory(AppDbContext db) : IEmployeeDirectory
             .ToDictionaryAsync(e => e.Id, e => e.DisplayName, cancellationToken);
     }
 }
+
+internal sealed class TenantCalendar(AppDbContext db, ITenantContext tenant, TimeProvider time) : ITenantCalendar
+{
+    public async Task<DateOnly> TodayAsync(CancellationToken cancellationToken)
+    {
+        var tenantId = tenant.TenantId ?? throw new InvalidOperationException("Data local sem tenant.");
+        var timeZone = await db.Set<Tenant>().AsNoTracking()
+            .Where(t => t.Id == tenantId)
+            .Select(t => t.TimeZone)
+            .SingleAsync(cancellationToken);
+
+        var local = TimeZoneInfo.ConvertTime(time.GetUtcNow(), TimeZoneInfo.FindSystemTimeZoneById(timeZone));
+        return DateOnly.FromDateTime(local.DateTime);
+    }
+}

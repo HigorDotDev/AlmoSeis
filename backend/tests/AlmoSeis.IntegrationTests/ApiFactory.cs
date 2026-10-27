@@ -124,6 +124,14 @@ public static class ApiScenarios
         return client.SendAsync(request, TestContext.Current.CancellationToken);
     }
 
+    /// POST [I] com `Idempotency-Key` (rotas [I] de 06, ADR-0033).
+    public static Task<HttpResponseMessage> PostIdempotentAsync(this HttpClient client, string url, object? body, Guid key)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = body is null ? null : JsonContent.Create(body) };
+        request.Headers.TryAddWithoutValidation("Idempotency-Key", key.ToString());
+        return client.SendAsync(request, TestContext.Current.CancellationToken);
+    }
+
     /// Lê o corpo exigindo o status esperado; na falha, mostra o corpo e os erros do servidor.
     public static async Task<JsonElement> ExpectAsync(this HttpResponseMessage response, HttpStatusCode expected, ApiFactory factory)
     {

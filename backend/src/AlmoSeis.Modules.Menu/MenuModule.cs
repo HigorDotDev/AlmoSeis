@@ -1,6 +1,7 @@
 using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Modules.Catalog.Contracts;
 using AlmoSeis.Modules.Menu.Application;
+using AlmoSeis.Modules.Menu.Contracts;
 using AlmoSeis.Modules.Menu.Infrastructure;
 using AlmoSeis.SharedKernel.Application;
 using FluentValidation;
@@ -15,6 +16,7 @@ public static class MenuModule
         services.AddSingleton<IModuleModelConfiguration, MenuModelConfiguration>();
         services.AddScoped<MenuDtoBuilder>();
         services.AddScoped<IProductUsageCheck, MenuProductUsageCheck>();
+        services.AddScoped<IMenuMaterializer, MenuMaterializer>();
 
         services.Scan(scan => scan
             .FromAssemblyOf<MenuDtoBuilder>()

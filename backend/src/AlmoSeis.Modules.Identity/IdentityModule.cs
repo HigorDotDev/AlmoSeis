@@ -19,6 +19,7 @@ public static class IdentityModule
         services.AddScoped<AuthSessionIssuer>();
         services.AddScoped<IEmployeeAccessReader, EmployeeAccessReader>();
         services.AddScoped<IEmployeeDirectory, EmployeeDirectory>();
+        services.AddScoped<ITenantCalendar, TenantCalendar>();
 
         services.Scan(scan => scan
             .FromAssemblyOf<AuthSessionIssuer>()

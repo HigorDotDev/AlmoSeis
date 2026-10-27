@@ -2,6 +2,7 @@ using AlmoSeis.Api.Infrastructure;
 using AlmoSeis.Infrastructure;
 using AlmoSeis.Modules.Billing;
 using AlmoSeis.Modules.Catalog;
+using AlmoSeis.Modules.Closing;
 using AlmoSeis.Modules.Identity;
 using AlmoSeis.Modules.Menu;
 
@@ -12,6 +13,7 @@ builder.Services.AddBillingModule();
 builder.Services.AddIdentityModule();
 builder.Services.AddCatalogModule();
 builder.Services.AddMenuModule();
+builder.Services.AddClosingModule();
 // Demais módulos entram aqui à medida que forem implementados (07 §7.5), sempre antes do decorator.
 builder.Services.DecorateCommandHandlers();
 

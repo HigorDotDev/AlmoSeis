@@ -1494,7 +1494,7 @@ Resolve operações de resultado desconhecido (RN-014.12):
 
 ### Comportamento do reenvio idempotente
 
-Uma repetição de `POST /orders` com a mesma chave e o mesmo corpo devolve **a resposta original** (`201`, mesmo corpo), com o header `Idempotent-Replayed: true`.
+Uma repetição de `POST /orders` com a mesma chave e o mesmo corpo devolve **a resposta original** (`201`, mesmo corpo), com o header `Idempotent-Replayed: true`. "Mesmo corpo" significa mesmos campos e valores: a ordem das chaves pode mudar, e `Location`/`ETag` não são repetidos. A mesma chave enviada por outro usuário ou para outra rota também responde `422 IdempotencyKeyReused`.
 
 ---
 

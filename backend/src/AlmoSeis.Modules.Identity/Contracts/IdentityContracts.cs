@@ -88,3 +88,9 @@ public interface IEmployeeDirectory
 {
     Task<IReadOnlyDictionary<Guid, string>> GetDisplayNamesAsync(IEnumerable<Guid> employeeIds, CancellationToken cancellationToken);
 }
+
+/// Data local do estabelecimento (fuso do tenant): a `BusinessDate` da abertura do expediente (ADR-0019).
+public interface ITenantCalendar
+{
+    Task<DateOnly> TodayAsync(CancellationToken cancellationToken);
+}

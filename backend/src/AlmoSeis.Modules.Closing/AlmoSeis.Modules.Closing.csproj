@@ -1,9 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <PackageReference Include="FluentValidation" />
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\AlmoSeis.SharedKernel\AlmoSeis.SharedKernel.csproj" />
     <ProjectReference Include="..\AlmoSeis.Infrastructure\AlmoSeis.Infrastructure.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Identity\AlmoSeis.Modules.Identity.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Menu\AlmoSeis.Modules.Menu.csproj" />
   </ItemGroup>
 </Project>

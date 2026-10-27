@@ -244,6 +244,9 @@ internal static class MenuRules
         return products.ToDictionary(p => p.Key, p => new MenuProduct(p.Value.Id, p.Value.Kind, p.Value.DefaultPrice, p.Value.IsActive));
     }
 
+    /// 1 = segunda … 7 = domingo, como `day_of_week` (05 §5.6).
+    public static int IsoDayOfWeek(DateOnly date) => date.DayOfWeek == System.DayOfWeek.Sunday ? 7 : (int)date.DayOfWeek;
+
     public static object AuditView(MenuAggregate m) => new
     {
         menuType = UpperSnakeEnumConverter<MenuType>.ToText(m.MenuType),
@@ -253,4 +256,90 @@ internal static class MenuRules
         m.SourceMenuId,
         items = m.Items.Select(i => new { i.ProductId, i.IsAvailable, pfPrice = i.PfPrice?.ToString() }).ToList(),
     };
+}
+
+/// GET /menus/current: o DAILY da data do expediente aberto. Sem ele, 404 com as opções de reaproveitamento (RN-003.2/3.4).
+internal sealed class GetCurrentMenuQueryHandler(AppDbContext db, IOpenBusinessDate openDay, MenuDtoBuilder dtos)
+    : IQueryHandler<GetCurrentMenuQuery, MenuDto>
+{
+    public async Task<MenuDto> HandleAsync(GetCurrentMenuQuery query, CancellationToken cancellationToken)
+    {
+        var date = await openDay.GetAsync(cancellationToken) ?? throw new BusinessException(ErrorCodes.BusinessDayRequired);
+        var menus = db.Set<MenuAggregate>().AsNoTracking().Where(m => m.MenuType == query.MenuType);
+
+        var daily = await menus.Include(m => m.Items)
+            .SingleOrDefaultAsync(m => m.Kind == MenuKind.Daily && m.Date == date, cancellationToken);
+        if (daily is not null)
+        {
+            return await dtos.BuildAsync(daily, cancellationToken);
+        }
+
+        DateOnly yesterday = date.AddDays(-1), lastWeek = date.AddDays(-7);
+        var dayOfWeek = MenuRules.IsoDayOfWeek(date);
+        var sources = await menus
+            .Where(m => (m.Kind == MenuKind.Daily && (m.Date == yesterday || m.Date == lastWeek))
+                || (m.Kind == MenuKind.WeeklyTemplate && m.DayOfWeek == dayOfWeek))
+            .Select(m => new { m.Id, m.Kind, m.Date })
+            .ToListAsync(cancellationToken);
+
+        var label = query.MenuType == MenuType.Marmita ? "marmitas" : "PF";
+        throw new BusinessException(
+            ErrorCodes.MenuNotFound,
+            $"Ainda não há cardápio de {label} para hoje.",
+            new Dictionary<string, object?>
+            {
+                ["menuType"] = UpperSnakeEnumConverter<MenuType>.ToText(query.MenuType),
+                ["businessDate"] = date,
+                ["sources"] = new
+                {
+                    yesterdayMenuId = sources.FirstOrDefault(s => s.Kind == MenuKind.Daily && s.Date == yesterday)?.Id,
+                    lastWeekSameDayMenuId = sources.FirstOrDefault(s => s.Kind == MenuKind.Daily && s.Date == lastWeek)?.Id,
+                    weeklyTemplateId = sources.FirstOrDefault(s => s.Kind == MenuKind.WeeklyTemplate)?.Id,
+                },
+            });
+    }
+}
+
+/// ADR-0038 §3–4: clona o modelo do dia da semana como DAILY quando a data ainda não tem cardápio.
+/// Auditado com origem SYSTEM e `createdBy` nulo. Produto desativado não entra (RN-002.6).
+internal sealed class MenuMaterializer(
+    AppDbContext db,
+    IIdGenerator ids,
+    ICatalogReader catalog,
+    IAuditWriter audit,
+    TimeProvider time) : IMenuMaterializer
+{
+    public async Task<IReadOnlyList<MaterializedMenuDto>> MaterializeForAsync(DateOnly businessDate, CancellationToken cancellationToken)
+    {
+        var dayOfWeek = MenuRules.IsoDayOfWeek(businessDate);
+        var existingDaily = await db.Set<MenuAggregate>().AsNoTracking()
+            .Where(m => m.Kind == MenuKind.Daily && m.Date == businessDate)
+            .Select(m => m.MenuType)
+            .ToListAsync(cancellationToken);
+
+        var templates = await db.Set<MenuAggregate>().Include(m => m.Items)
+            .Where(m => m.Kind == MenuKind.WeeklyTemplate && m.DayOfWeek == dayOfWeek && !existingDaily.Contains(m.MenuType))
+            .OrderBy(m => m.MenuType)
+            .ToListAsync(cancellationToken);
+        if (templates.Count == 0)
+        {
+            return [];
+        }
+
+        var products = await catalog.GetProductsAsync(templates.SelectMany(t => t.Items).Select(i => i.ProductId).Distinct().ToList(), cancellationToken);
+        var now = time.GetUtcNow();
+        var result = new List<MaterializedMenuDto>();
+
+        foreach (var template in templates)
+        {
+            var daily = template.CloneAs(
+                ids.New(), MenuKind.Daily, businessDate, dayOfWeek: null, createdBy: null, ids.New, now,
+                keep: item => products.TryGetValue(item.ProductId, out var p) && p.IsActive);
+            db.Add(daily);
+            audit.Add("MenuMaterialized", daily.SyncEntityType, daily.Id, after: MenuRules.AuditView(daily), origin: AuditOrigins.System);
+            result.Add(new MaterializedMenuDto(daily.Id, daily.MenuType, template.Id));
+        }
+
+        return result;
+    }
 }

@@ -82,3 +82,23 @@ public sealed record CloneMenuCommand(Guid MenuId, CloneMenuRequest Request);
 public sealed record GetMenuQuery(Guid MenuId);
 
 public sealed record ListMenusQuery(MenuType? MenuType, MenuKind? Kind, DateOnly? From, DateOnly? To);
+
+public sealed record GetCurrentMenuQuery(MenuType MenuType);
+
+// ---------- Portas (07 §7.7) ----------
+
+/// Data do expediente aberto. Declarada aqui e implementada pelo Closing, que é dono do expediente.
+public interface IOpenBusinessDate
+{
+    Task<DateOnly?> GetAsync(CancellationToken cancellationToken);
+}
+
+/// Cardápio criado pela abertura do expediente a partir do modelo semanal.
+public sealed record MaterializedMenuDto(Guid Id, MenuType MenuType, Guid SourceMenuId);
+
+/// ADR-0038: na abertura, cada WEEKLY_TEMPLATE do dia da semana sem DAILY correspondente vira DAILY.
+/// Roda na transação de abertura do expediente.
+public interface IMenuMaterializer
+{
+    Task<IReadOnlyList<MaterializedMenuDto>> MaterializeForAsync(DateOnly businessDate, CancellationToken cancellationToken);
+}
