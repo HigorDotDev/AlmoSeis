@@ -471,7 +471,7 @@ O `IAuditWriter` vive em Infrastructure (§7.3). O módulo Audit tem só leitura
 
 | Classe | Responsabilidade |
 |---|---|
-| `GetSyncChangesQuery` | SQL de 05 §5.14 (`DISTINCT ON`). Filtra por permissão: `PAYMENT*`/`CASH_MOVEMENT`/`DAILY_CLOSING`/`CLOSING_ADJUSTMENT` exigem `closing.view` ou `orders.view` conforme 06 §6.12. Cursor mais antigo que o primeiro `seq` retido → `410 SyncCursorExpired` |
+| `GetSyncChangesQuery` | SQL de 05 §5.14 (`DISTINCT ON`). Filtra por permissão: `PAYMENT*`/`CASH_MOVEMENT`/`DAILY_CLOSING`/`CLOSING_ADJUSTMENT` exigem `closing.view` ou `orders.view` conforme 06 §6.12. Cursor mais antigo que o primeiro `seq` retido → `410 SyncCursorExpired`, com a extensão `currentSeq` = `tenant_sync_counters.last_seq` |
 | `GetOperationQuery` | `GET /operations/{key}`, filtrado por `user_id`. Linha não visível → `NOT_FOUND` |
 | `SyncRetentionJob` (diário, `PlatformDbContext`, advisory lock) | Apaga `change_feed_entries` com mais de 7 dias, `idempotency_records` expirados e `outbox_messages` processados há mais de 7 dias |
 

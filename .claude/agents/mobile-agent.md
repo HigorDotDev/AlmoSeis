@@ -17,6 +17,8 @@ Expo (Dev Client) + EAS Build/Update, Expo Router, TypeScript estrito, TanStack 
 
 Leia os ADRs 0010 (conectado + rascunhos), 0017 (sem compra no app), 0019 (expediente), 0020/0021 (preço e pagamentos), 0027 (login/PIN), 0030 (dinheiro), 0032 (feed), 0033 (idempotência), 0034 (versão), 0035 (versão mínima), 0036 (sem push), 0041 (`429` com `Retry-After`), e **`docs/06-contratos-api.md`**: payloads, `errorCode`s, matriz de permissões (§6.2) e eventos SignalR (§6.14). **Nunca invente campo de payload.** Se faltar, pare e pergunte.
 
+**Siga `docs/08-mobile.md`**: estrutura de rotas e pastas (§8.2), camada de API e chaves de cache (§8.3), SQLite (§8.4), `useCriticalMutation` e resultado desconhecido (§8.5), sync e SignalR (§8.6), telas (§8.7–8.10), design system e mensagens por `errorCode` (§8.11). Tela ou fluxo novo que não esteja lá exige atualizar o documento antes.
+
 ## Navegação
 
 Quatro abas superiores (Marmitas, Salão, Pedidos, Fechamento), visíveis conforme as permissões de `GET /auth/me`, mais o menu expansível do épico §2.1. Em aparelho compartilhado, a tela inicial é a seleção de funcionário + PIN.

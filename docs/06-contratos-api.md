@@ -115,7 +115,7 @@ Conflito de versão (`409`) traz o estado atual em `current` (ADR-0034):
 | 409 | `TrialAlreadyClaimed` | documento ou telefone já usou teste grátis (ADR-0017) |
 | 409 | `LastOwner` | remover ou desativar o último `OWNER` ativo |
 | 409 | `InvitationNotPending` | convite aceito, revogado ou expirado |
-| 410 | `SyncCursorExpired` | `since` mais antigo que a retenção do feed (ADR-0032) |
+| 410 | `SyncCursorExpired` | `since` mais antigo que a retenção do feed (ADR-0032). Extensão `currentSeq`: o app recarrega tudo e continua a partir dela |
 | 422 | `ValidationFailed` | regras de formato e de negócio por campo |
 | 422 | `IdempotencyKeyReused` | mesma chave com corpo diferente (ADR-0033) |
 | 422 | `PaymentExceedsBalance` | valor maior que o saldo (ADR-0021) |
@@ -1457,7 +1457,7 @@ O fechamento original **não muda** (ADR-0014). O ajuste aparece em `adjustments
 
 - Compactado: só a última alteração de cada entidade no intervalo.
 - `since=0` inicia a sincronização do zero.
-- Cursor com mais de 7 dias → `410 SyncCursorExpired`, e o app recarrega tudo.
+- Cursor com mais de 7 dias → `410 SyncCursorExpired` com a extensão `"currentSeq": 1043`. O app descarta o cache, recarrega o que estiver na tela e passa a usar `since=1043`.
 - Só lista o que quem chama pode ler.
 
 | `entityType` | Como o app atualiza |
