@@ -61,10 +61,20 @@ public class AppDbContext : DbContext
             configuration.Configure(modelBuilder);
         }
 
-        foreach (var entityType in modelBuilder.Model.GetEntityTypes()
-                     .Where(t => typeof(ITenantOwned).IsAssignableFrom(t.ClrType) && t.BaseType is null))
+        foreach (var entityType in modelBuilder.Model.GetEntityTypes().Where(t => t.BaseType is null).ToList())
         {
-            ApplyTenantFilterMethod.MakeGenericMethod(entityType.ClrType).Invoke(this, [modelBuilder]);
+            // Versão explícita como token de concorrência de todo agregado (ADR-0034).
+            if (typeof(AggregateRoot).IsAssignableFrom(entityType.ClrType))
+            {
+                modelBuilder.Entity(entityType.ClrType).Property(nameof(AggregateRoot.Version)).IsConcurrencyToken();
+            }
+
+            // Filtro de tenant onde TenantId é coluna mapeada. Entidades cuja chave é o próprio tenant
+            // (ex.: tenant_settings) ficam só com a RLS e com consulta pela chave.
+            if (typeof(ITenantOwned).IsAssignableFrom(entityType.ClrType) && entityType.FindProperty(nameof(ITenantOwned.TenantId)) is not null)
+            {
+                ApplyTenantFilterMethod.MakeGenericMethod(entityType.ClrType).Invoke(this, [modelBuilder]);
+            }
         }
     }
 

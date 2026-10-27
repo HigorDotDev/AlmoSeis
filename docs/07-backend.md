@@ -536,7 +536,22 @@ O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5
 
 ---
 
-## 7.13 Exemplo de ponta a ponta: `POST /orders/{id}/payments`
+## 7.13 Notas de implementação (aprendidas no código)
+
+| Tema | Como ficou | Por quê |
+|---|---|---|
+| Inicialização do tenant | Feita no `JwtBearerEvents.OnTokenValidated` (`EmployeeAccessValidator`), e não num `TenantContextMiddleware` separado | É ali que as claims estão validadas, e a checagem de funcionário ativo/stamp já precisa da RLS do tenant |
+| Tenant definido no meio da transação | `ITenantSession.ApplyAsync()` reaplica `app.tenant_id`/`app.user_id` na conexão já aberta (autocadastro, login, refresh, troca de tenant) | O decorator abre a conexão antes de o handler saber o tenant |
+| Vínculos do usuário | `AuthSessionIssuer.ListMembershipsAsync` usa `IgnoreQueryFilters()` + `Where(UserId == ...)`. É a **única** exceção ao filtro de tenant fora de admin e plataforma | A RLS libera por `app.user_id` (05 §5.12, grupo 2); o filtro do EF esconderia os outros tenants |
+| Leitura antes do commit | O `Me` do autocadastro e o `IBillingPort.GetSummaryAsync` consultam `.Local` antes do banco | O `UnitOfWork` só grava no commit, e fazer flush no handler apagaria as entradas do feed |
+| Ordem dos INSERTs | Relações EF "de ordenação" (`HasOne<User>()`, auto-relação de `RefreshToken`), mesmo onde a FK real é composta | O EF só ordena comandos por relações que conhece |
+| `tenant_settings` | O `Id` do agregado é mapeado para a coluna `tenant_id`, e o filtro de tenant só vale para entidades com `TenantId` mapeado | A chave da tabela é o próprio tenant |
+| Falhas que gravam | Login e refresh devolvem `AuthOutcome<T>`, e o controller lança o erro **depois** do commit | O contador de tentativas e a revogação da família precisam persistir |
+| Connection strings | Lidas na resolução do `DbContext`, não no registro | Key Vault e `WebApplicationFactory` aplicam a configuração depois do `Program` registrar os serviços |
+| Globalização | Sem `InvariantGlobalization` | Fusos IANA (`America/Sao_Paulo`) no Windows dependem do ICU |
+| Diagnóstico de testes | `ApiFactory` captura os logs de erro do servidor e os anexa à falha | O 500 genérico da API não mostra a causa no teste |
+
+## 7.14 Exemplo de ponta a ponta: `POST /orders/{id}/payments`
 
 ```text
 PaymentsController.Register(orderId, RegisterPaymentRequest body)

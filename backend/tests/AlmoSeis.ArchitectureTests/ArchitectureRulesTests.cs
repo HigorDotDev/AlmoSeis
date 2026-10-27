@@ -90,16 +90,23 @@ public sealed class ArchitectureRulesTests
         result.IsSuccessful.ShouldBeTrue(Failing(result));
     }
 
+    /// Tabelas sem RLS de tenant por decisão documentada (05 §5.12, grupo 4): ficam fora da regra.
+    private static readonly string[] TenantRuleExceptions =
+    [
+        "AlmoSeis.Modules.Identity.Domain.RefreshToken", // identidade: acessada só pelo módulo Identity
+        "AlmoSeis.Modules.Billing.Domain.TrialClaim",    // plataforma: hash de documento, sem dados de tenant
+    ];
+
     [Fact]
-    public void Rule6_entities_with_non_nullable_tenant_id_implement_ITenantOwned()
+    public void Rule6_domain_entities_with_tenant_id_implement_ITenantOwned()
     {
         var offenders = ProductionAssemblies
             .SelectMany(a => a.GetTypes())
-            .Where(t => t.IsClass && !t.IsAbstract)
+            .Where(t => t.IsClass && !t.IsAbstract && t.Namespace?.EndsWith(".Domain", StringComparison.Ordinal) == true)
             .Where(t => t.GetProperty("TenantId")?.PropertyType == typeof(Guid))
             .Where(t => !typeof(ITenantOwned).IsAssignableFrom(t))
-            .Where(t => !t.Name.EndsWith("Dto", StringComparison.Ordinal) && !t.Name.EndsWith("Command", StringComparison.Ordinal))
-            .Select(t => t.FullName)
+            .Select(t => t.FullName!)
+            .Except(TenantRuleExceptions)
             .ToList();
 
         offenders.ShouldBeEmpty();

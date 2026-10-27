@@ -69,13 +69,14 @@ public sealed class TenantGuardSaveChangesInterceptor(ITenantContext tenant) : S
                 continue;
             }
 
-            var tenantProperty = entry.Property(nameof(ITenantOwned.TenantId));
-            if (entry.State == EntityState.Added && (Guid)tenantProperty.CurrentValue! == Guid.Empty && tenant.TenantId is { } current)
+            var mapped = entry.Metadata.FindProperty(nameof(ITenantOwned.TenantId));
+            if (mapped is not null && entry.State == EntityState.Added
+                && (Guid)entry.Property(mapped.Name).CurrentValue! == Guid.Empty && tenant.TenantId is { } current)
             {
-                tenantProperty.CurrentValue = current;
+                entry.Property(mapped.Name).CurrentValue = current;
             }
 
-            if ((Guid)tenantProperty.CurrentValue! != tenant.TenantId)
+            if (entry.Entity.TenantId != tenant.TenantId)
             {
                 throw new InvalidOperationException(
                     $"Tentativa de gravar {entry.Metadata.ClrType.Name} de outro tenant. Isso é um bug: o tenant vem só do token.");

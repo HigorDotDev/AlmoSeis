@@ -1,15 +1,24 @@
 using AlmoSeis.Api.Infrastructure;
 using AlmoSeis.Infrastructure;
+using AlmoSeis.Modules.Billing;
+using AlmoSeis.Modules.Identity;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddAlmoSeisInfrastructure(builder.Configuration);
-// Módulos entram aqui à medida que forem implementados (07 §7.5): builder.Services.AddIdentityModule(); ...
+builder.Services.AddBillingModule();
+builder.Services.AddIdentityModule();
+// Demais módulos entram aqui à medida que forem implementados (07 §7.5), sempre antes do decorator.
 builder.Services.DecorateCommandHandlers();
 
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddAlmoSeisAuthentication();
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ProblemDetailsExceptionHandler>();
-builder.Services.AddControllers().AddJsonOptions(o => ApiJson.Configure(o.JsonSerializerOptions));
+builder.Services.AddScoped<ValidationFilter>();
+builder.Services
+    .AddControllers(o => o.Filters.AddService<ValidationFilter>())
+    .AddJsonOptions(o => ApiJson.Configure(o.JsonSerializerOptions));
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
 
 var app = builder.Build();
@@ -19,6 +28,9 @@ if (!app.Environment.IsDevelopment())
 {
     app.UseHsts();
 }
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapControllers();
 app.MapHealthChecks("/health/live", new() { Predicate = _ => false });

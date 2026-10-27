@@ -92,9 +92,11 @@ internal sealed class UnitOfWork(
             var count = group.Count();
 
             // Uma trava de linha por tenant e por transação: a ordem de commit acompanha o seq (ADR-0032).
-            var lastSeq = await db.Database
+            // ToListAsync (e não SingleAsync): UPDATE ... RETURNING não aceita composição (LIMIT).
+            var lastSeq = (await db.Database
                 .SqlQuery<long>($"UPDATE tenant_sync_counters SET last_seq = last_seq + {count} WHERE tenant_id = {group.Key} RETURNING last_seq AS \"Value\"")
-                .SingleAsync(cancellationToken);
+                .ToListAsync(cancellationToken))
+                .Single();
 
             var seq = lastSeq - count;
             foreach (var entity in group)

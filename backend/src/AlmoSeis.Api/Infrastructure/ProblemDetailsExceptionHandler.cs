@@ -70,9 +70,13 @@ public sealed class ProblemDetailsExceptionHandler(
     private static Dictionary<string, object?> ValidationExtensions(ValidationException validation) => new()
     {
         ["errors"] = validation.Errors
-            .GroupBy(e => JsonNamingPolicy.CamelCase.ConvertName(e.PropertyName))
+            .GroupBy(e => CamelCasePath(e.PropertyName))
             .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray()),
     };
+
+    /// "Tenant.DocumentNumber" → "tenant.documentNumber"; "Items[0].Quantity" → "items[0].quantity" (06 §6.1).
+    private static string CamelCasePath(string propertyPath) =>
+        string.Join('.', propertyPath.Split('.').Select(segment => JsonNamingPolicy.CamelCase.ConvertName(segment)));
 }
 
 public sealed class DatabaseHealthCheck(PlatformDbContext db) : IHealthCheck

@@ -1,5 +1,6 @@
 using AlmoSeis.Infrastructure.Audit;
 using AlmoSeis.Infrastructure.Persistence;
+using AlmoSeis.Infrastructure.Security;
 using AlmoSeis.Infrastructure.Tenancy;
 using AlmoSeis.SharedKernel.Application;
 using Microsoft.EntityFrameworkCore;
@@ -21,21 +22,22 @@ public static class DependencyInjection
         services.AddScoped<TenantSessionConnectionInterceptor>();
         services.AddScoped<TenantGuardSaveChangesInterceptor>();
 
-        var appConnection = configuration.GetConnectionString("App")
-            ?? throw new InvalidOperationException("ConnectionStrings:App não configurada.");
-        var platformConnection = configuration.GetConnectionString("Platform")
-            ?? throw new InvalidOperationException("ConnectionStrings:Platform não configurada.");
-
+        // Connection strings lidas na resolução (não no registro): Key Vault e testes sobrescrevem a configuração depois.
         services.AddDbContext<AppDbContext>((sp, options) => options
-            .UseAlmoSeisNpgsql(appConnection)
+            .UseAlmoSeisNpgsql(RequiredConnectionString(sp, "App"))
             .AddInterceptors(
                 sp.GetRequiredService<TenantSessionConnectionInterceptor>(),
                 sp.GetRequiredService<TenantGuardSaveChangesInterceptor>()));
 
-        services.AddDbContext<PlatformDbContext>(options => options.UseAlmoSeisNpgsql(platformConnection));
+        services.AddDbContext<PlatformDbContext>((sp, options) => options.UseAlmoSeisNpgsql(RequiredConnectionString(sp, "Platform")));
 
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IAuditWriter, AuditWriter>();
+        services.AddScoped<ITenantSession, TenantSession>();
+
+        services.AddOptions<JwtOptions>().Bind(configuration.GetSection(JwtOptions.Section));
+        services.AddSingleton<IJwtTokenIssuer, JwtTokenIssuer>();
+        services.AddSingleton<ISecretHasher, Sha256SecretHasher>();
 
         return services;
     }
@@ -50,6 +52,11 @@ public static class DependencyInjection
 
         return services;
     }
+
+    private static string RequiredConnectionString(IServiceProvider services, string name) =>
+        services.GetRequiredService<IConfiguration>().GetConnectionString(name) is { Length: > 0 } value && value != "REPLACE_ME"
+            ? value
+            : throw new InvalidOperationException($"ConnectionStrings:{name} não configurada.");
 
     public static DbContextOptionsBuilder UseAlmoSeisNpgsql(this DbContextOptionsBuilder options, string connectionString) =>
         options
