@@ -1,0 +1,34 @@
+# Segredos e ambiente (docs/02-padroes.md §2.5)
+.env
+.env.*
+!.env.example
+appsettings.*.local.json
+
+# .NET
+bin/
+obj/
+*.user
+.vs/
+TestResults/
+
+# Node / Expo
+node_modules/
+.expo/
+dist/
+web-build/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# IDEs e SO
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# Claude Code (estado local)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
