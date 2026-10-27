@@ -138,6 +138,33 @@ internal sealed class SetOwnPinCommandValidator : AbstractValidator<SetOwnPinCom
     }
 }
 
+internal sealed class RegisterSharedDeviceCommandValidator : AbstractValidator<RegisterSharedDeviceCommand>
+{
+    public RegisterSharedDeviceCommandValidator()
+    {
+        RuleFor(x => x.InstallationId).InstallationId();
+        RuleFor(x => x.Name).NotEmpty().WithMessage("Dê um nome ao aparelho.").MaximumLength(40);
+        RuleFor(x => x.Platform).Must(p => p is "ANDROID" or "IOS").WithMessage("Use ANDROID ou IOS.");
+    }
+}
+
+internal sealed class PinLoginRequestValidator : AbstractValidator<PinLoginRequest>
+{
+    public PinLoginRequestValidator()
+    {
+        RuleFor(x => x.InstallationId).InstallationId();
+        RuleFor(x => x.Pin).NotEmpty().MaximumLength(6);
+    }
+}
+
+internal sealed class ForgotPasswordCommandValidator : AbstractValidator<ForgotPasswordCommand>
+{
+    public ForgotPasswordCommandValidator()
+    {
+        RuleFor(x => x.Email).NotEmpty().EmailAddress().MaximumLength(254);
+    }
+}
+
 internal sealed class ResetPasswordCommandValidator : AbstractValidator<ResetPasswordCommand>
 {
     public ResetPasswordCommandValidator()

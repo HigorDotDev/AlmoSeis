@@ -70,7 +70,9 @@ internal sealed class AuthSessionIssuer(
             Permissions.All.Where(permissions.Contains).ToList(),
             memberships,
             subscriptionDto,
-            sharedDeviceId is null ? null : new MeSharedDeviceDto(sharedDeviceId.Value, string.Empty),
+            sharedDeviceId is { } deviceId
+                ? new MeSharedDeviceDto(deviceId, await db.Set<SharedDevice>().AsNoTracking().Where(d => d.Id == deviceId).Select(d => d.Name).SingleOrDefaultAsync(cancellationToken) ?? string.Empty)
+                : null,
             time.GetUtcNow());
     }
 

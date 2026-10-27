@@ -414,12 +414,18 @@ internal sealed class ResetPasswordHandler(
     ITenantContext tenant,
     ITenantSession session,
     InvitationLookup lookup,
+    EmailResetTokens emailTokens,
     IPasswordHasher<User> passwords,
     IAuditWriter audit,
     TimeProvider time) : ICommandHandler<ResetPasswordCommand, bool>
 {
     public async Task<bool> HandleAsync(ResetPasswordCommand command, CancellationToken cancellationToken)
     {
+        if (command.EmailToken is { } token)
+        {
+            return await ResetByEmailAsync(token, command.NewPassword, cancellationToken);
+        }
+
         if (command.Code is null || command.Login is null)
         {
             throw BusinessException.Validation("code", "Informe o código e o login.");
@@ -446,6 +452,23 @@ internal sealed class ResetPasswordHandler(
             .ExecuteUpdateAsync(u => u.SetProperty(t => t.RevokedAt, now), cancellationToken);
 
         audit.Add("PasswordReset", "USER", user.Id, after: new { via = "CODE" });
+        return true;
+    }
+
+    /// Link do e-mail (ADR-0040): uso único pelo security stamp. Sem tenant, então sem auditoria de tenant.
+    private async Task<bool> ResetByEmailAsync(string token, string newPassword, CancellationToken cancellationToken)
+    {
+        var data = emailTokens.Read(token);
+        var user = data is { } d ? await db.Set<User>().SingleOrDefaultAsync(u => u.Id == d.UserId, cancellationToken) : null;
+        if (user is null || user.SecurityStamp != data!.Value.Stamp)
+        {
+            throw BusinessException.Validation("emailToken", "Link de redefinição inválido ou vencido. Peça outro.");
+        }
+
+        user.SetPasswordHash(passwords.HashPassword(user, newPassword));
+        var now = time.GetUtcNow();
+        await db.Set<RefreshToken>().Where(t => t.UserId == user.Id && t.RevokedAt == null)
+            .ExecuteUpdateAsync(u => u.SetProperty(t => t.RevokedAt, now), cancellationToken);
         return true;
     }
 }

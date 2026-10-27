@@ -84,6 +84,26 @@ public sealed class AuthController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("pin-login")]
+    [AllowAnonymous]
+    public async Task<ActionResult<AuthResultDto>> PinLogin(
+        [FromBody] PinLoginRequest request,
+        [FromHeader(Name = "X-Device-Secret")] string? deviceSecret,
+        [FromServices] ICommandHandler<PinLoginCommand, AuthOutcome<AuthResultDto>> handler,
+        CancellationToken cancellationToken) =>
+        Unwrap(await handler.HandleAsync(new PinLoginCommand(request, deviceSecret), cancellationToken));
+
+    [HttpPost("password/forgot")]
+    [AllowAnonymous]
+    public async Task<IActionResult> ForgotPassword(
+        [FromBody] ForgotPasswordCommand command,
+        [FromServices] ICommandHandler<ForgotPasswordCommand, bool> handler,
+        CancellationToken cancellationToken)
+    {
+        await handler.HandleAsync(command, cancellationToken);
+        return Accepted();
+    }
+
     /// A falha só vira erro aqui, depois do commit do contador de tentativas / revogação.
     private static ActionResult<T> Unwrap<T>(AuthOutcome<T> outcome)
         where T : class =>

@@ -40,6 +40,8 @@ public static class DependencyInjection
         services.AddScoped<ITenantSession, TenantSession>();
         services.AddScoped<IConcurrencyContext, ConcurrencyContext>();
 
+        services.TryAddSingleton<AlmoSeis.Infrastructure.Email.IEmailSender, AlmoSeis.Infrastructure.Email.LoggingEmailSender>();
+
         services.AddOptions<IdempotencyOptions>().Bind(configuration.GetSection(IdempotencyOptions.Section));
         services.AddScoped<IIdempotencyStore, IdempotencyStore>();
 

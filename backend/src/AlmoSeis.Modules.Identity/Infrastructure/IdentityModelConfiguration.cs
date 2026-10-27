@@ -86,6 +86,15 @@ internal sealed class IdentityModelConfiguration : IModuleModelConfiguration
             b.HasOne<User>().WithMany().HasForeignKey(x => x.AcceptedByUserId); // aceite com conta nova: usuário antes do UPDATE
         });
 
+        modelBuilder.Entity<SharedDevice>(b =>
+        {
+            b.ToTable("shared_devices");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.InstallationId).HasMaxLength(64);
+            b.Property(x => x.Name).HasMaxLength(40);
+            b.Property(x => x.SecretHash).HasMaxLength(64).IsFixedLength();
+        });
+
         modelBuilder.Entity<TenantSyncCounter>().HasOne<Tenant>().WithOne().HasForeignKey<TenantSyncCounter>(x => x.TenantId);
     }
 }

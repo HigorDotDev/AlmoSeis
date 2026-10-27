@@ -26,6 +26,9 @@ public static class IdentityModule
         services.AddScoped<InvitationWriter>();
         services.AddScoped<ManagementDtos>();
         services.AddScoped<EmployeeAccessRevoker>();
+        services.AddOptions<PasswordResetOptions>().BindConfiguration(PasswordResetOptions.Section);
+        services.AddDataProtection();
+        services.AddScoped<EmailResetTokens>();
 
         services.Scan(scan => scan
             .FromAssemblyOf<AuthSessionIssuer>()
