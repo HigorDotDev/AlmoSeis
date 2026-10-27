@@ -54,6 +54,7 @@ internal sealed class Product : AggregateRoot, ITenantOwned, ISyncTracked
     public void Apply(ProductChanges changes, bool kindLocked, DateTimeOffset now)
     {
         var before = Snapshot();
+        var previousImage = ImageStorageKey;
 
         if (changes.Kind.HasValue && changes.Kind.Value != Kind)
         {
@@ -80,6 +81,12 @@ internal sealed class Product : AggregateRoot, ITenantOwned, ISyncTracked
         {
             UpdatedAt = now;
             Touch(new CatalogChanged(Id, "PRODUCT", now));
+        }
+
+        // Troca ou remoção: o arquivo anterior só é apagado depois do commit, pelo outbox (07 §7.13).
+        if (previousImage is not null && previousImage != ImageStorageKey)
+        {
+            Touch(new ProductImageDiscarded(Id, previousImage, now));
         }
     }
 
@@ -153,3 +160,6 @@ internal sealed class MarmitaSize : AggregateRoot, ITenantOwned, ISyncTracked
 
 /// Vira `CatalogUpdated` no grupo catalog (06 §6.14).
 internal sealed record CatalogChanged(Guid EntityId, string EntityType, DateTimeOffset OccurredAt) : IDomainEvent;
+
+/// Imagem substituída ou removida: o objeto antigo no R2 deve ser apagado depois do commit.
+internal sealed record ProductImageDiscarded(Guid ProductId, string StorageKey, DateTimeOffset OccurredAt) : IDomainEvent;

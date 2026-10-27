@@ -14,6 +14,15 @@ public interface IRealtimePublisher
     Task PublishAsync(Guid tenantId, string eventType, string payload, CancellationToken cancellationToken);
 }
 
+/// Evento do outbox tratado dentro do backend em vez de ir para o SignalR (ex.: apagar a imagem antiga no R2).
+/// Mesma garantia do outbox: roda depois do commit, pelo menos uma vez, com novas tentativas em falha.
+public interface IOutboxConsumer
+{
+    string EventType { get; }
+
+    Task HandleAsync(Guid tenantId, System.Text.Json.JsonElement envelope, CancellationToken cancellationToken);
+}
+
 public sealed class OutboxOptions
 {
     public const string Section = "Outbox";
@@ -33,10 +42,13 @@ public sealed class OutboxOptions
 public sealed class OutboxDispatcher(
     IServiceScopeFactory scopes,
     IRealtimePublisher publisher,
+    IEnumerable<IOutboxConsumer> consumers,
     IOptions<OutboxOptions> options,
     TimeProvider time,
     ILogger<OutboxDispatcher> logger) : BackgroundService
 {
+    private readonly Dictionary<string, IOutboxConsumer> _consumers = consumers.ToDictionary(c => c.EventType);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.Value.Enabled)
@@ -83,7 +95,16 @@ public sealed class OutboxDispatcher(
         {
             try
             {
-                await publisher.PublishAsync(message.TenantId, message.EventType, message.Payload, cancellationToken);
+                if (_consumers.TryGetValue(message.EventType, out var consumer))
+                {
+                    using var envelope = System.Text.Json.JsonDocument.Parse(message.Payload);
+                    await consumer.HandleAsync(message.TenantId, envelope.RootElement, cancellationToken);
+                }
+                else
+                {
+                    await publisher.PublishAsync(message.TenantId, message.EventType, message.Payload, cancellationToken);
+                }
+
                 message.ProcessedAt = time.GetUtcNow();
             }
             catch (Exception ex) when (ex is not OperationCanceledException)

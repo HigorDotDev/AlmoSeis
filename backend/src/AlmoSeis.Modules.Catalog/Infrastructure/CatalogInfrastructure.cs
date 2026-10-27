@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Logging;
+using AlmoSeis.Infrastructure.Realtime;
+using System.Text.Json;
 using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Storage;
 using AlmoSeis.Infrastructure.Tenancy;
@@ -63,5 +66,41 @@ internal sealed class CatalogChangedMapper(ITenantContext tenant) : IntegrationE
     {
         yield return new IntegrationEnvelope(
             "CatalogUpdated", domainEvent.EntityType, domainEvent.EntityId, tenant.EmployeeId, new { entityType = domainEvent.EntityType });
+    }
+}
+
+/// ProductImageDiscarded → mensagem interna do outbox (não vai para o SignalR).
+internal sealed class ProductImageDiscardedMapper(ITenantContext tenant) : IntegrationEventMapper<ProductImageDiscarded>
+{
+    public const string EventTypeName = "ProductImageDiscarded";
+
+    protected override IEnumerable<IntegrationEnvelope> Map(ProductImageDiscarded e)
+    {
+        yield return new IntegrationEnvelope(EventTypeName, "PRODUCT", e.ProductId, tenant.EmployeeId, new { storageKey = e.StorageKey });
+    }
+}
+
+/// Apaga no R2 a imagem que o produto deixou de usar. Só aceita chaves do próprio produto e tenant
+/// (`t/{tenant}/p/{produto}-*`): o envelope nunca apaga outra coisa.
+internal sealed class ProductImageCleanup(IObjectStorage storage, ILogger<ProductImageCleanup> logger) : IOutboxConsumer
+{
+    public string EventType => ProductImageDiscardedMapper.EventTypeName;
+
+    public async Task HandleAsync(Guid tenantId, JsonElement envelope, CancellationToken cancellationToken)
+    {
+        var productId = envelope.GetProperty("entityId").GetGuid();
+        var key = envelope.GetProperty("data").GetProperty("storageKey").GetString();
+        if (key is null || !key.StartsWith($"t/{tenantId}/p/{productId}-", StringComparison.Ordinal))
+        {
+            logger.LogWarning("Imagem descartada fora do prefixo do produto {ProductId}: nada apagado.", productId);
+            return;
+        }
+
+        if (!storage.IsConfigured)
+        {
+            return; // desenvolvimento e testes sem R2
+        }
+
+        await storage.DeleteAsync(key, cancellationToken);
     }
 }

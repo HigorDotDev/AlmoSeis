@@ -610,7 +610,7 @@ Convite inexistente, expirado ou já usado → `404 NotFound` (não diferencia, 
 }
 ```
 
-Tipos aceitos: `image/jpeg`, `image/png`, `image/webp`, até 2 MB. Depois do `PUT`, o app grava `imageStorageKey` via `PATCH`. O `PATCH` confere o objeto no bucket: chave ainda não enviada, maior que 2 MB ou de outro tipo → `422` em `errors.imageStorageKey`. Cada pedido gera uma chave nova; a imagem atual continua até o `PATCH` trocar.
+Tipos aceitos: `image/jpeg`, `image/png`, `image/webp`, até 2 MB. Depois do `PUT`, o app grava `imageStorageKey` via `PATCH`. O `PATCH` confere o objeto no bucket: chave ainda não enviada, maior que 2 MB ou de outro tipo → `422` em `errors.imageStorageKey`. Cada pedido gera uma chave nova; a imagem atual continua até o `PATCH` trocar. **Trocar a imagem** é repetir o fluxo (pedido de URL, `PUT`, `PATCH` com a chave nova); **remover** é `PATCH { "imageStorageKey": null }`. Nos dois casos o arquivo anterior é apagado do bucket só depois que o `PATCH` é confirmado (em segundos, de forma assíncrona); um `PATCH` recusado não apaga nada. Arquivos enviados e nunca gravados num produto não são apagados por esta rota.
 
 ### Tamanhos de marmita
 

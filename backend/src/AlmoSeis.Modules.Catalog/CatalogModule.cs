@@ -13,6 +13,7 @@ public static class CatalogModule
     {
         services.AddSingleton<IModuleModelConfiguration, CatalogModelConfiguration>();
         services.AddScoped<ICatalogReader, CatalogReader>();
+        services.AddSingleton<AlmoSeis.Infrastructure.Realtime.IOutboxConsumer, ProductImageCleanup>();
 
         services.Scan(scan => scan
             .FromAssemblyOf<CatalogReader>()

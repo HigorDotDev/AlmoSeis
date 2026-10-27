@@ -53,6 +53,9 @@ public interface IObjectStorage
 
     /// Metadados do objeto enviado, ou null se ele não existe.
     Task<StoredObject?> GetAsync(string storageKey, CancellationToken cancellationToken);
+
+    /// Idempotente: apagar um objeto que não existe não é erro.
+    Task DeleteAsync(string storageKey, CancellationToken cancellationToken);
 }
 
 /// Mesma configuração de cliente que funciona contra o R2 no UrbanCarePlatform: path-style e checksum só quando
@@ -100,6 +103,9 @@ internal sealed class R2ObjectStorage(IOptions<R2Options> options, TimeProvider 
             return null;
         }
     }
+
+    public async Task DeleteAsync(string storageKey, CancellationToken cancellationToken) =>
+        await _client.Value.DeleteObjectAsync(options.Value.Bucket, storageKey, cancellationToken);
 
     public void Dispose()
     {
