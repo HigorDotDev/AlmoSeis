@@ -22,6 +22,7 @@ public static class BillingModule
         services.AddScoped<IQueryHandler<GetSubscriptionQuery, SubscriptionDto>, GetSubscriptionQueryHandler>();
         services.AddScoped<IAsaasWebhookReceiver, AsaasWebhookReceiver>();
         services.AddScoped<SubscriptionChangeRecorder>();
+        services.AddScoped<IPlatformAdminService, PlatformAdminService>();
 
         // Sem chave do Asaas (desenvolvimento, testes), o gateway não cria nada e só registra em log.
         services.AddHttpClient<AsaasGateway>();

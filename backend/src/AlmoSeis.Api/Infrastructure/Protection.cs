@@ -62,7 +62,7 @@ internal static class RateLimitPolicies
     public const string LoginKey = "rate-limit:login";
     public const string InstallationKey = "rate-limit:installation";
 
-    private static readonly string[] AuthPaths = ["/api/v1/auth/login", "/api/v1/auth/signup", "/api/v1/auth/refresh", "/api/v1/auth/password"];
+    private static readonly string[] AuthPaths = ["/api/v1/auth/login", "/api/v1/auth/admin", "/api/v1/auth/signup", "/api/v1/auth/refresh", "/api/v1/auth/password"];
 
     public static IServiceCollection AddAlmoSeisRateLimiting(this IServiceCollection services)
     {
@@ -132,7 +132,7 @@ internal static class RateLimitPolicies
 /// "5/min por login", "30/min por installationId"). O corpo volta ao início para o model binding.
 internal sealed class RateLimitKeyMiddleware(RequestDelegate next)
 {
-    private static readonly string[] BodyPaths = ["/api/v1/auth/login", "/api/v1/auth/pin-login"];
+    private static readonly string[] BodyPaths = ["/api/v1/auth/login", "/api/v1/auth/admin/login", "/api/v1/auth/pin-login"];
 
     public async Task InvokeAsync(HttpContext context)
     {

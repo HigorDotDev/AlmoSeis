@@ -210,6 +210,45 @@ internal sealed class SwitchTenantHandler(
     }
 }
 
+/// POST /auth/admin/login (ADR-0043): só administradores de plataforma; token sem tenant e sem refresh.
+/// Não revela se o usuário existe ou se é admin: tudo é InvalidCredentials. Senha errada conta no bloqueio.
+internal sealed class AdminLoginHandler(AppDbContext db, IPasswordHasher<User> passwords, IJwtTokenIssuer jwt, TimeProvider time)
+    : ICommandHandler<AdminLoginCommand, AuthOutcome<AdminSessionDto>>
+{
+    public async Task<AuthOutcome<AdminSessionDto>> HandleAsync(AdminLoginCommand command, CancellationToken cancellationToken)
+    {
+        var now = time.GetUtcNow();
+        var user = await Credentials.FindByLoginAsync(db, command.Login, cancellationToken);
+        if (user is null)
+        {
+            return AuthOutcome<AdminSessionDto>.Failure(ErrorCodes.InvalidCredentials.Code);
+        }
+
+        if (user.IsLockedOut(now))
+        {
+            return Locked(user);
+        }
+
+        if (passwords.VerifyHashedPassword(user, user.PasswordHash, command.Password) == PasswordVerificationResult.Failed)
+        {
+            user.RegisterFailedLogin(now);
+            return user.IsLockedOut(now) ? Locked(user) : AuthOutcome<AdminSessionDto>.Failure(ErrorCodes.InvalidCredentials.Code);
+        }
+
+        if (!user.IsPlatformAdmin)
+        {
+            return AuthOutcome<AdminSessionDto>.Failure(ErrorCodes.InvalidCredentials.Code);
+        }
+
+        user.RegisterSuccessfulLogin();
+        var token = jwt.Issue(new AccessTokenRequest(user.Id, null, null, null, null, null, IsPlatformAdmin: true, UserSecurityStamp: user.SecurityStamp));
+        return AuthOutcome<AdminSessionDto>.Success(new AdminSessionDto(token.Token, token.ExpiresAt, new AdminUserDto(user.Id, user.FullName, user.Email)));
+    }
+
+    private static AuthOutcome<AdminSessionDto> Locked(User user) =>
+        AuthOutcome<AdminSessionDto>.Failure(ErrorCodes.InvalidCredentials.Code, new Dictionary<string, object?> { ["lockedUntil"] = user.LockoutEnd });
+}
+
 internal static class Credentials
 {
     public static async Task<User> CreateUserAsync(

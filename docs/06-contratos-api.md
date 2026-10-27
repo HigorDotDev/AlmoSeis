@@ -284,6 +284,26 @@ Erros: `409 EmailAlreadyRegistered`, `409 PhoneAlreadyRegistered`, `409 TrialAlr
 
 → `204`. PIN de 4 a 6 dígitos, e sequências triviais (`1234`, `0000`) são recusadas com `422`.
 
+### `POST /auth/admin/login` — público (ADR-0043)
+
+Só para administradores de plataforma (`users.is_platform_admin`).
+
+```json
+{ "login": "ops@almoseis.app", "password": "S3nha-forte!" }
+```
+
+→ `200`:
+
+```json
+{
+  "accessToken": "eyJhbGciOi...",
+  "expiresAt": "2026-10-27T15:19:05Z",
+  "user": { "id": "0192d6a0-0000-7000-8000-000000000019", "fullName": "Operação AlmoSeis", "email": "ops@almoseis.app" }
+}
+```
+
+Sem refresh token: a sessão dura o access token (15 min). Usuário que não é administrador, senha errada ou conta bloqueada → `401 InvalidCredentials` (mesma resposta, com `lockedUntil` quando bloqueada). O token não tem `tenant_id`: rotas de estabelecimento respondem `401`; e um token de estabelecimento recebe `403` em `/admin/*`.
+
 ### `POST /auth/password/reset` — público
 
 Consome um código de redefinição emitido por quem tem `employees.manage` (§6.4).
@@ -1587,7 +1607,7 @@ O evento **não** é estado. O app busca o recurso pela API (§6.12). Quando `ac
 
 ## 6.15 Administração e webhooks (ADR-0017, ADR-0025)
 
-### `/admin/*` — só `IsPlatformAdmin` (token de usuário de plataforma, sem tenant)
+### `/admin/*` — só `IsPlatformAdmin` (token de `POST /auth/admin/login`, sem tenant, ADR-0043)
 
 | Método e rota | Corpo → resposta |
 |---|---|
@@ -1599,6 +1619,14 @@ O evento **não** é estado. O app busca o recurso pela API (§6.12). Quando `ac
 | `POST /admin/billing-webhooks/{id}/reprocess` | → `202` |
 
 Toda ação gera auditoria com `origin = PLATFORM_ADMIN`.
+
+- `Subscription` = o mesmo objeto de `GET /subscription` (§6.4).
+- `search` procura no nome e no documento; `status` filtra pela situação da assinatura; mais recentes primeiro.
+- `openBusinessDay`: `{ "id", "businessDate", "openedAt" }` ou `null`. `lastOrderAt` e `ordersLast30Days` contam todos os pedidos.
+- `extend-trial` (`days` de 1 a 60): em `TRIALING`, soma ao fim do teste; em `SUSPENDED` sem nenhum período pago, volta a `TRIALING` por `days` a partir de agora; nos demais estados, `422`.
+- `reactivate`: `ACTIVE` até agora + 1 mês (pagamento confirmado fora do gateway); assinatura `CANCELED` → `422`.
+- `reason` com pelo menos 5 caracteres. Tenant inexistente → `404`.
+- `reprocess`: volta o evento para a fila (`processed_at = null`); o processador o aplica de novo, de forma idempotente.
 
 ### `POST /webhooks/asaas` — público + header `asaas-access-token`
 

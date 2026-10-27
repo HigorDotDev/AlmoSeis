@@ -24,8 +24,15 @@ internal sealed class GetSubscriptionQueryHandler(AppDbContext db, ITenantContex
     {
         var s = await db.Set<Subscription>().AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == tenant.TenantId, cancellationToken)
             ?? throw new NotFoundException("SUBSCRIPTION");
-        var now = time.GetUtcNow();
-        var grace = s.GraceEndsAt(options.Value.GracePeriod);
+        return SubscriptionDtos.Build(s, options.Value.GracePeriod, time.GetUtcNow());
+    }
+}
+
+internal static class SubscriptionDtos
+{
+    public static SubscriptionDto Build(Subscription s, TimeSpan gracePeriod, DateTimeOffset now)
+    {
+        var grace = s.GraceEndsAt(gracePeriod);
         int? daysLeft = s.Status switch
         {
             SubscriptionStatus.Trialing => Days(s.TrialEndsAt - now),

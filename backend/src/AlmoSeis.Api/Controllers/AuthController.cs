@@ -84,6 +84,14 @@ public sealed class AuthController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("admin/login")]
+    [AllowAnonymous]
+    public async Task<ActionResult<AdminSessionDto>> AdminLogin(
+        [FromBody] AdminLoginCommand command,
+        [FromServices] ICommandHandler<AdminLoginCommand, AuthOutcome<AdminSessionDto>> handler,
+        CancellationToken cancellationToken) =>
+        Unwrap(await handler.HandleAsync(command, cancellationToken));
+
     [HttpPost("pin-login")]
     [AllowAnonymous]
     public async Task<ActionResult<AuthResultDto>> PinLogin(

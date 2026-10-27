@@ -64,7 +64,8 @@ public sealed record AccessTokenRequest(
     Guid? EmployeeSecurityStamp,
     Guid? SharedDeviceId,
     string? InstallationId,
-    bool IsPlatformAdmin = false);
+    bool IsPlatformAdmin = false,
+    string? UserSecurityStamp = null);
 
 public sealed record IssuedAccessToken(string Token, DateTimeOffset ExpiresAt);
 
@@ -128,6 +129,11 @@ internal sealed class JwtTokenIssuer : IJwtTokenIssuer
         if (request.EmployeeSecurityStamp is { } stamp)
         {
             claims[AlmoSeisClaims.SecurityStamp] = stamp.ToString();
+        }
+        else if (request.UserSecurityStamp is { } userStamp)
+        {
+            // Token de admin de plataforma (ADR-0043): o stamp é o do usuário.
+            claims[AlmoSeisClaims.SecurityStamp] = userStamp;
         }
 
         if (request.SharedDeviceId is { } deviceId)

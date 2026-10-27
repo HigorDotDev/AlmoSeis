@@ -165,6 +165,15 @@ internal sealed class ForgotPasswordCommandValidator : AbstractValidator<ForgotP
     }
 }
 
+internal sealed class AdminLoginCommandValidator : AbstractValidator<AdminLoginCommand>
+{
+    public AdminLoginCommandValidator()
+    {
+        RuleFor(x => x.Login).NotEmpty().MaximumLength(254);
+        RuleFor(x => x.Password).NotEmpty().MaximumLength(128);
+    }
+}
+
 internal sealed class ResetPasswordCommandValidator : AbstractValidator<ResetPasswordCommand>
 {
     public ResetPasswordCommandValidator()

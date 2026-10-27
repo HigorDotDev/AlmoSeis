@@ -84,6 +84,12 @@ internal sealed class EmployeeDirectory(AppDbContext db) : IEmployeeDirectory
     }
 }
 
+internal sealed class PlatformAdminCheck(AppDbContext db) : IPlatformAdminCheck
+{
+    public Task<bool> IsValidAsync(Guid userId, string securityStamp, CancellationToken cancellationToken) =>
+        db.Set<User>().AsNoTracking().AnyAsync(u => u.Id == userId && u.IsPlatformAdmin && u.SecurityStamp == securityStamp, cancellationToken);
+}
+
 internal sealed class TenantCalendar(AppDbContext db, ITenantContext tenant, TimeProvider time) : ITenantCalendar
 {
     public async Task<DateOnly> TodayAsync(CancellationToken cancellationToken)

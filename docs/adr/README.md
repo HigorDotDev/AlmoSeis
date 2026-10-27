@@ -81,6 +81,7 @@ O ADR-0026 também recebeu o item 9 (RLS das tabelas de vínculo por `user_id`).
 | ADR | Decisão | Status |
 |---|---|---|
 | [0042](0042-migrations-sql-first-a-partir-do-ddl.md) | Migrations SQL-first geradas dos blocos do `05-ddl.md`, com testes de sincronia, de fumaça e de mapeamento EF | Aceito |
+| [0043](0043-login-administrador-plataforma.md) | `POST /auth/admin/login` só para `is_platform_admin`: token sem tenant, sem refresh, revalidado a cada requisição | Aceito |
 
 Complementos: ADR-0027 (`deviceSecret` do aparelho compartilhado) e ADR-0028 (permissões `orders.view`/`production.view` e matriz em `06-contratos-api.md` §6.2).
 

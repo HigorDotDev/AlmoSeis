@@ -124,7 +124,7 @@ internal sealed class SubscriptionChangeRecorder(IIdGenerator ids, ISubscription
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    public void Record(PlatformDbContext db, Subscription subscription, string origin, string reason, string before, DateTimeOffset now)
+    public void Record(PlatformDbContext db, Subscription subscription, string origin, string reason, string before, DateTimeOffset now, Guid? actorUserId = null)
     {
         foreach (var change in subscription.DomainEvents.OfType<SubscriptionStatusChanged>())
         {
@@ -133,6 +133,7 @@ internal sealed class SubscriptionChangeRecorder(IIdGenerator ids, ISubscription
                 Id = ids.New(),
                 TenantId = change.TenantId,
                 Origin = origin,
+                ActorUserId = actorUserId,
                 OperationType = "SubscriptionStatusChanged",
                 EntityType = "SUBSCRIPTION",
                 EntityId = change.SubscriptionId,

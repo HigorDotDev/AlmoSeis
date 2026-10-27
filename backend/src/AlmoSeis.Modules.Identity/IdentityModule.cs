@@ -20,6 +20,7 @@ public static class IdentityModule
         services.AddScoped<IEmployeeAccessReader, EmployeeAccessReader>();
         services.AddScoped<IEmployeeDirectory, EmployeeDirectory>();
         services.AddScoped<ITenantCalendar, TenantCalendar>();
+        services.AddScoped<IPlatformAdminCheck, PlatformAdminCheck>();
         services.AddScoped<ITenantSettingsReader, TenantSettingsReader>();
         services.AddOptions<InvitationOptions>().BindConfiguration(InvitationOptions.Section);
         services.AddScoped<InvitationLookup>();

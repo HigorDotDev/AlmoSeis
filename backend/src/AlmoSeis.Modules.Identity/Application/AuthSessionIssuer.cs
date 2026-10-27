@@ -34,7 +34,7 @@ internal sealed class AuthSessionIssuer(
         User user, TenantEmployee employee, string installationId, Guid? sharedDeviceId, Guid? refreshFamilyId, out RefreshToken refreshToken)
     {
         var now = time.GetUtcNow();
-        var access = jwt.Issue(new AccessTokenRequest(user.Id, employee.TenantId, employee.Id, employee.SecurityStamp, sharedDeviceId, installationId, user.IsPlatformAdmin));
+        var access = jwt.Issue(new AccessTokenRequest(user.Id, employee.TenantId, employee.Id, employee.SecurityStamp, sharedDeviceId, installationId));
 
         var rawRefresh = SecureRandom.Token("rt_");
         refreshToken = RefreshToken.Create(

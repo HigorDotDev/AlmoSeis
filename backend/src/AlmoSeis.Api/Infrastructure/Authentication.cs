@@ -57,7 +57,8 @@ public static class AuthenticationSetup
         services.AddSingleton<IAuthorizationPolicyProvider, PermissionPolicyProvider>();
         services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
         services.AddSingleton<IAuthorizationMiddlewareResultHandler, ProblemDetailsAuthorizationResultHandler>();
-        services.AddAuthorization();
+        services.AddScoped<IAuthorizationHandler, PlatformAdminAuthorizationHandler>();
+        services.AddAuthorization(o => o.AddPolicy(PlatformAdminRequirement.Policy, p => p.RequireAuthenticatedUser().AddRequirements(new PlatformAdminRequirement())));
         return services;
     }
 }
@@ -96,6 +97,12 @@ internal static class EmployeeAccessValidator
         var userId = principal.GetGuid(AlmoSeisClaims.Subject);
         var tenantId = principal.GetGuid(AlmoSeisClaims.TenantId);
         var employeeId = principal.GetGuid(AlmoSeisClaims.EmployeeId);
+        if (tenantId is null && principal.FindFirstValue(AlmoSeisClaims.PlatformAdmin) == "true")
+        {
+            await ValidatePlatformAdminAsync(context, userId, principal.FindFirstValue(AlmoSeisClaims.SecurityStamp));
+            return;
+        }
+
         var stamp = principal.GetGuid(AlmoSeisClaims.SecurityStamp);
         if (userId is null || tenantId is null || employeeId is null || stamp is null)
         {
@@ -118,6 +125,49 @@ internal static class EmployeeAccessValidator
         }
 
         context.HttpContext.Items[ItemKey] = access;
+    }
+
+    /// ADR-0043: token sem tenant só vale em /api/v1/admin e só enquanto o usuário for admin com o mesmo stamp.
+    private static async Task ValidatePlatformAdminAsync(TokenValidatedContext context, Guid? userId, string? stamp)
+    {
+        if (userId is null || stamp is null || !context.HttpContext.Request.Path.StartsWithSegments("/api/v1/admin"))
+        {
+            context.Fail("Token de administrador fora das rotas de administração.");
+            return;
+        }
+
+        var check = context.HttpContext.RequestServices.GetRequiredService<IPlatformAdminCheck>();
+        if (!await check.IsValidAsync(userId.Value, stamp, context.HttpContext.RequestAborted))
+        {
+            context.Fail("Administrador revogado.");
+            return;
+        }
+
+        context.HttpContext.Items[PlatformAdminItemKey] = userId.Value;
+    }
+
+    public const string PlatformAdminItemKey = "almoseis.platform-admin";
+}
+
+/// [PlatformAdmin]: só tokens de `POST /auth/admin/login` (ADR-0043).
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method)]
+public sealed class PlatformAdminAttribute() : AuthorizeAttribute(PlatformAdminRequirement.Policy);
+
+internal sealed class PlatformAdminRequirement : IAuthorizationRequirement
+{
+    public const string Policy = "PlatformAdmin";
+}
+
+internal sealed class PlatformAdminAuthorizationHandler(IHttpContextAccessor accessor) : AuthorizationHandler<PlatformAdminRequirement>
+{
+    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, PlatformAdminRequirement requirement)
+    {
+        if (accessor.HttpContext?.Items[EmployeeAccessValidator.PlatformAdminItemKey] is Guid)
+        {
+            context.Succeed(requirement);
+        }
+
+        return Task.CompletedTask;
     }
 }
 

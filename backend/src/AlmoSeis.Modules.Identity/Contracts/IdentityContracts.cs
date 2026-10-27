@@ -85,6 +85,19 @@ public interface IEmployeeAccessReader
     Task<EmployeeAccess?> GetAsync(Guid employeeId, CancellationToken cancellationToken);
 }
 
+/// POST /auth/admin/login (ADR-0043).
+public sealed record AdminLoginCommand(string Login, string Password);
+
+public sealed record AdminUserDto(Guid Id, string FullName, string? Email);
+
+public sealed record AdminSessionDto(string AccessToken, DateTimeOffset ExpiresAt, AdminUserDto User);
+
+/// Revalida o token de admin a cada requisição: ainda é admin e com o mesmo security stamp (ADR-0043 §4).
+public interface IPlatformAdminCheck
+{
+    Task<bool> IsValidAsync(Guid userId, string securityStamp, CancellationToken cancellationToken);
+}
+
 /// Nome de exibição dos autores ({ id, displayName }) para os DTOs dos outros módulos.
 public interface IEmployeeDirectory
 {

@@ -85,6 +85,26 @@ internal sealed class Subscription : AggregateRoot, ITenantOwned
         return Changed(true, now);
     }
 
+    /// Administração (06 §6.15): em teste, soma dias; suspensa sem nenhum período pago, volta ao teste por `days`.
+    public void ExtendTrial(int days, DateTimeOffset now)
+    {
+        if (Status == SubscriptionStatus.Trialing)
+        {
+            TrialEndsAt = (TrialEndsAt > now ? TrialEndsAt : now) + TimeSpan.FromDays(days);
+            Touch();
+            return;
+        }
+
+        if (Status == SubscriptionStatus.Suspended && CurrentPeriodEndsAt is null)
+        {
+            (Status, TrialEndsAt, SuspendedAt) = (SubscriptionStatus.Trialing, now + TimeSpan.FromDays(days), null);
+            Changed(true, now);
+            return;
+        }
+
+        throw new InvalidOperationException($"Não é possível estender o teste de uma assinatura {Status}.");
+    }
+
     public void LinkGateway(string customerId, string subscriptionId)
     {
         GatewayCustomerId = customerId;
