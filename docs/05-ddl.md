@@ -42,7 +42,7 @@ BEGIN
 END $$;
 ```
 
-- `almoseis_migrator`: dono do schema. Roda as migrations. Correções de dados em migration usam `SET LOCAL ROLE almoseis_platform`.
+- `almoseis_migrator`: dono do schema. Roda as migrations. Correções de dados em migration usam `SET LOCAL ROLE almoseis_platform`. O **login** de migration é criado com `ALTER ROLE <login> SET role = 'almoseis_migrator'`, para que todo objeto (inclusive `__ef_migrations_history`) pertença ao papel de grupo, e não ao login. Assim a rotação do login não muda a posse.
 - `almoseis_app`: a API. DML restrito (§5.12), sujeito à RLS de tenant.
 - `almoseis_platform`: módulo admin, webhooks de cobrança, dispatcher do outbox e jobs de retenção e limpeza. Acessa todos os tenants por **políticas próprias** (`TO almoseis_platform USING (true)`), não por `BYPASSRLS`. Isso funciona igual no Azure Flexible Server, onde não há superusuário.
 

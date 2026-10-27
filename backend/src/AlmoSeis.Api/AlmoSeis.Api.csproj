@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <UserSecretsId>almoseis-api</UserSecretsId>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AlmoSeis.SharedKernel\AlmoSeis.SharedKernel.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Infrastructure\AlmoSeis.Infrastructure.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Identity\AlmoSeis.Modules.Identity.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Billing\AlmoSeis.Modules.Billing.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Catalog\AlmoSeis.Modules.Catalog.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Menu\AlmoSeis.Modules.Menu.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Ordering\AlmoSeis.Modules.Ordering.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Payments\AlmoSeis.Modules.Payments.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Closing\AlmoSeis.Modules.Closing.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Audit\AlmoSeis.Modules.Audit.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Sync\AlmoSeis.Modules.Sync.csproj" />
+  </ItemGroup>
+</Project>

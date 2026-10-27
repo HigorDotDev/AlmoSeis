@@ -126,7 +126,7 @@ public interface IDomainEvent  { DateTimeOffset OccurredAt { get; } }
 | `ISessionVariables` | `SetAsync(name, value)` sobre a conexão corrente. Uso: `app.invitation_code` no aceite de convite (05 §5.12) |
 | `UnitOfWork` (scoped) | Ver "ciclo de uma escrita" abaixo |
 | `MoneyConverter`, `GramsConverter` | Value converters do EF (`numeric(12,2)` ↔ `Money`, `integer` ↔ `Grams`) |
-| `Migrations/` | Migrations EF. As partes que o EF não gera (funções, RLS, grants) entram via `migrationBuilder.Sql()` **copiadas literalmente** de `05-ddl.md` |
+| `Persistence/Migrations/` | **SQL-first (ADR-0042):** cada migration é uma classe mínima que executa um script embutido (`Sql/NNNN_*.sql`), gerado de `05-ddl.md` por `backend/tools/Sync-DdlMigration.ps1`. Não se usa `dotnet ef migrations add` |
 
 ### Ciclo de uma escrita (sem MediatR)
 
@@ -522,7 +522,7 @@ O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5
 | ↳ `TenantIsolationTests` | **Todo** endpoint autenticado | Teoria sobre o catálogo de rotas: dados no tenant A, chamada como B → `404`/lista vazia, nunca dados de A |
 | ↳ `IdempotencyTests` | Endpoints [I] | Reenvio com mesmo corpo → mesma resposta + `Idempotent-Replayed`; corpo diferente → `422`; dois em paralelo → um registro só |
 | ↳ `ConcurrencyTests` | Endpoints [M] | `If-Match` velho → `409` com `current`; dois pagamentos concorrentes no mesmo saldo → um falha |
-| ↳ `SchemaMatchesDdlTest` | Migrations × `05-ddl.md` | Aplica os blocos `sql` do `05` num banco e as migrations em outro, compara `pg_dump --schema-only` normalizado. **Documento e migration não divergem** |
+| ↳ `DdlMigrationSyncTests` (unitário) + `SchemaTests` | Migrations × `05-ddl.md` × modelo EF | O script embutido é idêntico aos blocos do `05`. A migration aplicada pelo login de migration passa no `05-ddl-smoke-test.sql` (21 checagens), e toda entidade EF encontra suas colunas no banco (ADR-0042) |
 | `ArchitectureTests` | ADR-0029 | regras abaixo |
 
 **Regras de arquitetura (NetArchTest):**

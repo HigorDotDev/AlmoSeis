@@ -40,9 +40,13 @@ volumes:
 | `almoseis_platform_login` | `almoseis_platform` | `PlatformDbContext` |
 
 Passo a passo:
-1. `docker compose up -d db`
-2. `dotnet ef database update` (projeto `AlmoSeis.Infrastructure`, startup `AlmoSeis.Api`, connection string do migrator)
-3. `dotnet run --project src/AlmoSeis.Api`
+1. `docker compose up -d db` (na raiz)
+2. Em `backend/`: `dotnet ef database update --context AppDbContext --project src/AlmoSeis.Infrastructure --startup-project src/AlmoSeis.Api`. A factory de design usa `ALMOSEIS_MIGRATOR_CONNECTION` ou, por padrão, o login local `almoseis_migrator_login`.
+3. `dotnet run --project src/AlmoSeis.Api` → `GET /health/ready` responde `Healthy`.
+
+O login de migration é criado com `ALTER ROLE almoseis_migrator_login SET role = 'almoseis_migrator'`, para que os objetos pertençam ao papel de grupo (05 §5.1). Os scripts de homolog e prod (`infra/db/create-logins.sql`) fazem o mesmo.
+
+Mudança de schema (ADR-0042): editar o `05` → `pwsh backend/tools/Sync-DdlMigration.ps1 -Target NNNN_Nome.sql` → nova classe de migration → `dotnet test`.
 4. Mobile: `npx expo start --dev-client`, com `EXPO_PUBLIC_API_BASE_URL=http://<ip-da-máquina>:5080`.
 
 Segredos locais (chave JWT de desenvolvimento, R2 de teste, Asaas sandbox) ficam em `dotnet user-secrets`. O `appsettings.Development.json` versionado só tem as connection strings locais e placeholders.
@@ -64,7 +68,7 @@ setup-dotnet 10 → restore (cache NuGet) → build -warnaserror
 → test UnitTests
 → test ArchitectureTests
 → test IntegrationTests (Testcontainers; o runner ubuntu-latest já tem Docker)
-     inclui SchemaMatchesDdlTest (migrations × 05-ddl.md) e o 05-ddl-smoke-test.sql
+     inclui DdlMigrationSyncTests + SchemaTests (migration × 05-ddl.md × modelo EF, e o 05-ddl-smoke-test.sql)
 → publica os resultados (dorny/test-reporter) e a cobertura
 ```
 

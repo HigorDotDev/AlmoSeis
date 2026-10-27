@@ -76,6 +76,12 @@ O ADR-0026 também recebeu o item 9 (RLS das tabelas de vínculo por `user_id`).
 | [0040](0040-email-transacional-azure-communication-services.md) | E-mail transacional (recuperação de senha do proprietário) via Azure Communication Services | Aceito |
 | [0041](0041-limite-requisicoes-endpoints-publicos.md) | Rate limiting nativo do ASP.NET Core em login, PIN, convites e webhooks | Aceito |
 
+### Surgidas na implementação
+
+| ADR | Decisão | Status |
+|---|---|---|
+| [0042](0042-migrations-sql-first-a-partir-do-ddl.md) | Migrations SQL-first geradas dos blocos do `05-ddl.md`, com testes de sincronia, de fumaça e de mapeamento EF | Aceito |
+
 Complementos: ADR-0027 (`deviceSecret` do aparelho compartilhado) e ADR-0028 (permissões `orders.view`/`production.view` e matriz em `06-contratos-api.md` §6.2).
 
 ## Impacto no modelo do épico (§6)

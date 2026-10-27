@@ -50,7 +50,11 @@ Leia ADR-0003, 0019, 0020, 0021, 0023, 0026, 0030, 0031, 0032, 0033 e 0034, a se
 - Escrever `CHECK` com `IS NOT NULL` explícito sempre que a regra exige o campo preenchido. Um `CHECK` que resulta em `NULL` passa: `char_length(NULL) >= 5` aceitaria a linha. Esse bug foi encontrado na validação do `docs/05-ddl.md`.
 - Validar qualquer mudança de DDL rodando os blocos `sql` do `docs/05-ddl.md` num PostgreSQL 16 descartável (Docker), mais um teste de fumaça como `almoseis_app` com dois tenants.
 
+- Mudar o schema pelo fluxo SQL-first (ADR-0042): editar o `05-ddl.md` → revalidar com o teste de fumaça → `backend/tools/Sync-DdlMigration.ps1 -Target NNNN_Nome.sql` → nova classe de migration em `AlmoSeis.Infrastructure/Persistence/Migrations` → `dotnet test` (o `DdlMigrationSyncTests` e o `SchemaTests` precisam passar).
+
 ## Nunca
+
+- Usar `dotnet ef migrations add` ou editar à mão um `Sql/*.sql` gerado (ADR-0042).
 
 - `DELETE` físico em pedidos, pagamentos, fechamentos e auditoria.
 - `float`/`double precision`/`real` para dinheiro ou peso.

@@ -1385,6 +1385,6 @@ A automação será implementada posteriormente, sem necessidade de duplicar reg
 
 # 16. Decisões arquiteturais e de negócio
 
-Veja o índice completo em `docs/adr/README.md` (ADR-0001 a ADR-0041).
+Veja o índice completo em `docs/adr/README.md` (ADR-0001 a ADR-0042).
 
 **Resultado esperado:** um SaaS mobile capaz de gerenciar pedidos, comandas, produção, recebimentos e fechamento financeiro de pequenos restaurantes, preparado para ampliação comercial e automação do atendimento.

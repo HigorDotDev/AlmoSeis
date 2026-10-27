@@ -42,6 +42,13 @@ Fluxo: `Controller → XxxHandler → agregado → AppDbContext` numa transaçã
 - **Alertas:** `OrderChangeEvent` + ciência por funcionário. O autor não recebe o próprio alerta.
 - **Fechamento:** snapshot imutável. Justificativa obrigatória se a diferença ≠ 0.
 
+## Como trabalhar no código
+
+- Comandos em `backend/`: `dotnet build` (warnings são erros), `dotnet test` (Microsoft.Testing.Platform, `global.json`). Os testes de integração exigem Docker rodando (Testcontainers).
+- Pacotes só via `Directory.Packages.props` (CPM com transitive pinning). Nunca coloque `Version=` num `.csproj`.
+- Schema: SQL-first (ADR-0042). Entidade nova mapeada no EF precisa bater com o `05`, e o `Ef_model_matches_database_columns` verifica isso.
+- Módulo novo: classe `XModule.AddXModule()` + registro em `Program.cs` **antes** de `DecorateCommandHandlers()`.
+
 ## Sempre
 
 - `async`/`await`, injeção por interface, `TimeProvider` (nunca `DateTime.Now`).

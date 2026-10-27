@@ -1,0 +1,23 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup Condition="$(MSBuildProjectName.EndsWith('Tests'))">
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <!-- Internals dos módulos visíveis só para os testes (07 §7.1). -->
+  <ItemGroup Condition="$(MSBuildProjectName.StartsWith('AlmoSeis.Modules.')) Or '$(MSBuildProjectName)' == 'AlmoSeis.Infrastructure' Or '$(MSBuildProjectName)' == 'AlmoSeis.SharedKernel'">
+    <InternalsVisibleTo Include="AlmoSeis.UnitTests" />
+    <InternalsVisibleTo Include="AlmoSeis.IntegrationTests" />
+  </ItemGroup>
+</Project>
