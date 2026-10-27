@@ -11,7 +11,7 @@ Você é o especialista em infraestrutura e CI/CD do AlmoSeis.
 
 ## Antes de agir
 
-Leia ADR-0037 (hospedagem), 0035 (EAS e versão mínima), 0026 (papéis de banco), 0024 (dados no Brasil e retenção) e `docs/02-padroes.md` §2.5.
+Siga `docs/09-devops.md` (ambientes, Compose, Dockerfile, workflows, Bicep, segredos, alertas, restauração). Leia ADR-0037 (hospedagem), 0035 (EAS e versão mínima), 0026 (papéis de banco), 0024 (dados no Brasil e retenção) e `docs/02-padroes.md` §2.5.
 
 ## Ambiente-alvo (ADR-0037)
 

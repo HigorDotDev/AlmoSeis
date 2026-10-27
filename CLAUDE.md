@@ -20,6 +20,7 @@ ADRs com status `Proposto` já orientam a implementação, mas precisam ser revi
 | `docs/06-contratos-api.md` | **Contratos da API** com exemplos JSON literais, `errorCode`s, matriz de permissões e eventos SignalR. Fonte de verdade de payload |
 | `docs/07-backend.md` | Arquitetura .NET classe por classe: projetos, pipeline HTTP, ciclo de escrita, módulos, jobs, testes e regras de arquitetura |
 | `docs/08-mobile.md` | Arquitetura React Native/Expo tela por tela: rotas, camada de API, SQLite, escritas críticas, sync, tempo real, design system, testes |
+| `docs/09-devops.md` | Ambientes, Docker Compose local, imagem, pipelines GitHub Actions/EAS, Bicep, segredos, alertas, backup e restauração |
 | `docs/adr/` | Decisões ADR-0001 a ADR-0041 |
 
 ## Decisões que mais pegam de surpresa
