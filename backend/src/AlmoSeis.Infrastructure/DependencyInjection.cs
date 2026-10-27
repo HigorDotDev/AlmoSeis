@@ -1,4 +1,6 @@
 using AlmoSeis.Infrastructure.Audit;
+using AlmoSeis.Infrastructure.Concurrency;
+using AlmoSeis.Infrastructure.Storage;
 using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Security;
 using AlmoSeis.Infrastructure.Tenancy;
@@ -34,6 +36,10 @@ public static class DependencyInjection
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IAuditWriter, AuditWriter>();
         services.AddScoped<ITenantSession, TenantSession>();
+        services.AddScoped<IConcurrencyContext, ConcurrencyContext>();
+
+        services.AddOptions<ObjectStorageOptions>().Bind(configuration.GetSection(ObjectStorageOptions.Section));
+        services.AddSingleton<IObjectStorage, PublicUrlObjectStorage>();
 
         services.AddOptions<JwtOptions>().Bind(configuration.GetSection(JwtOptions.Section));
         services.AddSingleton<IJwtTokenIssuer, JwtTokenIssuer>();

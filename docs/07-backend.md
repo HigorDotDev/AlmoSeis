@@ -310,8 +310,12 @@ AlmoSeis.Modules.Ordering/
 `MarmitaSize` (agregado [S]). Handlers: `CreateProduct`, `UpdateProduct`, `CreateProductImageUpload`, `ListProducts`, `GetProduct`, `CreateMarmitaSize`, `UpdateMarmitaSize`, `ListMarmitaSizes`.
 
 Contracts: `ICatalogReader`:
-- `GetProductsAsync(ids)` → `{ Id, Kind, Name, DefaultPrice, RequiresPreparation, IsActive, IsAvailable }`;
+- `GetProductsAsync(ids)` → `{ Id, Kind, Name, Description, DefaultPrice, RequiresPreparation, ImageUrl, IsActive, IsAvailable }`;
 - `GetMarmitaSizeAsync(id)`.
+
+`IProductUsageCheck` (Contracts): implementado por Menu e Ordering; o `UpdateProduct` recusa trocar `kind` se algum disser que o produto está em uso.
+
+`POST /products/{id}/image-upload` entra junto do `R2ObjectStorage` (URL pré-assinada); por ora `IObjectStorage` só deriva a URL pública (`ObjectStorage:PublicBaseUrl`).
 
 ### Menu (ADR-0038)
 
@@ -324,7 +328,9 @@ Regras: `section = product.kind` (recebe os produtos via `ICatalogReader`), `pfP
 
 `MenuMaterializer` (serviço de domínio) aplica o ADR-0038 dentro da transação de abertura do expediente: `MaterializeForAsync(businessDate)`.
 
-Handlers: `CreateMenu`, `ReplaceMenuItems`, `UpdateMenuItem`, `CloneMenu`, `GetMenu`, `ListMenus`, `GetCurrentMenu` (monta `MenuNotFound.sources`).
+Handlers: `CreateMenu`, `ReplaceMenuItems`, `UpdateMenuItem`, `CloneMenu`, `GetMenu`, `ListMenus`, `GetCurrentMenu` (monta `MenuNotFound.sources`). `GetCurrentMenu` e o `MenuMaterializer` entram com o expediente: o Menu declara a porta da data do expediente aberto e o Closing a implementa (o Closing já depende do Menu para materializar).
+
+`ReplaceItems` reaproveita o id do item quando o produto continua na lista. `CloneMenu` não copia produtos desativados depois do original.
 
 Contracts: `IMenuReader.GetDailyAsync(menuType, date)` → itens disponíveis com `pfPrice`, e `IMenuMaterializer`.
 
@@ -550,6 +556,17 @@ O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5
 | Connection strings | Lidas na resolução do `DbContext`, não no registro | Key Vault e `WebApplicationFactory` aplicam a configuração depois do `Program` registrar os serviços |
 | Globalização | Sem `InvariantGlobalization` | Fusos IANA (`America/Sao_Paulo`) no Windows dependem do ICU |
 | Diagnóstico de testes | `ApiFactory` captura os logs de erro do servidor e os anexa à falha | O 500 genérico da API não mostra a causa no teste |
+| Chaves `Guid` | O `AppDbContext` marca toda PK `Guid` como `ValueGenerated.Never` | Os ids são UUID v7 da aplicação; sem isso, um filho novo com id preenchido (ex.: `MenuItem`) descoberto pela navegação vira UPDATE e falha como conflito de concorrência |
+| Enums no banco | Convenção global: todo enum vira texto `UPPER_SNAKE` (`UpperSnakeEnumConverter<T>`), igual ao JSON e aos CHECKs do 05 | Um só formato em banco, API e auditoria; enums ficam nos `Contracts` do módulo |
+| Enums em query | `UpperSnakeEnumModelBinderProvider` (`?kind=MAIN_DISH`); valor desconhecido → `400 MalformedRequest` | O binder padrão só aceita o nome C# (`MainDish`) |
+| Model state inválido | `InvalidModelStateResponseFactory` lança `BusinessException(MalformedRequest)` com `errors` | O 400 padrão do `[ApiController]` não traz `errorCode` |
+| PATCH parcial | Corpo com `Optional<T>` (SharedKernel) + `OptionalJsonConverterFactory`: ausente = sem valor, `null` = limpar; `null` em campo não anulável → `400` | Distinguir "não mexe" de "limpa" sem `JsonElement` nos handlers |
+| Versão por mutação | `AggregateRoot.Raise(evento)` na criação (nasce na versão 1); `Touch` só quando algo mudou de fato. Um PATCH sem mudança real devolve a mesma versão | Evita feed e eventos de tempo real sem mudança |
+| `current` do 409 | Cada módulo registra um `ICurrentResourceReader` por `entityType`; o `ProblemDetailsExceptionHandler` o chama depois do rollback | O exception handler não conhece os módulos |
+| JSON do ProblemDetails | `ConfigureHttpJsonOptions` recebe as mesmas convenções do MVC | O writer de ProblemDetails usa as opções HTTP, e o `current` sairia com dinheiro como objeto |
+| Envelope de tempo real | `seq` e `entityVersion` vêm da entrada do feed da mesma transação (o mapper só informa tipo, entidade, ator e `data`) | O evento é montado antes do incremento de versão |
+| Regras por campo no domínio | `BusinessException.Validation(campo, mensagem)` devolve o mesmo `422 { errors }` do FluentValidation, com o caminho da API (`items[1].pfPrice`) | Regras que dependem de estado (preço × tipo, produto do cardápio) não cabem no validator |
+| Produto em uso | `IProductUsageCheck` (Contracts do Catalog) implementado por Menu (e, depois, Ordering): produto em cardápio ou vendido não muda de `kind` | Catalog não pode depender de quem o referencia |
 
 ## 7.14 Exemplo de ponta a ponta: `POST /orders/{id}/payments`
 

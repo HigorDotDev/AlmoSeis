@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using AlmoSeis.Infrastructure.Persistence;
+using AlmoSeis.SharedKernel.Application;
 using AlmoSeis.SharedKernel.Errors;
 using FluentValidation;
 using Microsoft.AspNetCore.Diagnostics;
@@ -35,12 +36,25 @@ public sealed class ProblemDetailsExceptionHandler(
             });
         }
 
+        if (exception is VersionConflictException conflict)
+        {
+            extensions = new Dictionary<string, object?>(extensions) { ["current"] = await ReadCurrentAsync(httpContext, conflict, cancellationToken) };
+        }
+
         httpContext.Response.StatusCode = code.HttpStatus;
         return await problemDetails.TryWriteAsync(new ProblemDetailsContext
         {
             HttpContext = httpContext,
             ProblemDetails = Build(httpContext, code.TypeUri, code.Title, code.HttpStatus, detail, code.Code, extensions),
         });
+    }
+
+    /// O estado atual, serializado como no GET, para o app mostrar a diferença (ADR-0034).
+    private static async Task<object?> ReadCurrentAsync(HttpContext httpContext, VersionConflictException conflict, CancellationToken cancellationToken)
+    {
+        var reader = httpContext.RequestServices.GetServices<ICurrentResourceReader>()
+            .FirstOrDefault(r => r.EntityType == conflict.EntityType);
+        return reader is null ? null : await reader.ReadAsync(conflict.EntityId, cancellationToken);
     }
 
     private static readonly IReadOnlyDictionary<string, object?> Empty = new Dictionary<string, object?>();

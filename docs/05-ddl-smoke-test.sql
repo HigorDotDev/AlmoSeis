@@ -229,7 +229,11 @@ END $$;
 RESET ROLE;
 SET ROLE almoseis_platform;
 DO $$ BEGIN
-  IF (SELECT count(*) FROM tenants) <> 2 THEN RAISE EXCEPTION 'FALHOU: plataforma nao ve todos os tenants'; END IF;
+  -- Conta só os tenants deste script: o banco pode ter outros (testes de integração em paralelo).
+  IF (SELECT count(*) FROM tenants
+      WHERE id IN ('aaaaaaaa-0000-0000-0000-000000000001', 'bbbbbbbb-0000-0000-0000-000000000002')) <> 2 THEN
+    RAISE EXCEPTION 'FALHOU: plataforma nao ve todos os tenants';
+  END IF;
   RAISE NOTICE 'ok: plataforma ve todos os tenants';
 END $$;
 

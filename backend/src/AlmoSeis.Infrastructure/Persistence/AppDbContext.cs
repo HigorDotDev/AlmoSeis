@@ -3,6 +3,7 @@ using System.Reflection;
 using AlmoSeis.Infrastructure.Tenancy;
 using AlmoSeis.SharedKernel.Domain;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace AlmoSeis.Infrastructure.Persistence;
 
@@ -61,8 +62,25 @@ public class AppDbContext : DbContext
             configuration.Configure(modelBuilder);
         }
 
+        // Enums gravados como texto UPPER_SNAKE, iguais ao JSON e aos CHECKs do 05 (MainDish ↔ 'MAIN_DISH').
+        foreach (var property in modelBuilder.Model.GetEntityTypes().SelectMany(t => t.GetProperties()))
+        {
+            var enumType = Nullable.GetUnderlyingType(property.ClrType) ?? property.ClrType;
+            if (enumType.IsEnum)
+            {
+                property.SetValueConverter((ValueConverter)Activator.CreateInstance(typeof(UpperSnakeEnumConverter<>).MakeGenericType(enumType))!);
+            }
+        }
+
         foreach (var entityType in modelBuilder.Model.GetEntityTypes().Where(t => t.BaseType is null).ToList())
         {
+            // Ids são UUID v7 gerados pela aplicação (04 §4.0). Sem isto, um filho novo com id preenchido,
+            // descoberto pela navegação do agregado, vira UPDATE em vez de INSERT.
+            if (entityType.FindPrimaryKey() is { Properties: [{ ClrType: var keyType } key] } && keyType == typeof(Guid))
+            {
+                key.ValueGenerated = Microsoft.EntityFrameworkCore.Metadata.ValueGenerated.Never;
+            }
+
             // Versão explícita como token de concorrência de todo agregado (ADR-0034).
             if (typeof(AggregateRoot).IsAssignableFrom(entityType.ClrType))
             {

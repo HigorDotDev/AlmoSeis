@@ -18,6 +18,21 @@ public interface IVersionedDto
     int Version { get; }
 }
 
+/// Lê o recurso como no GET, para o `current` do 409 VersionConflict (06 §6.1, 07 §7.4).
+/// Cada módulo registra um por `entityType` versionado.
+public interface ICurrentResourceReader
+{
+    string EntityType { get; }
+
+    Task<IVersionedDto?> ReadAsync(Guid entityId, CancellationToken cancellationToken);
+}
+
+/// Resposta de listagem sem paginação: `{ "items": [...] }` (06 §6.0).
+public sealed record ItemsDto<T>(IReadOnlyList<T> Items);
+
+/// Autor de qualquer registro: `{ "id": "<employeeId>", "displayName": "Ana" }` (06 §6.0).
+public sealed record AuthorDto(Guid Id, string DisplayName);
+
 public interface IIdGenerator
 {
     Guid New();

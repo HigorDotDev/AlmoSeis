@@ -27,6 +27,9 @@ public abstract class AggregateRoot : Entity, IVersioned
         }
     }
 
+    /// Evento de criação: o agregado nasce na versão 1, sem incremento.
+    protected void Raise(IDomainEvent domainEvent) => _domainEvents.Add(domainEvent);
+
     /// Confere a versão informada pelo cliente (If-Match).
     public void EnsureVersion(int expectedVersion)
     {

@@ -32,4 +32,4 @@ Na mesma linha do UrbanCarePlatform, antes de gerar código:
 5. ~~`07-backend.md` e `08-mobile.md`~~ — concluídos em 2026-10-27.
 6. ~~`09-devops.md`~~ — concluído em 2026-10-27.
 7. UX/UI (wireframes das 4 abas).
-8. Desenvolvimento na ordem Identity/Tenancy → Catalog/Menu → BusinessDay → Ordering → Payments → Closing → Sync → Billing.
+8. Desenvolvimento na ordem Identity/Tenancy → Catalog/Menu → BusinessDay → Ordering → Payments → Closing → Sync → Billing. Feitos: fundação, Identity (autocadastro, login, refresh, troca de tenant) e Catalog/Menu (produtos, tamanhos, cardápios, If-Match/ETag). Pendentes de Identity: convites, dispositivo compartilhado/PIN, funcionários e configurações do tenant.

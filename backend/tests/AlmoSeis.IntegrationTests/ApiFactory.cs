@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -110,6 +111,68 @@ public static class ApiScenarios
 
     public static string AccessToken(this JsonElement authResult) =>
         authResult.GetProperty("tokens").GetProperty("accessToken").GetString()!;
+
+    /// Envia JSON com `If-Match: "{version}"` opcional (rotas [M] de 06).
+    public static Task<HttpResponseMessage> SendJsonAsync(this HttpClient client, HttpMethod method, string url, object? body, int? ifMatch = null)
+    {
+        var request = new HttpRequestMessage(method, url) { Content = body is null ? null : JsonContent.Create(body) };
+        if (ifMatch is { } version)
+        {
+            request.Headers.TryAddWithoutValidation("If-Match", $"\"{version}\"");
+        }
+
+        return client.SendAsync(request, TestContext.Current.CancellationToken);
+    }
+
+    /// Lê o corpo exigindo o status esperado; na falha, mostra o corpo e os erros do servidor.
+    public static async Task<JsonElement> ExpectAsync(this HttpResponseMessage response, HttpStatusCode expected, ApiFactory factory)
+    {
+        var content = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        if (response.StatusCode != expected)
+        {
+            throw new InvalidOperationException(
+                $"Esperado {(int)expected}, veio {(int)response.StatusCode}: {content}\n--- erros do servidor ---\n{string.Join("\n---\n", factory.ServerErrors)}");
+        }
+
+        return content.Length == 0 ? default : JsonDocument.Parse(content).RootElement.Clone();
+    }
+
+    public static string TenantId(this JsonElement authResult) =>
+        authResult.GetProperty("me").GetProperty("tenant").GetProperty("id").GetString()!;
+
+    /// Funcionário com outro perfil no estabelecimento de `owner`: um usuário de outro autocadastro ganha
+    /// vínculo direto no banco (o fluxo de convite ainda não existe) e entra escolhendo esse tenant.
+    public static async Task<string> EmployeeTokenAsync(this ApiFactory factory, PostgresFixture db, JsonElement owner, string role)
+    {
+        var email = $"func.{Guid.NewGuid():N}@example.com";
+        var other = await factory.SignUpAsync(SignUpBody(email: email));
+        var userId = Guid.Parse(other.GetProperty("me").GetProperty("user").GetProperty("id").GetString()!);
+        var tenantId = Guid.Parse(owner.TenantId());
+        var employeeId = Guid.CreateVersion7();
+
+        await using (var connection = new Npgsql.NpgsqlConnection(db.SuperuserConnectionString))
+        {
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
+            await using var command = new Npgsql.NpgsqlCommand(
+                """
+                INSERT INTO tenant_employees (id, tenant_id, user_id, display_name, status, security_stamp, joined_at)
+                VALUES (@e, @t, @u, @n, 'ACTIVE', gen_random_uuid(), now());
+                INSERT INTO tenant_employee_roles (tenant_id, tenant_employee_id, role) VALUES (@t, @e, @r);
+                """, connection);
+            command.Parameters.AddWithValue("e", employeeId);
+            command.Parameters.AddWithValue("t", tenantId);
+            command.Parameters.AddWithValue("u", userId);
+            command.Parameters.AddWithValue("n", role.ToLowerInvariant());
+            command.Parameters.AddWithValue("r", role);
+            await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        }
+
+        var login = await factory.CreateClient().PostAsJsonAsync(
+            "/api/v1/auth/login",
+            new { login = email, password = "S3nha-forte!", installationId = "inst_func", preferredTenantId = tenantId },
+            TestContext.Current.CancellationToken);
+        return (await login.ExpectAsync(HttpStatusCode.OK, factory)).AccessToken();
+    }
 
     public static string RandomDigits(int length) =>
         string.Concat(Enumerable.Range(0, length).Select(_ => (char)('0' + Random.Shared.Next(10))));

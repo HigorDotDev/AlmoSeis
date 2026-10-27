@@ -14,11 +14,11 @@ public interface IUnitOfWork
 }
 
 /// Envelope de tempo real de 06 §6.14, montado pelos mappers de cada módulo.
+/// `seq` e `entityVersion` vêm da entrada do feed da mesma transação.
 public sealed record IntegrationEnvelope(
     string EventType,
     string EntityType,
     Guid EntityId,
-    int EntityVersion,
     Guid? ActorEmployeeId,
     object? Data);
 
@@ -81,10 +81,10 @@ internal sealed class UnitOfWork(
         }
     }
 
-    private async Task<Dictionary<Guid, (Guid TenantId, long Seq)>> WriteChangeFeedAsync(
+    private async Task<Dictionary<Guid, (Guid TenantId, long Seq, int Version)>> WriteChangeFeedAsync(
         List<ITenantOwned> synced, CancellationToken cancellationToken)
     {
-        var result = new Dictionary<Guid, (Guid, long)>();
+        var result = new Dictionary<Guid, (Guid, long, int)>();
         var now = time.GetUtcNow();
 
         foreach (var group in synced.GroupBy(e => e.TenantId))
@@ -103,24 +103,25 @@ internal sealed class UnitOfWork(
             {
                 seq++;
                 var id = ((Entity)entity).Id;
+                var version = entity is IVersioned versioned ? versioned.Version : 1;
                 db.Add(new ChangeFeedEntry
                 {
                     TenantId = group.Key,
                     Seq = seq,
                     EntityType = ((ISyncTracked)entity).SyncEntityType,
                     EntityId = id,
-                    EntityVersion = entity is IVersioned versioned ? versioned.Version : 1,
+                    EntityVersion = version,
                     ChangeKind = "UPSERT",
                     OccurredAt = now,
                 });
-                result[id] = (group.Key, seq);
+                result[id] = (group.Key, seq, version);
             }
         }
 
         return result;
     }
 
-    private void WriteOutbox(List<IDomainEvent> events, Dictionary<Guid, (Guid TenantId, long Seq)> seqByEntity)
+    private void WriteOutbox(List<IDomainEvent> events, Dictionary<Guid, (Guid TenantId, long Seq, int Version)> seqByEntity)
     {
         foreach (var domainEvent in events)
         {
@@ -154,7 +155,7 @@ internal sealed class UnitOfWork(
                             occurredAt = domainEvent.OccurredAt,
                             entityType = envelope.EntityType,
                             entityId = envelope.EntityId,
-                            entityVersion = envelope.EntityVersion,
+                            entityVersion = feed.Version,
                             actorEmployeeId = envelope.ActorEmployeeId,
                             data = envelope.Data,
                         },

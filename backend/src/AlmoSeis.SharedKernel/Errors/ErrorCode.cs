@@ -52,6 +52,7 @@ public static class ErrorCodes
     public static readonly ErrorCode TrialAlreadyClaimed = new("TrialAlreadyClaimed", 409, "O teste grátis já foi usado.");
     public static readonly ErrorCode LastOwner = new("LastOwner", 409, "O estabelecimento precisa de pelo menos um proprietário ativo.");
     public static readonly ErrorCode InvitationNotPending = new("InvitationNotPending", 409, "Este código não está mais válido.");
+    public static readonly ErrorCode MenuAlreadyExists = new("MenuAlreadyExists", 409, "Já existe um cardápio para este dia.");
     public static readonly ErrorCode SyncCursorExpired = new("SyncCursorExpired", 410, "A sincronização precisa recomeçar.");
     public static readonly ErrorCode ValidationFailed = new("ValidationFailed", 422, "Dados inválidos.");
     public static readonly ErrorCode IdempotencyKeyReused = new("IdempotencyKeyReused", 422, "Esta chave de operação já foi usada com outros dados.");
@@ -74,6 +75,7 @@ public static class ErrorCodes
         VersionConflict, OperationInProgress, BusinessDayRequired, BusinessDayAlreadyOpen, BusinessDayClosedToday,
         OrderAlreadyPaid, OrderCanceled, OrderHasPayments, PaymentAlreadyReversed, ClosingAlreadyFinalized,
         EmailAlreadyRegistered, PhoneAlreadyRegistered, TrialAlreadyClaimed, LastOwner, InvitationNotPending,
+        MenuAlreadyExists,
         SyncCursorExpired, ValidationFailed, IdempotencyKeyReused, PaymentExceedsBalance, TotalBelowPaidAmount,
         PaymentMethodDisabled, ProductUnavailable, KiloPriceNotConfigured, JustificationRequired, PinLocked,
         AppVersionUnsupported, IdempotencyKeyRequired, IfMatchRequired, TooManyRequests,

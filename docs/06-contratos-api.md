@@ -115,6 +115,7 @@ Conflito de versão (`409`) traz o estado atual em `current` (ADR-0034):
 | 409 | `TrialAlreadyClaimed` | documento ou telefone já usou teste grátis (ADR-0017) |
 | 409 | `LastOwner` | remover ou desativar o último `OWNER` ativo |
 | 409 | `InvitationNotPending` | convite aceito, revogado ou expirado |
+| 409 | `MenuAlreadyExists` | já existe `DAILY` da data, ou modelo do mesmo dia da semana, para o `menuType` (extensão `existingMenuId`) |
 | 410 | `SyncCursorExpired` | `since` mais antigo que a retenção do feed (ADR-0032). Extensão `currentSeq`: o app recarrega tudo e continua a partir dela |
 | 422 | `ValidationFailed` | regras de formato e de negócio por campo |
 | 422 | `IdempotencyKeyReused` | mesma chave com corpo diferente (ADR-0033) |
@@ -569,7 +570,7 @@ Convite inexistente, expirado ou já usado → `404 NotFound` (não diferencia, 
 { "defaultPrice": "6.50", "isAvailable": false, "imageStorageKey": "t/0192d6a0-0000-7000-8000-000000000001/p/0192d6a0-0000-7000-8000-000000000121-20261027.jpg" }
 ```
 
-`kind` não pode mudar depois que o produto foi vendido (`422`). Para "excluir", use `{ "isActive": false }` (RN-002.6).
+`kind` não pode mudar depois que o produto foi vendido ou entrou em algum cardápio (`422`, em `errors.kind`). `imageStorageKey` só aceita chaves do próprio produto (`t/{tenantId}/p/{productId}-*`). Para "excluir", use `{ "isActive": false }` (RN-002.6).
 
 `POST /products/{id}/image-upload`:
 
@@ -729,7 +730,7 @@ Erros:
 }
 ```
 
-`section` vem do `kind` do produto. Bebidas e adicionais não entram em cardápio (`422`). `409` se já existir um `DAILY` da data, ou um modelo do mesmo dia da semana, para o mesmo `menuType`.
+`section` vem do `kind` do produto. Bebidas e adicionais não entram em cardápio (`422`). No `PF`, `pfPrice` nulo em prato principal assume o `defaultPrice` do produto; sem nenhum dos dois → `422`. Fora de `PF` + `MAIN_DISH`, `pfPrice` deve ser `null`. `409 MenuAlreadyExists` (com `existingMenuId`) se já existir um `DAILY` da data, ou um modelo do mesmo dia da semana, para o mesmo `menuType`.
 
 `PUT /menus/{id}/items`: `{ "items": [ { "productId": "...", "pfPrice": null, "isAvailable": true, "sortOrder": 1 } ] }`
 

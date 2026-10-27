@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AlmoSeis.SharedKernel.Application;
 using AlmoSeis.SharedKernel.Domain;
 
 namespace AlmoSeis.Api.Infrastructure;
@@ -15,6 +16,45 @@ public static class ApiJson
         options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseUpper, allowIntegerValues: false));
         options.Converters.Add(new MoneyJsonConverter());
         options.Converters.Add(new UtcDateTimeOffsetConverter());
+        options.Converters.Add(new OptionalJsonConverterFactory());
+    }
+}
+
+/// Campos de PATCH: ausente = Optional sem valor; `null` explícito = Optional com valor nulo.
+public sealed class OptionalJsonConverterFactory : JsonConverterFactory
+{
+    public override bool CanConvert(Type typeToConvert) =>
+        typeToConvert.IsGenericType && typeToConvert.GetGenericTypeDefinition() == typeof(Optional<>);
+
+    public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options) =>
+        (JsonConverter)Activator.CreateInstance(typeof(OptionalJsonConverter<>).MakeGenericType(typeToConvert.GetGenericArguments()[0]))!;
+
+    private sealed class OptionalJsonConverter<T> : JsonConverter<Optional<T>>
+    {
+        public override bool HandleNull => true;
+
+        public override Optional<T> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            // null em campo não anulável (ex.: "isActive": null) é requisição malformada.
+            if (reader.TokenType == JsonTokenType.Null && default(T) is not null && Nullable.GetUnderlyingType(typeof(T)) is null)
+            {
+                throw new JsonException("Este campo não aceita null.");
+            }
+
+            return new Optional<T>(JsonSerializer.Deserialize<T>(ref reader, options)!);
+        }
+
+        public override void Write(Utf8JsonWriter writer, Optional<T> value, JsonSerializerOptions options)
+        {
+            if (value.HasValue)
+            {
+                JsonSerializer.Serialize(writer, value.Value, options);
+            }
+            else
+            {
+                writer.WriteNullValue();
+            }
+        }
     }
 }
 
