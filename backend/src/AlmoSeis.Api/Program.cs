@@ -1,6 +1,7 @@
 using AlmoSeis.Api.Infrastructure;
 using AlmoSeis.Infrastructure;
 using AlmoSeis.Infrastructure.Realtime;
+using AlmoSeis.Modules.Audit;
 using AlmoSeis.Modules.Billing;
 using AlmoSeis.Modules.Catalog;
 using AlmoSeis.Modules.Closing;
@@ -21,6 +22,7 @@ builder.Services.AddClosingModule();
 builder.Services.AddOrderingModule();
 builder.Services.AddPaymentsModule();
 builder.Services.AddSyncModule();
+builder.Services.AddAuditModule();
 // Demais módulos entram aqui à medida que forem implementados (07 §7.5), sempre antes do decorator.
 builder.Services.DecorateCommandHandlers();
 
@@ -44,6 +46,9 @@ builder.Services
 builder.Services.ConfigureHttpJsonOptions(o => ApiJson.Configure(o.SerializerOptions));
 builder.Services.AddSignalR().AddJsonProtocol(o => ApiJson.Configure(o.PayloadSerializerOptions));
 builder.Services.AddSingleton<IRealtimePublisher, SignalRRealtimePublisher>();
+builder.Services.AddOptions<AppVersionOptions>().BindConfiguration(AppVersionOptions.Section);
+builder.Services.AddOptions<RateLimitSettings>().BindConfiguration(RateLimitSettings.Section);
+builder.Services.AddAlmoSeisRateLimiting();
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
 
 var app = builder.Build();
@@ -54,6 +59,9 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
+app.UseMiddleware<AppVersionMiddleware>();
+app.UseMiddleware<RateLimitKeyMiddleware>();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 

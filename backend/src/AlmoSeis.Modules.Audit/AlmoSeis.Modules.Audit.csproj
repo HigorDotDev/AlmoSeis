@@ -1,9 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <PackageReference Include="FluentValidation" />
-  </ItemGroup>
-  <ItemGroup>
     <ProjectReference Include="..\AlmoSeis.SharedKernel\AlmoSeis.SharedKernel.csproj" />
     <ProjectReference Include="..\AlmoSeis.Infrastructure\AlmoSeis.Infrastructure.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Identity\AlmoSeis.Modules.Identity.csproj" />
   </ItemGroup>
 </Project>

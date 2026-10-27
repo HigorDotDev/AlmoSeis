@@ -74,6 +74,14 @@ internal sealed class EmployeeDirectory(AppDbContext db) : IEmployeeDirectory
             .Where(e => ids.Contains(e.Id))
             .ToDictionaryAsync(e => e.Id, e => e.DisplayName, cancellationToken);
     }
+
+    public async Task<IReadOnlyDictionary<Guid, string>> GetDeviceNamesAsync(IEnumerable<Guid> deviceIds, CancellationToken cancellationToken)
+    {
+        var ids = deviceIds.Distinct().ToList();
+        return await db.Set<SharedDevice>().AsNoTracking()
+            .Where(d => ids.Contains(d.Id))
+            .ToDictionaryAsync(d => d.Id, d => d.Name, cancellationToken);
+    }
 }
 
 internal sealed class TenantCalendar(AppDbContext db, ITenantContext tenant, TimeProvider time) : ITenantCalendar

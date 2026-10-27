@@ -31,6 +31,8 @@ public sealed class ApiFactory(PostgresFixture db, Action<IServiceCollection>? s
             ["ConnectionStrings:Platform"] = db.PlatformConnectionString,
             ["Jwt:AllowEphemeralKey"] = "true",
             ["Billing:Asaas:WebhookToken"] = WebhookToken,
+            // Os testes criam muitos estabelecimentos do mesmo "IP"; o rate limiting é testado à parte.
+            ["RateLimiting:Enabled"] = "false",
         }));
         if (services is not null)
         {
