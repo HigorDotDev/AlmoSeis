@@ -159,9 +159,6 @@ internal sealed class AnonymizeCustomerHandler(
     CustomerDtoBuilder dtos,
     TimeProvider time) : ICommandHandler<AnonymizeCustomerCommand, CustomerDto>
 {
-    /// `ck_orders_delivery` exige endereço em pedido de entrega: o snapshot vira um marcador sem dado pessoal.
-    private const string AnonymizedAddress = """{"street":"Endereço anonimizado","number":null,"complement":null,"neighborhood":null,"reference":null}""";
-
     public async Task<CustomerDto> HandleAsync(AnonymizeCustomerCommand command, CancellationToken cancellationToken)
     {
         var customer = await CustomerRules.LoadAsync(db, command.CustomerId, cancellationToken);
@@ -171,19 +168,17 @@ internal sealed class AnonymizeCustomerHandler(
             throw BusinessException.Validation("reason", "Descreva o motivo com pelo menos 5 caracteres.");
         }
 
-        customer.Anonymize(time.GetUtcNow());
-        var tenantId = db.Tenant.TenantId!.Value;
-        await db.Database.ExecuteSqlAsync(
-            $"""
-            UPDATE orders
-               SET customer_name = {Customer.AnonymizedName},
-                   customer_phone = NULL,
-                   delivery_address = CASE WHEN delivery_address IS NULL THEN NULL ELSE {AnonymizedAddress}::jsonb END
-             WHERE tenant_id = {tenantId} AND customer_id = {customer.Id}
-            """,
-            cancellationToken);
+        var now = time.GetUtcNow();
+        customer.Anonymize(now);
 
-        audit.Add("CustomerAnonymized", customer.SyncEntityType, customer.Id, after: new { reason = command.Request.Reason.Trim() });
+        // Pelo agregado (e não por UPDATE em SQL): cada pedido sobe de versão e entra no feed (ADR-0032).
+        var orders = await db.Set<Order>().Where(o => o.CustomerId == customer.Id).ToListAsync(cancellationToken);
+        foreach (var order in orders)
+        {
+            order.AnonymizeCustomer(Customer.AnonymizedName, now);
+        }
+
+        audit.Add("CustomerAnonymized", customer.SyncEntityType, customer.Id, after: new { reason = command.Request.Reason.Trim(), orderCount = orders.Count });
         return await dtos.BuildAsync(customer, cancellationToken);
     }
 }

@@ -373,6 +373,25 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
         RecordChange(OrderChangeKind.OrderCanceled, HasProduction, new { reason = CancellationReason }, by, newId, now);
     }
 
+    /// ADR-0024 §3: snapshot do cliente anonimizado junto com o cadastro, em qualquer estado do pedido (pago ou
+    /// cancelado). Valores financeiros ficam. Sobe a versão para o feed levar a mudança aos aparelhos.
+    public void AnonymizeCustomer(string anonymizedName, DateTimeOffset now)
+    {
+        // ck_orders_delivery exige endereço em entrega: fica um marcador sem dado pessoal.
+        var address = DeliveryAddress is null ? null : new DeliveryAddressDto(AnonymizedAddressStreet, null, null, null, null);
+        if (CustomerName == anonymizedName && CustomerPhone is null && DeliveryAddress == address)
+        {
+            return;
+        }
+
+        CustomerName = anonymizedName;
+        CustomerPhone = null;
+        DeliveryAddress = address;
+        Changed(now);
+    }
+
+    public const string AnonymizedAddressStreet = "Endereço anonimizado";
+
     private bool HasProduction => ProductionStatus is not null;
 
     private List<OrderItem> AddTree(NewItem spec, OrderItem? parent, Guid by, Func<Guid> newId, DateTimeOffset now)

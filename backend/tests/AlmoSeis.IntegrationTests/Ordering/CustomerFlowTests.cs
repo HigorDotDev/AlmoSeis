@@ -119,6 +119,11 @@ public sealed class CustomerFlowTests(PostgresFixture db) : IDisposable
         var s = await OrderingScenario.CreateAsync(_api, db);
         var order = await s.CreateOrderAsync(s.MarmitaDelivery(saveCustomer: true, phone: "+5534999990005"));
         var customerId = Guid.Parse(order.GetProperty("customer").GetProperty("id").GetString()!);
+        // Um segundo pedido do mesmo cliente, cancelado: também é anonimizado.
+        var canceled = await s.CreateOrderAsync(s.MarmitaDelivery(saveCustomer: true, phone: "+5534999990005"));
+        await (await s.Client.SendJsonAsync(HttpMethod.Post, $"/api/v1/orders/{canceled.Id()}/cancel", new { reason = "Cliente desistiu" }, 1))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+        var feedBefore = await s.ScalarAsync<long>("SELECT count(*) FROM change_feed_entries WHERE tenant_id = @t AND entity_type = 'ORDER'");
 
         var attendant = _api.Authenticated(await _api.EmployeeTokenAsync(db, s.Owner, "ATTENDANT"));
         (await (await attendant.SendJsonAsync(HttpMethod.Post, $"/api/v1/customers/{customerId}/anonymize", new { reason = "Pedido do titular" }, 1))
@@ -136,6 +141,16 @@ public sealed class CustomerFlowTests(PostgresFixture db) : IDisposable
         reloaded.GetProperty("customer").GetProperty("phoneNumber").ValueKind.ShouldBe(JsonValueKind.Null);
         reloaded.GetProperty("deliveryAddress").GetProperty("street").GetString().ShouldBe("Endereço anonimizado");
         reloaded.GetProperty("totalAmount").GetString().ShouldBe("55.00"); // valores financeiros ficam
+
+        // A mudança sobe a versão e entra no feed, para os aparelhos atualizarem o pedido (ADR-0032).
+        reloaded.Version().ShouldBe(2);
+        var canceledReloaded = await (await s.Client.GetAsync($"/api/v1/orders/{canceled.Id()}", Ct)).ExpectAsync(HttpStatusCode.OK, _api);
+        canceledReloaded.GetProperty("customer").GetProperty("name").GetString().ShouldBe("Cliente anonimizado");
+        canceledReloaded.Version().ShouldBe(3);
+        (await s.ScalarAsync<long>("SELECT count(*) FROM change_feed_entries WHERE tenant_id = @t AND entity_type = 'ORDER'"))
+            .ShouldBe(feedBefore + 2);
+        (await s.ScalarAsync<long>("SELECT count(*) FROM orders WHERE tenant_id = @t AND (customer_phone IS NOT NULL OR delivery_address::text LIKE '%Acácias%')"))
+            .ShouldBe(0);
 
         (await (await s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/customers/{customerId}", new { name = "Volta" }, 2))
             .ExpectAsync(HttpStatusCode.UnprocessableEntity, _api)).GetProperty("errorCode").GetString().ShouldBe("ValidationFailed");
