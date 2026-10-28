@@ -14,6 +14,7 @@ import {
   EmptyState,
   ErrorState,
   Row,
+  SegmentedControl,
   Skeleton,
   Text,
   font,
@@ -45,7 +46,8 @@ export default function ProductionTab() {
   const sound = usePreferences((s) => s.orderSound);
   const player = useAudioPlayer(require('../../../../assets/sounds/new-order.wav'));
   const [flash, setFlash] = useState<Set<string>>(new Set());
-  const [showCompleted, setShowCompleted] = useState(false);
+  // Celular: um grupo por vez (08 §8.9, docs/10-ux.md D7).
+  const [tab, setTab] = useState<ProductionStatus>('OPEN');
 
   // ADR-0036: aviso sonoro e destaque para pedido novo ou mudança que afeta a cozinha, exceto as próprias (RN-008.6).
   useEffect(
@@ -76,16 +78,14 @@ export default function ProductionTab() {
   const wide = width >= 720;
   const column = (status: ProductionStatus) => {
     const orders = groups[status];
-    const collapsed = status === 'COMPLETED' && !showCompleted && !wide;
     return (
       <View key={status} style={{ flex: wide ? 1 : undefined, gap: space.sm }}>
-        <Row style={{ justifyContent: 'space-between' }}>
+        {wide ? (
           <Text variant="subtitle">
             {productionNames[status]} ({orders.length})
           </Text>
-          {status === 'COMPLETED' && !wide ? <Button title={showCompleted ? 'Recolher' : 'Mostrar'} variant="ghost" onPress={() => setShowCompleted(!showCompleted)} /> : null}
-        </Row>
-        {collapsed ? null : orders.length === 0 ? <Text muted>Nenhum.</Text> : orders.map((o) => <ProductionCard key={o.id} order={o} status={status} flash={flash.has(o.id)} onFlashed={() => setFlash((s) => { const n = new Set(s); n.delete(o.id); return n; })} />)}
+        ) : null}
+        {orders.length === 0 ? <Text muted>Nenhum.</Text> : orders.map((o) => <ProductionCard key={o.id} order={o} status={status} flash={flash.has(o.id)} onFlashed={() => setFlash((s) => { const n = new Set(s); n.delete(o.id); return n; })} />)}
       </View>
     );
   };
@@ -96,7 +96,14 @@ export default function ProductionTab() {
       contentContainerStyle={{ padding: space.lg, gap: space.lg, flexDirection: wide ? 'row' : 'column', alignItems: wide ? 'flex-start' : undefined }}
       refreshControl={<RefreshControl refreshing={board.isRefetching} onRefresh={() => void board.refetch()} />}
     >
-      {ORDER.map(column)}
+      {wide ? (
+        ORDER.map(column)
+      ) : (
+        <>
+          <SegmentedControl value={tab} onChange={setTab} options={ORDER.map((s) => ({ value: s, label: `${productionNames[s]} ${groups[s].length}` }))} />
+          {column(tab)}
+        </>
+      )}
     </ScrollView>
   );
 }

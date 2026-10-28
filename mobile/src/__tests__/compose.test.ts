@@ -1,14 +1,16 @@
 /** Montagem do `POST /orders` (06 §6.9) e prévia em centavos. */
-import type { MarmitaSize, Menu, Product } from '@/api/types';
+import type { MarmitaSize, Menu, Order, OrderItem, Product } from '@/api/types';
 import {
   buildKiloBody,
   buildMarmitaBody,
   buildPfBody,
+  cashSuggestions,
   emptyMarmitaForm,
   previewKiloCents,
   previewMarmitaCents,
   previewPfCents,
   priceBook,
+  repeatOrder,
 } from '@/features/orders/compose';
 
 const product = (id: string, kind: Product['kind'], defaultPrice: string | null, name = id): Product => ({
@@ -97,5 +99,62 @@ describe('PF e quilo', () => {
       weighings: [{ weightGrams: 452 }, { weightGrams: 318 }],
       items: [{ itemKind: 'BEVERAGE', productId: 'coca', quantity: 1, notes: null }],
     });
+  });
+});
+
+describe('repetir último pedido (08 §8.9)', () => {
+  const item = (o: Partial<OrderItem>): OrderItem =>
+    ({ id: 'i', itemKind: 'MARMITA', marmitaSizeId: 'M', productId: null, name: 'Marmita M', composition: null, components: [], quantity: 1, unitPrice: '20.00', lineTotal: '20.00', requiresPreparation: true, notes: null, addons: [], createdAt: '', createdBy: { id: 'e', displayName: 'Ana' }, ...o }) as OrderItem;
+  const menuToday = {
+    items: [
+      { productId: 'frango', section: 'MAIN_DISH', isAvailable: true },
+      { productId: 'arroz', section: 'SIDE_DISH', isAvailable: true },
+      { productId: 'bife', section: 'MAIN_DISH', isAvailable: false },
+    ],
+  } as unknown as Menu;
+  let n = 0;
+  const key = () => `k${++n}`;
+
+  it('refaz marmita, adicional e bebida com o que tem hoje e lista o que ficou de fora', () => {
+    const order = {
+      items: [
+        item({
+          quantity: 2,
+          notes: 'sem cebola',
+          components: [
+            { productId: 'frango', role: 'MAIN_DISH', name: 'Frango grelhado' },
+            { productId: 'arroz', role: 'SIDE_DISH', name: 'Arroz' },
+            { productId: 'farofa', role: 'SIDE_DISH', name: 'Farofa' },
+          ],
+          addons: [{ id: 'a', itemKind: 'ADDON', productId: 'ovo', name: 'Ovo', quantity: 1, unitPrice: '2.00', lineTotal: '2.00', requiresPreparation: true, notes: null, createdAt: '', createdBy: { id: 'e', displayName: 'Ana' } }],
+        }),
+        item({ itemKind: 'BEVERAGE', marmitaSizeId: null, productId: 'coca', name: 'Coca', quantity: 1 }),
+      ],
+    } as unknown as Order;
+    const r = repeatOrder(order, menuToday, sizes, products, key);
+    expect(r.lines).toEqual([{ key: 'k1', sizeId: 'M', quantity: 2, mainDishIds: ['frango'], sideDishIds: ['arroz'], notes: 'sem cebola', addons: [{ productId: 'ovo', quantity: 1 }] }]);
+    expect(r.beverages).toEqual({ coca: 1 });
+    expect(r.dropped).toEqual(['Farofa']);
+  });
+
+  it('marmita sem prato principal disponível ou com tamanho inativo cai inteira', () => {
+    const order = {
+      items: [
+        item({ name: 'Marmita M bife', components: [{ productId: 'bife', role: 'MAIN_DISH', name: 'Bife' }] }),
+        item({ name: 'Marmita G', marmitaSizeId: 'G', components: [{ productId: 'frango', role: 'MAIN_DISH', name: 'Frango grelhado' }] }),
+      ],
+    } as unknown as Order;
+    const r = repeatOrder(order, menuToday, sizes, products, key);
+    expect(r.lines).toEqual([]);
+    expect(r.dropped).toEqual(['Bife', 'Marmita M bife', 'Marmita G']);
+  });
+});
+
+describe('cédulas do Receber', () => {
+  it('as três próximas cédulas acima do valor', () => {
+    expect(cashSuggestions(3500)).toEqual([5000, 10000, 20000]);
+    expect(cashSuggestions(1800)).toEqual([2000, 5000, 10000]);
+    expect(cashSuggestions(5000)).toEqual([10000, 20000]);
+    expect(cashSuggestions(25000)).toEqual([]);
   });
 });

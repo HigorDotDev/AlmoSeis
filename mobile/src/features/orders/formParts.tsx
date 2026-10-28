@@ -1,9 +1,9 @@
 /** Peças dos formulários de pedido: oferta de rascunho, bebidas, adicionais, rodapé com prévia. */
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import type { Product } from '@/api/types';
-import { Banner, Button, Card, QuantityStepper, Row, SyncStatePill, Text, space, useColors } from '@/components/ui';
+import type { MarmitaSize, Product } from '@/api/types';
+import { Banner, Button, Card, QuantityStepper, Row, SyncStatePill, Text, radius, space, useColors } from '@/components/ui';
 import type { Draft } from '@/db/schema';
 import { formatBRL } from '@/lib/money';
 import { formatTime } from '@/lib/dates';
@@ -102,6 +102,45 @@ export function SubmitFooter({
         </Row>
       ) : null}
       <Button title={label} size="large" onPress={onPress} disabled={disabled || !online || unknown} loading={loading} />
+    </View>
+  );
+}
+
+/** Tamanhos como blocos grandes com o preço: o primeiro toque da nova marmita (08 §8.9, docs/10-ux.md D5). */
+export function SizeTiles({ sizes, onPick, disabled }: { sizes: MarmitaSize[]; onPick: (sizeId: string) => void; disabled?: boolean }) {
+  const c = useColors();
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
+      {sizes.map((s) => (
+        <Pressable
+          key={s.id}
+          disabled={disabled}
+          onPress={() => onPick(s.id)}
+          accessibilityRole="button"
+          accessibilityLabel={`Adicionar marmita ${s.name}, ${formatBRL(s.price)}`}
+          accessibilityState={{ disabled: !!disabled }}
+          style={({ pressed }) => ({
+            flexGrow: 1,
+            flexBasis: '30%',
+            minHeight: 80,
+            borderRadius: radius.md,
+            borderWidth: 1.5,
+            borderColor: c.border,
+            backgroundColor: pressed ? c.primaryBg : c.surface,
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 2,
+            opacity: disabled ? 0.45 : 1,
+          })}
+        >
+          <Text variant="big" numberOfLines={1} adjustsFontSizeToFit>
+            {s.name}
+          </Text>
+          <Text variant="small" muted style={{ fontWeight: '600' }}>
+            {formatBRL(s.price)}
+          </Text>
+        </Pressable>
+      ))}
     </View>
   );
 }

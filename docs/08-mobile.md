@@ -352,27 +352,35 @@ Convenções:
   - cards `OrderCard` com número, cliente, entrega ou retirada, total, `PaymentBadge` (financeiro), `ProductionBadge` (produção) e o ponto de alerta;
   - FAB "Nova marmita".
 - **Sem cardápio** (`404 MenuNotFound`): o `MenuMissingCard` oferece "Usar o de ontem", "Usar o da semana passada" (`POST /menus/{id}/clone`), "Usar modelo semanal" e "Montar agora" (`menu/menus/today`), conforme `sources` (RN-003.2).
+- **Primeiro uso — "Prepare seu restaurante"** (`docs/10-ux.md` D1): sem expediente aberto e com o cadastro incompleto (nenhum tamanho de marmita ativo **ou** nenhum prato principal ativo), quem tem `catalog.manage` vê o `SetupChecklist` no lugar do `NoBusinessDayCard`. Passos, cada um com uma frase de explicação e o atalho:
+  1. Tamanhos de marmita (`/marmita-sizes`, feito com ≥ 1 ativo) → `menu/sizes` — "O preço da marmita vem do tamanho: P, M, G.";
+  2. Pratos principais (`/products`, feito com ≥ 1 `MAIN_DISH` ativo) → `menu/products`;
+  3. Formas de pagamento (só conferir, sem marca de feito) → `menu/payment-methods`, com `settings.manage`;
+  4. Abrir o expediente → `business-day/open`, liberado depois dos passos 1 e 2 e com `cash.open`.
+
+  O cardápio do dia vem depois da abertura, pelo `MenuMissingCard`. Sem `catalog.manage`, a pessoa vê o `NoBusinessDayCard` de sempre. Não há rota nova: tudo usa leituras que o app já faz.
 
 ### Nova marmita — `orders/new/marmita`
 
-Formulário de uma página, com seções recolhíveis. O rascunho é salvo automaticamente.
+Formulário de uma página, **marmita primeiro** (`docs/10-ux.md` D5). O rascunho é salvo automaticamente.
 
-1. **Cliente:**
+1. **Tamanho:** blocos grandes com o preço (`/marmita-sizes`). Tocar num tamanho abre o `MarmitaBuilderSheet` já com ele escolhido:
+   - tamanho (pode trocar), prato(s) principal(is) e acompanhamentos (multi-seleção) do cardápio do dia, com os indisponíveis desabilitados e riscados;
+   - adicionais;
+   - quantidade (`QuantityStepper`) e observação;
+   - com o botão desabilitado, uma linha diz o que falta ("Escolha o prato principal").
+
+   Cada marmita vira uma linha editável e duplicável ("+1 igual").
+2. **Bebidas:** grade de bebidas disponíveis com stepper.
+3. **Cliente:**
    - `CustomerPicker`: busca por telefone ou nome (`/customers?search=`), mostra as pendências do cliente ("Deve R$ 35,00");
+   - com cliente salvo escolhido: **"Repetir último pedido"** — `GET /orders?customerId=&allDays=true&orderType=MARMITA&limit=1` e `GET /orders/{id}`; as marmitas e bebidas viram linhas do formulário, sem o que não está no cardápio de hoje ou não existe mais (avisa o que ficou de fora). Os preços são os de hoje;
    - ou nome e telefone livres + "Salvar cliente" (`saveCustomer`).
-2. **Atendimento:** Entrega / Retirada. Na entrega:
+4. **Atendimento:** Retirada / Entrega. Na entrega:
    - escolher um endereço salvo ou digitar um;
    - taxa de entrega pré-preenchida com o padrão, editável só com `orders.delivery-fee.edit`.
-3. **Marmitas:** "Adicionar marmita" abre o `MarmitaBuilderSheet`:
-   - tamanho em chips com preço (`/marmita-sizes`);
-   - prato(s) principal(is) e acompanhamentos (multi-seleção) do cardápio do dia, com os indisponíveis desabilitados e riscados;
-   - adicionais;
-   - quantidade (`QuantityStepper`) e observação.
-   
-   Cada marmita vira uma linha editável e duplicável ("+1 igual").
-4. **Bebidas:** grade de bebidas disponíveis com stepper.
 5. **Observações do pedido.**
-6. **Resumo fixo no rodapé:** "Prévia: R$ 55,00", calculada em centavos com os preços do cache, e o botão "Registrar pedido" → Confirma → `POST /orders` [I].
+6. **Resumo fixo no rodapé:** "Prévia: R$ 55,00", calculada em centavos com os preços do cache, e o botão "Registrar R$ 55,00" → Confirma → `POST /orders` [I].
 
 Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 
@@ -417,11 +425,11 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 
 - **Saldo em destaque.** Formas de pagamento habilitadas (`['settings']`) em botões grandes.
 - **Valor:** `MoneyInput`, pré-preenchido com o saldo.
-- **Dinheiro:** campo "Recebido" opcional, com o troco calculado na hora ("Troco: R$ 15,00").
+- **Dinheiro:** campo "Recebido" opcional, com atalhos "Exato" e as três próximas cédulas acima do valor (de R$ 5, 10, 20, 50, 100, 200), e o troco em destaque ("Troco R$ 15,00").
 - **"Dividir conta":**
   - *Igual entre N pessoas*: gera N parcelas (a última absorve os centavos);
   - *Por itens*: soma os itens marcados.
-  
+
   Cada parcela vira um pagamento separado com `label` "Pessoa N", confirmado um a um. Cada um é uma `useCriticalMutation` própria e usa a versão devolvida pelo anterior.
 - "Confirmar recebimento" → Confirma ("Receber R$ 35,00 em dinheiro do pedido #12? Troco R$ 15,00") → `POST /orders/{id}/payments` [I][M].
 - **Pedido de outro dia** (fiado, RF-011): a confirmação avisa "Pedido de 26/10. O recebimento entra no caixa de hoje."
@@ -430,7 +438,7 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 ### Aba Pedidos (produção) — `(tabs)/pedidos`
 
 - **Dados:** `['production', businessDayId]` (`GET /production/orders`).
-- **Layout:** três colunas no tablet (largura ≥ 720 dp) ou três seções empilhadas no celular, na ordem **Abertos → Em produção → Concluídos**, cada uma do mais antigo para o mais novo (RN-007.4/7.5). Concluídos ficam recolhidos por padrão.
+- **Layout:** três colunas no tablet (largura ≥ 720 dp); no celular, um segmentado **Abertos (n) / Em produção (n) / Concluídos (n)** mostra um grupo por vez (`docs/10-ux.md` D7). Cada grupo vai do mais antigo para o mais novo (RN-007.4/7.5).
 - **`ProductionCard`:**
   - número grande, rótulo (cliente/mesa), há quanto tempo foi criado ("há 12 min");
   - itens com composição e observações em destaque;

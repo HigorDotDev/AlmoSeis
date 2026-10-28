@@ -18,6 +18,7 @@ export const qk = {
   menuList: (f: object) => ['menus', 'list', f] as const,
   orders: (f: OrderFilters) => ['orders', 'list', f] as const,
   order: (id: string) => ['orders', id] as const,
+  lastMarmitaOrder: (customerId: string | null) => ['orders', 'lastMarmita', customerId] as const,
   orderAlerts: (id: string) => ['orders', id, 'alerts'] as const,
   orderHistory: (id: string) => ['orders', id, 'history'] as const,
   orderPayments: (id: string) => ['orders', id, 'payments'] as const,

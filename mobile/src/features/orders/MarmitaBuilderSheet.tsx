@@ -18,6 +18,7 @@ import { AddonPicker } from './formParts';
 export function MarmitaBuilderSheet({
   visible,
   initial,
+  initialSizeId,
   sizes,
   menu,
   addons,
@@ -26,13 +27,15 @@ export function MarmitaBuilderSheet({
 }: {
   visible: boolean;
   initial: MarmitaLine | null;
+  /** Tamanho tocado na tela (marmita primeiro, 08 §8.9). */
+  initialSizeId?: string | null;
   sizes: MarmitaSize[];
   menu: Menu | null;
   addons: Product[];
   onSave: (line: MarmitaLine) => void;
   onClose: () => void;
 }) {
-  const blank = (): MarmitaLine => ({ key: newKey(), sizeId: sizes[0]?.id ?? '', quantity: 1, mainDishIds: [], sideDishIds: [], notes: '', addons: [] });
+  const blank = (): MarmitaLine => ({ key: newKey(), sizeId: initialSizeId ?? sizes[0]?.id ?? '', quantity: 1, mainDishIds: [], sideDishIds: [], notes: '', addons: [] });
   const [line, setLine] = useState<MarmitaLine>(initial ?? blank());
   const canManageCatalog = usePermission('catalog.manage');
 
@@ -42,6 +45,7 @@ export function MarmitaBuilderSheet({
   const items = menu?.items ?? [];
   const mains = items.filter((i) => i.section === 'MAIN_DISH');
   const sides = items.filter((i) => i.section === 'SIDE_DISH');
+  const missing = !line.sizeId ? 'Escolha o tamanho.' : line.mainDishIds.length === 0 ? 'Escolha o prato principal.' : null;
 
   return (
     <BottomSheet
@@ -49,14 +53,23 @@ export function MarmitaBuilderSheet({
       title={initial ? 'Editar marmita' : 'Adicionar marmita'}
       onClose={onClose}
       footer={
-        <Button
-          title={initial ? 'Salvar marmita' : 'Adicionar ao pedido'}
-          disabled={!line.sizeId || line.mainDishIds.length === 0}
-          onPress={() => {
-            onSave(line);
-            onClose();
-          }}
-        />
+        <View style={{ gap: 4 }}>
+          {/* O botão desabilitado diz o que falta (docs/10-ux.md D3). */}
+          {missing ? (
+            <Text variant="small" muted style={{ textAlign: 'center' }}>
+              {missing}
+            </Text>
+          ) : null}
+          <Button
+            title={initial ? 'Salvar marmita' : 'Adicionar ao pedido'}
+            size="large"
+            disabled={!!missing}
+            onPress={() => {
+              onSave(line);
+              onClose();
+            }}
+          />
+        </View>
       }
     >
       <Text variant="subtitle">Tamanho</Text>

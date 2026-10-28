@@ -35,6 +35,20 @@ export function useOrder(id: string | undefined) {
   return useQuery({ queryKey: qk.order(id ?? ''), queryFn: async () => (await ordersApi.get(id!)).data, enabled: !!id, staleTime: STALE });
 }
 
+/** Último pedido de marmita do cliente, em qualquer dia, para "Repetir último pedido" (08 §8.9). */
+export function useLastMarmitaOrder(customerId: string | null) {
+  return useQuery({
+    queryKey: qk.lastMarmitaOrder(customerId),
+    queryFn: async () => {
+      const page = (await ordersApi.list({ customerId: customerId!, allDays: true, orderType: 'MARMITA', cancellationStatus: 'ACTIVE', limit: 1 })).data;
+      const last = page.items[0];
+      return last ? (await ordersApi.get(last.id)).data : null;
+    },
+    enabled: !!customerId,
+    staleTime: STALE,
+  });
+}
+
 export function useOrderAlerts(id: string, enabled = true) {
   return useQuery({ queryKey: qk.orderAlerts(id), queryFn: async () => (await ordersApi.alerts(id)).data.items, enabled, staleTime: STALE });
 }

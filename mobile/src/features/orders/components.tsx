@@ -18,7 +18,9 @@ import {
   space,
 } from '@/components/ui';
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
+import { useMarmitaSizes, useProducts } from '@/features/catalog/hooks';
 import { useCloneMenu } from '@/features/menu/hooks';
+import { SetupChecklist, setupComplete, setupState } from '@/features/onboarding/SetupChecklist';
 import { formatBRL } from '@/lib/money';
 import { fulfillmentNames } from '@/lib/strings';
 import { formatTime } from '@/lib/dates';
@@ -63,9 +65,19 @@ export function OrderCard({ order }: { order: OrderSummary }) {
   );
 }
 
-/** Sem expediente aberto: abrir (com `cash.open`) ou pedir ao caixa (08 §8.8). */
+/**
+ * Sem expediente aberto: abrir (com `cash.open`) ou pedir ao caixa (08 §8.8).
+ * Com o cadastro incompleto, quem gerencia o catálogo vê o "Prepare seu restaurante" (08 §8.9).
+ */
 export function NoBusinessDayCard() {
   const canOpen = usePermission('cash.open');
+  const canCatalog = usePermission('catalog.manage');
+  const sizes = useMarmitaSizes();
+  const products = useProducts();
+  if (canCatalog && sizes.data && products.data) {
+    const state = setupState(sizes.data, products.data);
+    if (!setupComplete(state)) return <SetupChecklist state={state} />;
+  }
   return (
     <Card>
       <EmptyState

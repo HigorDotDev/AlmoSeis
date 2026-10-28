@@ -26,6 +26,7 @@ import {
   useColors,
 } from '@/components/ui';
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
+import { cashSuggestions } from '@/features/orders/compose';
 import { summarizeOrder, useOrder } from '@/features/orders/hooks';
 import { useSettings } from '@/features/session/hooks';
 import { formatBusinessDate } from '@/lib/dates';
@@ -190,8 +191,27 @@ function PayForm({ order: o }: { order: Order }) {
           <MoneyInput label={label ? `Valor (${label})` : 'Valor'} value={amount} onChange={setAmount} error={amountCents > balanceCents ? `O valor passa do saldo (${formatBRL(o.balance)}).` : null} />
           {method === 'CASH' ? (
             <>
+              {/* Atalhos de cédulas e troco em destaque (docs/10-ux.md D11). */}
+              <Text muted style={{ fontWeight: '600' }}>
+                Cliente deu
+              </Text>
+              <Row style={{ flexWrap: 'wrap' }}>
+                <Chip label="Exato" selected={received !== null && toCents(received) === amountCents} onPress={() => setReceived(amount)} />
+                {cashSuggestions(amountCents).map((n) => (
+                  <Chip key={n} label={formatBRL(n).replace(',00', '')} selected={received !== null && toCents(received) === n} onPress={() => setReceived(fromCents(n))} />
+                ))}
+              </Row>
               <MoneyInput label="Recebido em dinheiro (opcional)" value={received ?? '0.00'} onChange={setReceived} />
-              {changeCents > 0 ? <Text variant="subtitle">Troco: {formatBRL(changeCents)}</Text> : null}
+              {changeCents > 0 ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: space.lg, borderRadius: radius.md, backgroundColor: c.successBg }}>
+                  <Text variant="subtitle" style={{ color: c.success }}>
+                    Troco
+                  </Text>
+                  <Text variant="big" style={{ color: c.success }}>
+                    {formatBRL(changeCents)}
+                  </Text>
+                </View>
+              ) : null}
               {received && toCents(received) > 0 && changeCents < 0 ? <Text style={{ color: c.danger }}>O recebido é menor que o valor.</Text> : null}
             </>
           ) : null}

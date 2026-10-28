@@ -2,7 +2,7 @@
  * Formulários de pedido → corpo do `POST /orders` (06 §6.9) e prévia em centavos com os preços do cache.
  * A prévia é só prévia: o total oficial vem da API (ADR-0030).
  */
-import type { Address, CreateOrderBody, MarmitaSize, Menu, NewItemInput, Product } from '@/api/types';
+import type { Address, CreateOrderBody, MarmitaSize, Menu, NewItemInput, Order, Product } from '@/api/types';
 import { formatBRL, toCents, type MoneyString } from '@/lib/money';
 import { previewKiloAmountCents } from '@/lib/weight';
 
@@ -237,4 +237,64 @@ export function marmitaLineLabel(line: MarmitaLine, book: PriceBook): string {
   const size = book.sizes.get(line.sizeId)?.name ?? '?';
   const names = (ids: string[]) => ids.map((id) => book.products.get(id)?.name ?? '?').join(', ');
   return [`Marmita ${size}`, names(line.mainDishIds), names(line.sideDishIds)].filter(Boolean).join(' · ');
+}
+
+/** Resultado de "Repetir último pedido": linhas prontas e o que ficou de fora. */
+export interface RepeatedOrder {
+  lines: MarmitaLine[];
+  beverages: Record<string, number>;
+  /** Nomes do que não entra hoje (fora do cardápio, indisponível ou inativo). */
+  dropped: string[];
+}
+
+/**
+ * 08 §8.9 "Repetir último pedido": refaz as marmitas e bebidas de um pedido antigo com o que existe hoje.
+ * Tamanho inativo derruba a marmita; prato fora do cardápio ou indisponível sai da composição, e a marmita
+ * sem prato principal cai. Os preços são os de hoje (o pedido novo é cotado pela API).
+ */
+export function repeatOrder(order: Order, menu: Menu | null, sizes: MarmitaSize[], products: Product[], newLineKey: () => string): RepeatedOrder {
+  const sizeOk = new Set(sizes.filter((s) => s.isActive).map((s) => s.id));
+  const onMenu = new Map((menu?.items ?? []).filter((i) => i.isAvailable).map((i) => [i.productId, i.section]));
+  const usable = new Map(products.filter((p) => p.isActive && p.isAvailable).map((p) => [p.id, p]));
+  const lines: MarmitaLine[] = [];
+  const beverages: Record<string, number> = {};
+  const dropped = new Set<string>();
+
+  for (const item of order.items) {
+    if (item.itemKind === 'BEVERAGE') {
+      if (item.productId && usable.has(item.productId)) beverages[item.productId] = (beverages[item.productId] ?? 0) + item.quantity;
+      else dropped.add(item.name);
+      continue;
+    }
+    if (item.itemKind !== 'MARMITA') continue;
+    if (!item.marmitaSizeId || !sizeOk.has(item.marmitaSizeId)) {
+      dropped.add(item.name);
+      continue;
+    }
+    const pick = (role: 'MAIN_DISH' | 'SIDE_DISH') =>
+      item.components.filter((c) => c.role === role).flatMap((c) => {
+        if (onMenu.get(c.productId) === role) return [c.productId];
+        dropped.add(c.name);
+        return [];
+      });
+    const mainDishIds = pick('MAIN_DISH');
+    const sideDishIds = pick('SIDE_DISH');
+    if (mainDishIds.length === 0) {
+      dropped.add(item.name);
+      continue;
+    }
+    const addons = item.addons.flatMap((a) => {
+      if (usable.get(a.productId)?.kind === 'ADDON') return [{ productId: a.productId, quantity: a.quantity }];
+      dropped.add(a.name);
+      return [];
+    });
+    lines.push({ key: newLineKey(), sizeId: item.marmitaSizeId, quantity: item.quantity, mainDishIds, sideDishIds, notes: item.notes ?? '', addons });
+  }
+  return { lines, beverages, dropped: [...dropped] };
+}
+
+/** Atalhos de dinheiro recebido (08 §8.9 Receber): as três próximas cédulas acima do valor. */
+export function cashSuggestions(amountCents: number): number[] {
+  const notes = [500, 1000, 2000, 5000, 10000, 20000];
+  return notes.filter((n) => n > amountCents).slice(0, 3);
 }
