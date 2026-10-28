@@ -28,6 +28,7 @@ import type { Draft, PendingOperation } from '@/db/schema';
 import { useAuditLogs } from '@/features/employees/hooks';
 import { useSetPin, useSettings, useSubscription, useSwitchTenant, useTenant, useUpdateSettings, useUpdateTenant } from '@/features/session/hooks';
 import { confirmSignOut } from '@/features/shell/AppShell';
+import { ChangePasswordSection } from '@/features/settings/ChangePasswordSection';
 import { discardPending, isExpired, resendPending, resolveUnknown } from '@/features/sync/operations';
 import { formatDateTime } from '@/lib/dates';
 import { formatBRL, toCents } from '@/lib/money';
@@ -69,9 +70,8 @@ export function ProfileScreen() {
         />
       </Section>
 
-      <Section title="Senha">
-        <Text muted>Para trocar a senha, use “Esqueci a senha” no login (com e-mail) ou peça um código ao proprietário.</Text>
-      </Section>
+      {/* Sessão por PIN em aparelho compartilhado: a senha se troca no aparelho da própria pessoa. */}
+      {me.sharedDevice ? null : <ChangePasswordSection />}
 
       {me.memberships.length > 1 ? (
         <Section title="Trocar de estabelecimento">

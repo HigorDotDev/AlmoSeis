@@ -11,6 +11,9 @@ export const authApi = {
   switchTenant: (tenantId: Uuid) => apiRequest<Session>('POST', '/auth/switch-tenant', { body: { tenantId } }),
   me: () => apiRequest<Me>('GET', '/auth/me'),
   setPin: (pin: string, currentPassword: string) => apiRequest<void>('PUT', '/auth/me/pin', { body: { pin, currentPassword } }),
+  /** Os outros aparelhos da pessoa saem no próximo refresh; este continua logado. */
+  changePassword: (currentPassword: string, newPassword: string) =>
+    apiRequest<void>('PUT', '/auth/me/password', { body: { currentPassword, newPassword } }),
   resetPassword: (body: { code: string; login: string; newPassword: string } | { emailToken: string; newPassword: string }) =>
     apiRequest<void>('POST', '/auth/password/reset', { body, anonymous: true }),
   forgotPassword: (email: string) => apiRequest<void>('POST', '/auth/password/forgot', { body: { email }, anonymous: true }),

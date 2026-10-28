@@ -73,3 +73,10 @@ export function useSetPin() {
     onSuccess: () => client.invalidateQueries({ queryKey: qk.me }),
   });
 }
+
+export function useChangePassword() {
+  return useMutation({
+    mutationFn: ({ currentPassword, newPassword }: { currentPassword: string; newPassword: string }) =>
+      authApi.changePassword(currentPassword, newPassword),
+  });
+}
