@@ -43,6 +43,7 @@ Estas são as regras "sempre/nunca" que todo agente segue. Cada regra cita o ADR
 - Acessar a API por hooks (`useOrders`, `useRegisterPayment`), nunca chamando `fetch`/axios dentro de tela.
 - Gerar a `Idempotency-Key` ao confirmar a operação, persistir junto com a operação pendente e reutilizar em todo reenvio (ADR-0033).
 - Enviar `If-Match` com a `version` em cache e tratar `409 VersionConflict` mostrando a diferença (ADR-0034).
+  - Exceção: nas telas de gestão (produto, tamanho, cardápio, cliente, funcionário, convite, configurações, estabelecimento), cujas rotas são só [M], o `409` aparece como mensagem de erro e o app recarrega os dados da tela, sem a folha de diferença. Essas telas usam mutação simples em vez de `useCriticalMutation` (08 §8.5).
 - Diferenciar visualmente o que é rascunho, pendente e confirmado (RN-014.5). Status de produção e status financeiro também são visualmente distintos.
 - Mostrar o diálogo de confirmação antes de toda escrita persistente (RF-012), com o resumo da operação e dos valores.
 - Fazer contas de dinheiro em centavos inteiros. O valor oficial é sempre o devolvido pela API (ADR-0030).

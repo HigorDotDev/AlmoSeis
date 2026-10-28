@@ -164,7 +164,9 @@ CREATE TABLE IF NOT EXISTS pending_operations (
 
 ## 8.5 Escritas críticas e resultado desconhecido (ADR-0010, ADR-0033, ADR-0034)
 
-Todo endpoint [I] ou [M] do 06 passa pelo hook `useCriticalMutation`:
+Todo endpoint [I] ou [M] do 06 passa pelo hook `useCriticalMutation`, com uma exceção:
+
+> **Exceção — telas de gestão (decisão do usuário, 2026-10-27).** Produto, tamanho, cardápio, cliente, funcionário, convite, configurações e estabelecimento usam mutação simples do TanStack Query. Essas rotas são só [M] (nenhuma é [I] no 06), então o `If-Match` continua indo sempre e um reenvio com a mesma versão dá `409`, nunca duplica. O `409 VersionConflict` aparece como mensagem de erro (sem a folha de diferença), e um `MutationCache` global recarrega as consultas ativas para a próxima tentativa já ir com a versão nova. Se alguma dessas rotas passar a ser [I], ela volta para `useCriticalMutation`.
 
 ```ts
 const mutation = useCriticalMutation({
@@ -566,7 +568,7 @@ Critério de pronto do mobile (`docs/02-padroes.md` §2.6): fluxos E2E 1 e 2 pas
 | Rotas | Cada arquivo em `app/` só reexporta uma tela de `src/features/*/screens`; o ESLint proíbe `fetch` em `app/` | Regra de 8.2 garantida por ferramenta |
 | Escritas [I] | `src/api/critical.ts` descreve cada uma como dado (`{method, path, body, ifMatch}`); a pendência guarda exatamente isso e o reenvio repete chave e corpo | Única fonte desses caminhos; reenvio idêntico ao envio original |
 | Escritas só [M] do pedido | Status, alterar/remover item, remover pesagem, editar dados e cancelar usam `useCriticalMutation` com `idempotent: false`: sem `Idempotency-Key` e sem pendência. Falha de rede recarrega o pedido e pede conferência | Não há o que consultar em `/operations`; reenviar com a mesma versão dá `409`, nunca duplica |
-| Escritas de gestão | Produto, tamanho, cardápio, cliente, funcionário, convite, configurações e estabelecimento usam mutação simples do TanStack Query; `409` aparece como erro e um `MutationCache` global recarrega as consultas ativas | Telas de cadastro, fora do caixa; nenhum ADR exige mais (o If-Match vai sempre). **A confirmar** como exceção ao "todo [I]/[M]" de 8.5 e ao "409 mostrando a diferença" de 02 §2.3 |
+| Escritas de gestão | Produto, tamanho, cardápio, cliente, funcionário, convite, configurações e estabelecimento usam mutação simples do TanStack Query; `409` aparece como erro e um `MutationCache` global recarrega as consultas ativas | Telas de cadastro, fora do caixa; nenhum ADR exige mais (o If-Match vai sempre). **Aceita** pelo usuário em 2026-10-27 como exceção registrada em 8.5 e em 02 §2.3 |
 | `SENDING` antigo | No sync, pendência `SENDING` com mais de 30 s é tratada como `UNKNOWN` | É o app que morreu no meio do envio; a recente ainda pode estar em voo |
 | `COMPLETED` com erro | `/operations` com `responseStatus` 4xx encerra a pendência e mantém o rascunho | A operação foi processada e recusada; reenviar daria a mesma recusa |
 | Pendência > 72 h | Nunca reenviada pelo app (8.5 passo 5 reescrito); a pessoa confere o histórico e refaz | Não há como procurar o recurso de forma genérica, e uma chave nova poderia duplicar |
