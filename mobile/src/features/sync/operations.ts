@@ -22,10 +22,14 @@ export type CriticalOutcome<T> =
   | { kind: 'confirmed'; result: ApiResult<T> }
   | { kind: 'rejected'; error: ApiError }
   | { kind: 'conflict'; error: ApiError; current: unknown }
-  | { kind: 'unknown'; key: string | null; error: unknown };
+  | { kind: 'unknown'; key: string | null; error: unknown }
+  /** Já há uma pendência desta mesma ação: nada foi enviado; resolva a pendência antes (RN-009.9). */
+  | { kind: 'blocked'; op: PendingOperation };
 
 export interface RunCriticalInput {
   tenantId: string;
+  /** `GET /operations` só enxerga as chaves do próprio usuário (06 §6.12): a pendência é de quem enviou. */
+  employeeId: string;
   request: CriticalRequest;
   /** Texto para a lista de pendências: "Pagamento de R$ 35,00 — pedido #12". */
   description: string;
@@ -44,6 +48,14 @@ export async function runCritical<T>(input: RunCriticalInput): Promise<CriticalO
   const store = usePendingOps.getState();
   let key: string | null = null;
 
+  if (idempotent && !input.existingKey) {
+    const blocking = await findBlocking(input);
+    if (blocking) {
+      store.put(blocking);
+      return { kind: 'blocked', op: blocking };
+    }
+  }
+
   if (idempotent) {
     if (input.existingKey) {
       key = input.existingKey;
@@ -55,6 +67,7 @@ export async function runCritical<T>(input: RunCriticalInput): Promise<CriticalO
       const op: PendingOperation = {
         idempotencyKey: key,
         tenantId: input.tenantId,
+        employeeId: input.employeeId,
         draftId: input.draftId ?? null,
         method: input.request.method,
         path: input.request.path,
@@ -76,7 +89,8 @@ export async function runCritical<T>(input: RunCriticalInput): Promise<CriticalO
     await settle(key, input.draftId ?? null);
     return { kind: 'confirmed', result };
   } catch (error) {
-    if (error instanceof ApiError && error.status < 500) {
+    // 409 OperationInProgress (ADR-0033): a mesma chave ainda está em execução no servidor; não é recusa.
+    if (error instanceof ApiError && error.status < 500 && !error.is('OperationInProgress')) {
       if (key) {
         await pendingOpsRepo.remove(key);
         store.drop(key);
@@ -95,6 +109,20 @@ export async function runCritical<T>(input: RunCriticalInput): Promise<CriticalO
   }
 }
 
+/**
+ * Pendência da mesma ação ainda sem desfecho: o mesmo rascunho (pedido novo, inclusão de itens) ou, sem rascunho,
+ * o mesmo método e caminho (pagamento do pedido, movimentação de caixa, ajuste). Vale em qualquer status, inclusive
+ * SENDING de um app que morreu no meio do envio.
+ */
+async function findBlocking(input: RunCriticalInput): Promise<PendingOperation | null> {
+  const ops = await pendingOpsRepo.list(input.tenantId, input.employeeId);
+  return (
+    ops.find((o) =>
+      input.draftId ? o.draftId === input.draftId : o.method === input.request.method && o.path === input.request.path,
+    ) ?? null
+  );
+}
+
 /** Confirmado: some a pendência e o rascunho (o rascunho só é apagado depois do servidor confirmar). */
 async function settle(key: string | null, draftId: string | null): Promise<void> {
   if (key) {
@@ -109,6 +137,8 @@ async function settle(key: string | null, draftId: string | null): Promise<void>
 export type ResolveResult =
   | { kind: 'completed'; resourceId: string | null; responseStatus: number | null }
   | { kind: 'failed' }
+  /** Mais de 72 h: o registro de idempotência expirou, então NOT_FOUND não prova que a operação não chegou. */
+  | { kind: 'expired' }
   | { kind: 'stillUnknown' };
 
 export interface ResolveOptions {
@@ -148,6 +178,12 @@ export async function resolveUnknown(op: PendingOperation, options: ResolveOptio
         return { kind: 'completed', resourceId: info.resourceId, responseStatus: info.responseStatus };
       }
       case 'NOT_FOUND': {
+        if (isExpired(op)) {
+          await pendingOpsRepo.setStatus(op.idempotencyKey, 'UNKNOWN', 'Mais de 72 h: confira no histórico se a operação entrou.');
+          const updated = await pendingOpsRepo.get(op.idempotencyKey);
+          if (updated) store.put(updated);
+          return { kind: 'expired' };
+        }
         // Nunca chegou: seguro reenviar com a mesma chave, mas só quando a pessoa pedir.
         await pendingOpsRepo.setStatus(op.idempotencyKey, 'FAILED', 'A operação não chegou ao servidor.');
         const updated = await pendingOpsRepo.get(op.idempotencyKey);
@@ -184,22 +220,29 @@ export function isExpired(op: PendingOperation, now = Date.now()): boolean {
   return now - new Date(op.createdAt).getTime() > IDEMPOTENCY_TTL_MS;
 }
 
-/** Reenvio pedido pela pessoa. Pendência com mais de 72 h vai com chave nova (a antiga expirou no servidor). */
+/**
+ * Reenvio pedido pela pessoa, só de pendência FAILED (NOT_FOUND dentro das 72 h): mesma chave, mesmo corpo.
+ * Pendência mais antiga nunca é reenviada pelo app, porque não há como saber se ela entrou; a pessoa confere o
+ * histórico e, se preciso, refaz a operação (08 §8.14).
+ */
 export async function resendPending<T>(op: PendingOperation): Promise<CriticalOutcome<T>> {
+  if (op.status !== 'FAILED' || isExpired(op)) {
+    return { kind: 'blocked', op };
+  }
   const request: CriticalRequest = {
     method: op.method as CriticalRequest['method'],
     path: op.path,
     body: op.bodyJson === null ? undefined : JSON.parse(op.bodyJson),
     ifMatch: op.ifMatch ?? undefined,
   };
-  let key = op.idempotencyKey;
-  if (isExpired(op)) {
-    const fresh = newKey();
-    await pendingOpsRepo.rekey(key, fresh);
-    usePendingOps.getState().drop(key);
-    key = fresh;
-  }
-  return runCritical<T>({ tenantId: op.tenantId, request, description: op.description, draftId: op.draftId, existingKey: key });
+  return runCritical<T>({
+    tenantId: op.tenantId,
+    employeeId: op.employeeId,
+    request,
+    description: op.description,
+    draftId: op.draftId,
+    existingKey: op.idempotencyKey,
+  });
 }
 
 export async function discardPending(op: PendingOperation): Promise<void> {

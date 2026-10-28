@@ -33,6 +33,7 @@ export interface CriticalMutationOptions<TVars, TResult> {
 export function useCriticalMutation<TVars, TResult>(options: CriticalMutationOptions<TVars, TResult>) {
   const queryClient = useQueryClient();
   const tenantId = useSession((s) => s.me?.tenant.id);
+  const employeeId = useSession((s) => s.me?.employee.id);
   const online = useConnectivity((s) => s.online);
   const [state, setState] = useState<CriticalState>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -66,6 +67,10 @@ export function useCriticalMutation<TVars, TResult>(options: CriticalMutationOpt
       }
     } else if (result.kind === 'failed') {
       setState('failed');
+      setError('A operação não chegou ao servidor. Reenvie em "Rascunhos e pendências".');
+    } else if (result.kind === 'expired') {
+      setState('failed');
+      setError('Pendência antiga: confira no histórico se ela entrou.');
     }
   }, [queryClient]);
 
@@ -79,13 +84,18 @@ export function useCriticalMutation<TVars, TResult>(options: CriticalMutationOpt
   const run = useCallback(
     async (vars: TVars): Promise<CriticalOutcome<TResult>> => {
       const o = optionsRef.current;
-      if (!tenantId) throw new Error('Sem sessão.');
+      if (!tenantId || !employeeId) throw new Error('Sem sessão.');
+      // Resultado desconhecido nesta tela: confirmar de novo nunca gera outra chave (02 §2.3, RN-009.9).
+      if (unknownKey.current) {
+        return { kind: 'blocked', op: (await pendingOpsRepo.get(unknownKey.current))! };
+      }
       const request = o.request(vars);
       setState('sending');
       setError(null);
       setFieldErrors({});
       const outcome = await runCritical<TResult>({
         tenantId,
+        employeeId,
         request,
         description: o.describe(vars),
         draftId: o.draftId,
@@ -122,10 +132,17 @@ export function useCriticalMutation<TVars, TResult>(options: CriticalMutationOpt
             setError('Sem resposta do servidor. Confira se a alteração entrou e tente de novo.');
           }
           break;
+        case 'blocked':
+          // Pendência de antes (outra visita à tela ou app reaberto): acompanha a mesma chave.
+          unknownKey.current = outcome.op.idempotencyKey;
+          setPendingKey(outcome.op.idempotencyKey);
+          setState(outcome.op.status === 'FAILED' ? 'failed' : 'unknown');
+          setError(outcome.op.status === 'FAILED' ? 'Há uma operação igual não enviada. Veja em "Rascunhos e pendências".' : null);
+          break;
       }
       return outcome;
     },
-    [tenantId, queryClient],
+    [tenantId, employeeId, queryClient],
   );
 
   const reset = useCallback(() => {
@@ -134,5 +151,6 @@ export function useCriticalMutation<TVars, TResult>(options: CriticalMutationOpt
     setFieldErrors({});
   }, []);
 
-  return { run, state, error, fieldErrors, reset, busy: state === 'sending', pendingKey };
+  // `busy` cobre também o desconhecido e o não enviado: o botão de confirmar fica travado até haver desfecho.
+  return { run, state, error, fieldErrors, reset, busy: state !== 'idle', pendingKey };
 }

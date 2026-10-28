@@ -6,7 +6,7 @@ import type { PendingOperation } from '@/db/schema';
 
 interface PendingOpsState {
   ops: PendingOperation[];
-  load(tenantId: string): Promise<void>;
+  load(tenantId: string, employeeId: string): Promise<void>;
   put(op: PendingOperation): void;
   drop(key: string): void;
   clear(): void;
@@ -14,8 +14,8 @@ interface PendingOpsState {
 
 export const usePendingOps = create<PendingOpsState>((set) => ({
   ops: [],
-  async load(tenantId) {
-    set({ ops: await pendingOpsRepo.list(tenantId) });
+  async load(tenantId, employeeId) {
+    set({ ops: await pendingOpsRepo.list(tenantId, employeeId) });
   },
   put: (op) => set((s) => ({ ops: [...s.ops.filter((o) => o.idempotencyKey !== op.idempotencyKey), op] })),
   drop: (key) => set((s) => ({ ops: s.ops.filter((o) => o.idempotencyKey !== key) })),
@@ -23,11 +23,11 @@ export const usePendingOps = create<PendingOpsState>((set) => ({
 }));
 
 /**
- * Há operação UNKNOWN/FAILED nesse escopo? O escopo é um prefixo do caminho (`/orders/{id}`): bloqueia repetir a
+ * Há operação sem desfecho nesse escopo, em qualquer status (SENDING de um app que morreu no meio também)? O escopo é um prefixo do caminho (`/orders/{id}`): bloqueia repetir a
  * mesma ação enquanto o resultado não é conhecido, o que evita pagamento em dobro (RN-009.9).
  */
 export function useBlockedBy(pathPrefix: string | null): PendingOperation | undefined {
   return usePendingOps((s) =>
-    pathPrefix ? s.ops.find((o) => o.status !== 'SENDING' && o.path.startsWith(pathPrefix)) : undefined,
+    pathPrefix ? s.ops.find((o) => o.path.startsWith(pathPrefix)) : undefined,
   );
 }

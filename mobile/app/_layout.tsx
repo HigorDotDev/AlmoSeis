@@ -1,6 +1,6 @@
 /** Raiz (08 §8.2): SQLite, QueryClient persistido, sessão, cliente da API e Toaster. */
 import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
-import { QueryClient } from '@tanstack/react-query';
+import { MutationCache, QueryClient } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { router, Stack } from 'expo-router';
 import Storage from 'expo-sqlite/kv-store';
@@ -19,7 +19,14 @@ import { registerTenantDataClearer, useSession } from '@/stores/session';
 
 const DAY = 24 * 60 * 60 * 1000;
 
-const queryClient = new QueryClient({
+const queryClient: QueryClient = new QueryClient({
+  // Telas de gestão usam mutação simples (08 §8.14): num 409 VersionConflict recarrega o que está na tela, para
+  // a próxima tentativa já ir com a versão nova em vez de repetir o 409.
+  mutationCache: new MutationCache({
+    onError: (error) => {
+      if (isApiError(error, 'VersionConflict')) void queryClient.invalidateQueries({ type: 'active' });
+    },
+  }),
   defaultOptions: {
     queries: {
       gcTime: DAY,

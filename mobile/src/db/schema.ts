@@ -8,7 +8,7 @@ export interface LocalDb {
   getFirstAsync<T>(sql: string, ...params: (string | number | null)[]): Promise<T | null>;
 }
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const MIGRATIONS: Record<number, string> = {
   1: `
@@ -39,6 +39,11 @@ export const MIGRATIONS: Record<number, string> = {
       last_error      TEXT
     );
   `,
+  // 06 §6.12: `GET /operations` só enxerga as chaves de quem enviou; no aparelho compartilhado cada pessoa vê as suas.
+  2: `
+    ALTER TABLE pending_operations ADD COLUMN employee_id TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS ix_pending_tenant_employee ON pending_operations (tenant_id, employee_id);
+  `,
 };
 
 export type DraftKind = 'NEW_ORDER_MARMITA' | 'NEW_ORDER_PF' | 'NEW_ORDER_KILO' | 'ADD_ITEMS' | 'PAYMENT';
@@ -57,6 +62,7 @@ export interface Draft {
 export interface PendingOperation {
   idempotencyKey: string;
   tenantId: string;
+  employeeId: string;
   draftId: string | null;
   method: string;
   path: string;

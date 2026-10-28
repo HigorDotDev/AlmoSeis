@@ -18,15 +18,10 @@ export const pendingOpsRepo = {
     const op = memory.ops.get(key);
     if (op) memory.ops.set(key, { ...op, status, lastError });
   },
-  rekey: async (oldKey: string, newKey: string) => {
-    const op = memory.ops.get(oldKey);
-    if (!op) return;
-    memory.ops.delete(oldKey);
-    memory.ops.set(newKey, { ...op, idempotencyKey: newKey, status: 'SENDING', createdAt: new Date().toISOString() });
-  },
   remove: async (key: string) => void memory.ops.delete(key),
   get: async (key: string) => memory.ops.get(key) ?? null,
-  list: async (tenantId: string) => [...memory.ops.values()].filter((o) => o.tenantId === tenantId),
+  list: async (tenantId: string, employeeId?: string) =>
+    [...memory.ops.values()].filter((o) => o.tenantId === tenantId && (employeeId === undefined || o.employeeId === employeeId)),
   clearTenant: async () => memory.ops.clear(),
 };
 

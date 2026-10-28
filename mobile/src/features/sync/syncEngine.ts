@@ -59,7 +59,7 @@ async function doSync(ctx: SyncContext): Promise<void> {
       return;
     }
 
-    for (const op of await pendingOpsRepo.list(ctx.tenantId)) {
+    for (const op of ctx.ownEmployeeId ? await pendingOpsRepo.list(ctx.tenantId, ctx.ownEmployeeId) : []) {
       // SENDING recente ainda pode estar em voo nesta sessão; antigo é de um app fechado no meio do envio.
       const stale = op.status === 'SENDING' && Date.now() - new Date(op.createdAt).getTime() > 30_000;
       if (op.status === 'UNKNOWN' || stale) {

@@ -30,7 +30,7 @@ import { formatBusinessDate, formatMonth } from '@/lib/dates';
 import { formatBRL, fromCents, toCents } from '@/lib/money';
 import { orderTypeNames, paymentMethodNames } from '@/lib/strings';
 import { useIsOnline } from '@/stores/connectivity';
-import { useCanWrite, usePermission } from '@/stores/session';
+import { useCanWrite } from '@/stores/session';
 
 import { ClosingSummaryView, differenceText } from '../components';
 import { useAddAdjustment, useAddCashMovement, useCashMovements, useClosing, useClosingHistory, useClosingSummary, useFinalizeClosing, useMonthlyClosing } from '../hooks';
@@ -235,8 +235,8 @@ export function ClosingHistoryScreen() {
 export function ClosingDetailScreen() {
   const { id, justClosed } = useLocalSearchParams<{ id: string; justClosed?: string }>();
   const closing = useClosing(id);
-  const canAdjust = usePermission('closing.adjust');
-  const canOpen = usePermission('cash.open');
+  const canAdjust = useCanWrite('closing.adjust');
+  const canOpen = useCanWrite('cash.open');
   const [adjusting, setAdjusting] = useState(false);
   if (closing.isLoading) return <View style={{ padding: space.lg }}><Skeleton lines={5} /></View>;
   if (!closing.data) return <ErrorState message={errorMessage(closing.error)} onRetry={() => void closing.refetch()} />;

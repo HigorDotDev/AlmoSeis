@@ -13,6 +13,7 @@ jest.mock('@/db/pendingOpsRepo', () => ({ pendingOpsRepo: jest.requireActual('@/
 jest.mock('@/db/draftsRepo', () => ({ draftsRepo: jest.requireActual('@/test-utils/fakeDb').draftsRepo }));
 
 const TENANT = 't1';
+const EMP = 'e1';
 const respond = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...headers } });
 
@@ -48,7 +49,7 @@ describe('runCritical', () => {
       expect([...memory.ops.values()][0]).toMatchObject({ status: 'SENDING', path: '/orders/o1/payments', ifMatch: 4 });
       return respond(201, { payment: { id: 'p1' }, order: { version: 5 } }, { ETag: '"5"' });
     };
-    const outcome = await runCritical({ tenantId: TENANT, request: payment(), description: 'Pagamento', draftId: 'd1' });
+    const outcome = await runCritical({ tenantId: TENANT, employeeId: EMP, request: payment(), description: 'Pagamento', draftId: 'd1' });
     expect(outcome.kind).toBe('confirmed');
     expect(memory.ops.size).toBe(0);
     expect(memory.drafts.has('d1')).toBe(false);
@@ -59,7 +60,7 @@ describe('runCritical', () => {
   it('4xx de negócio: sem pendência, rascunho fica', async () => {
     memory.drafts.set('d1', { id: 'd1', tenantId: TENANT, kind: 'PAYMENT', targetId: 'o1', formJson: '{}', updatedAt: '' });
     handler = () => respond(422, { errorCode: 'PaymentExceedsBalance', balance: '20.00' });
-    const outcome = await runCritical({ tenantId: TENANT, request: payment(), description: 'Pagamento', draftId: 'd1' });
+    const outcome = await runCritical({ tenantId: TENANT, employeeId: EMP, request: payment(), description: 'Pagamento', draftId: 'd1' });
     expect(outcome.kind).toBe('rejected');
     expect(memory.ops.size).toBe(0);
     expect(memory.drafts.has('d1')).toBe(true);
@@ -67,7 +68,7 @@ describe('runCritical', () => {
 
   it('409 VersionConflict devolve o `current`', async () => {
     handler = () => respond(409, { errorCode: 'VersionConflict', expectedVersion: 4, currentVersion: 5, current: { id: 'o1', version: 5 } });
-    const outcome = await runCritical({ tenantId: TENANT, request: payment(), description: 'Pagamento' });
+    const outcome = await runCritical({ tenantId: TENANT, employeeId: EMP, request: payment(), description: 'Pagamento' });
     expect(outcome).toMatchObject({ kind: 'conflict', current: { id: 'o1', version: 5 } });
     expect(memory.ops.size).toBe(0);
   });
@@ -76,7 +77,7 @@ describe('runCritical', () => {
     handler = () => {
       throw new TypeError('Network request failed');
     };
-    const outcome = await runCritical({ tenantId: TENANT, request: payment(), description: 'Pagamento', draftId: 'd1' });
+    const outcome = await runCritical({ tenantId: TENANT, employeeId: EMP, request: payment(), description: 'Pagamento', draftId: 'd1' });
     expect(outcome.kind).toBe('unknown');
     const op = [...memory.ops.values()][0]!;
     expect(op.status).toBe('UNKNOWN');
@@ -95,7 +96,7 @@ describe('runCritical', () => {
 
   it('5xx também é desconhecido', async () => {
     handler = () => respond(503, { errorCode: 'Http503' });
-    const outcome = await runCritical({ tenantId: TENANT, request: payment(), description: 'Pagamento' });
+    const outcome = await runCritical({ tenantId: TENANT, employeeId: EMP, request: payment(), description: 'Pagamento' });
     expect(outcome.kind).toBe('unknown');
   });
 
@@ -103,7 +104,7 @@ describe('runCritical', () => {
     handler = () => {
       throw new TypeError('offline');
     };
-    await runCritical({ tenantId: TENANT, request: payment(), description: 'Pagamento' });
+    await runCritical({ tenantId: TENANT, employeeId: EMP, request: payment(), description: 'Pagamento' });
     const op = [...memory.ops.values()][0]!;
 
     handler = () => respond(200, { key: op.idempotencyKey, status: 'NOT_FOUND', responseStatus: null, resourceId: null, endpoint: null, createdAt: null, completedAt: null });
@@ -123,7 +124,7 @@ describe('runCritical', () => {
     handler = () => {
       throw new TypeError('offline');
     };
-    await runCritical({ tenantId: TENANT, request: payment(), description: 'Pagamento' });
+    await runCritical({ tenantId: TENANT, employeeId: EMP, request: payment(), description: 'Pagamento' });
     const op = [...memory.ops.values()][0]!;
     handler = () => respond(200, { key: op.idempotencyKey, status: 'IN_PROGRESS', responseStatus: null, resourceId: null, endpoint: null, createdAt: null, completedAt: null });
     const sleep = jest.fn(async () => {});
@@ -132,25 +133,69 @@ describe('runCritical', () => {
     expect(memory.ops.get(op.idempotencyKey)!.status).toBe('UNKNOWN');
   });
 
-  it('pendência com mais de 72 h é reenviada com chave nova', async () => {
+  it('pendência com mais de 72 h: NOT_FOUND não vira FAILED e nunca é reenviada', async () => {
     const old = new Date(Date.now() - 73 * 3600 * 1000).toISOString();
     memory.ops.set('k-old', {
       idempotencyKey: 'k-old',
       tenantId: TENANT,
+      employeeId: EMP,
       draftId: null,
       method: 'POST',
       path: '/orders',
       bodyJson: '{"orderType":"KILO"}',
       ifMatch: null,
-      status: 'FAILED',
+      status: 'UNKNOWN',
       description: 'Pedido',
       createdAt: old,
       lastError: null,
     });
-    handler = () => respond(201, { id: 'o9' });
-    const outcome = await resendPending(memory.ops.get('k-old')!);
-    expect(outcome.kind).toBe('confirmed');
-    expect(header(0, 'Idempotency-Key')).not.toBe('k-old');
+    handler = () => respond(200, { key: 'k-old', status: 'NOT_FOUND', responseStatus: null, resourceId: null, endpoint: null, createdAt: null, completedAt: null });
+    expect(await resolveUnknown(memory.ops.get('k-old')!)).toEqual({ kind: 'expired' });
+    expect(memory.ops.get('k-old')!.status).toBe('UNKNOWN');
+
+    const outcome = await resendPending({ ...memory.ops.get('k-old')!, status: 'FAILED' });
+    expect(outcome.kind).toBe('blocked');
+    expect(calls.filter((c) => c.init.method === 'POST')).toHaveLength(0);
+  });
+
+  it('confirmar de novo com pendência da mesma ação não envia nada (RN-009.9)', async () => {
+    handler = () => {
+      throw new TypeError('offline');
+    };
+    const first = await runCritical({ tenantId: TENANT, employeeId: EMP, request: critical.addCashMovement({ movementType: 'SUPPLY', amount: '50.00', description: 'Troco' }), description: 'Suprimento' });
+    expect(first.kind).toBe('unknown');
+    handler = () => respond(201, { id: 'm1' });
+    const second = await runCritical({ tenantId: TENANT, employeeId: EMP, request: critical.addCashMovement({ movementType: 'SUPPLY', amount: '50.00', description: 'Troco' }), description: 'Suprimento' });
+    expect(second.kind).toBe('blocked');
+    expect(calls).toHaveLength(1);
+    expect(memory.ops.size).toBe(1);
+  });
+
+  it('mesmo rascunho de pedido novo bloqueia; outro rascunho segue', async () => {
+    handler = () => {
+      throw new TypeError('offline');
+    };
+    const body = { orderType: 'KILO' } as never;
+    await runCritical({ tenantId: TENANT, employeeId: EMP, request: critical.createOrder(body), description: 'Pedido', draftId: 'd1' });
+    handler = () => respond(201, { id: 'o1' });
+    expect((await runCritical({ tenantId: TENANT, employeeId: EMP, request: critical.createOrder(body), description: 'Pedido', draftId: 'd1' })).kind).toBe('blocked');
+    expect((await runCritical({ tenantId: TENANT, employeeId: EMP, request: critical.createOrder(body), description: 'Pedido', draftId: 'd2' })).kind).toBe('confirmed');
+  });
+
+  it('409 OperationInProgress é desconhecido, não recusa', async () => {
+    handler = () => respond(409, { errorCode: 'OperationInProgress' });
+    const outcome = await runCritical({ tenantId: TENANT, employeeId: EMP, request: payment(), description: 'Pagamento' });
+    expect(outcome.kind).toBe('unknown');
+    expect([...memory.ops.values()][0]!.status).toBe('UNKNOWN');
+  });
+
+  it('pendência de outro funcionário (aparelho compartilhado) não bloqueia nem aparece', async () => {
+    handler = () => {
+      throw new TypeError('offline');
+    };
+    await runCritical({ tenantId: TENANT, employeeId: 'e2', request: payment(), description: 'Pagamento' });
+    handler = () => respond(201, { payment: { id: 'p1' }, order: { version: 5 } });
+    expect((await runCritical({ tenantId: TENANT, employeeId: EMP, request: payment(), description: 'Pagamento' })).kind).toBe('confirmed');
   });
 
   it('escrita só [M] não grava pendência', async () => {
@@ -159,6 +204,7 @@ describe('runCritical', () => {
     };
     const outcome = await runCritical({
       tenantId: TENANT,
+      employeeId: EMP,
       request: { method: 'PATCH', path: '/orders/o1/status', body: { productionStatus: 'COMPLETED' }, ifMatch: 3 },
       description: 'Status',
       idempotent: false,

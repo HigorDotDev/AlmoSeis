@@ -143,6 +143,7 @@ CREATE TABLE IF NOT EXISTS drafts (
 CREATE TABLE IF NOT EXISTS pending_operations (
   idempotency_key TEXT PRIMARY KEY,
   tenant_id       TEXT NOT NULL,
+  employee_id     TEXT NOT NULL,   -- quem enviou: GET /operations só enxerga as chaves do próprio usuário (06 §6.12)
   draft_id        TEXT,
   method          TEXT NOT NULL,
   path            TEXT NOT NULL,
@@ -157,7 +158,9 @@ CREATE TABLE IF NOT EXISTS pending_operations (
 
 - **Rascunhos (RN-014.3):** o formulário salva em `drafts` a cada mudança, com *debounce* de 500 ms, e o rascunho é apagado só depois de o servidor confirmar. Reabrir uma tela de criação oferece "Continuar rascunho de 11:42?". Rascunhos com mais de 3 dias são descartados ao abrir o app.
 - **Operações pendentes:** só existem para escritas cujo resultado ficou **desconhecido** (§8.5). Elas **não** formam uma fila offline: sem conexão, as escritas ficam desabilitadas (ADR-0010).
-- Tudo fica escopado por `tenant_id`. Sair da conta apaga rascunhos e pendências **só depois de avisar**, se houver algum.
+- Tudo fica escopado por `tenant_id`; as pendências também por `employee_id` (no aparelho compartilhado, cada pessoa vê e resolve só as suas).
+- Enquanto houver pendência da mesma ação (mesmo rascunho ou, sem rascunho, mesmo método e caminho), uma nova confirmação **não envia nada**: o app volta a acompanhar a pendência existente.
+- Sair da conta apaga rascunhos e pendências **só depois de avisar**, se houver algum.
 
 ## 8.5 Escritas críticas e resultado desconhecido (ADR-0010, ADR-0033, ADR-0034)
 
@@ -187,8 +190,10 @@ Fluxo (RF-012, RN-014.4/14.11/14.12):
      ├─ COMPLETED  → GET do resourceId → onConfirmed → limpa pending/draft
      ├─ IN_PROGRESS→ nova consulta em 2 s (até 5 vezes; depois mantém UNKNOWN)
      └─ NOT_FOUND  → status FAILED + botão "Reenviar" (mesma key, mesmo corpo). Nunca reenvia sozinho.
-5. Pendência com mais de 72 h (TTL da idempotência): "Reenviar" primeiro roda o sync (§8.6) e procura o recurso.
-   Se não o encontrar, reenvia com uma key **nova**.
+5. Pendência com mais de 72 h (TTL da idempotência): `NOT_FOUND` já não prova que ela não chegou, então o app
+   **nunca a reenvia**. Ela fica pendente com o aviso "confira no histórico"; se não estiver lá, a pessoa refaz a
+   operação (a partir do rascunho) e descarta a pendência.
+   `409 OperationInProgress` é tratado como resultado desconhecido (resolve pelo passo 4).
 ```
 
 **Enquanto uma operação estiver `UNKNOWN`/`FAILED`:**
@@ -561,10 +566,13 @@ Critério de pronto do mobile (`docs/02-padroes.md` §2.6): fluxos E2E 1 e 2 pas
 | Rotas | Cada arquivo em `app/` só reexporta uma tela de `src/features/*/screens`; o ESLint proíbe `fetch` em `app/` | Regra de 8.2 garantida por ferramenta |
 | Escritas [I] | `src/api/critical.ts` descreve cada uma como dado (`{method, path, body, ifMatch}`); a pendência guarda exatamente isso e o reenvio repete chave e corpo | Única fonte desses caminhos; reenvio idêntico ao envio original |
 | Escritas só [M] do pedido | Status, alterar/remover item, remover pesagem, editar dados e cancelar usam `useCriticalMutation` com `idempotent: false`: sem `Idempotency-Key` e sem pendência. Falha de rede recarrega o pedido e pede conferência | Não há o que consultar em `/operations`; reenviar com a mesma versão dá `409`, nunca duplica |
-| Escritas de gestão | Produto, tamanho, cardápio, cliente, funcionário, convite, configurações e estabelecimento usam mutação simples do TanStack Query; `409` aparece como erro e o recurso é recarregado | Telas de cadastro, fora do caixa; **a confirmar** como exceção ao "todo [I]/[M] passa por `useCriticalMutation`" de 8.5 |
+| Escritas de gestão | Produto, tamanho, cardápio, cliente, funcionário, convite, configurações e estabelecimento usam mutação simples do TanStack Query; `409` aparece como erro e um `MutationCache` global recarrega as consultas ativas | Telas de cadastro, fora do caixa; nenhum ADR exige mais (o If-Match vai sempre). **A confirmar** como exceção ao "todo [I]/[M]" de 8.5 e ao "409 mostrando a diferença" de 02 §2.3 |
 | `SENDING` antigo | No sync, pendência `SENDING` com mais de 30 s é tratada como `UNKNOWN` | É o app que morreu no meio do envio; a recente ainda pode estar em voo |
 | `COMPLETED` com erro | `/operations` com `responseStatus` 4xx encerra a pendência e mantém o rascunho | A operação foi processada e recusada; reenviar daria a mesma recusa |
-| Pendência > 72 h | "Reenviar" avisa para conferir no histórico e vai com **chave nova** | O app não tem como procurar o recurso genericamente (8.5 passo 5 pede isso); **a confirmar** |
+| Pendência > 72 h | Nunca reenviada pelo app (8.5 passo 5 reescrito); a pessoa confere o histórico e refaz | Não há como procurar o recurso de forma genérica, e uma chave nova poderia duplicar |
+| Segunda confirmação | `runCritical` recusa (`blocked`) se houver pendência da mesma ação, em qualquer status; o `busy` do hook cobre `unknown`/`failed` | Revisão arquitetural: confirmar de novo depois de um timeout geraria outra chave |
+| Pendências por funcionário | Migração 2 do SQLite: `pending_operations.employee_id` | `/operations/{key}` só vê as chaves do próprio usuário |
+| Aparelho revogado | `AccessRevoked` com `DEVICE_REVOKED` apaga o `deviceSecret` e sai | 06 §6.14 |
 | Primeiro sync | Sem `lastSeq` no aparelho, percorre o feed só para avançar o cursor, sem invalidar | O cache ainda está vazio |
 | Cache persistido | `kv-store` do `expo-sqlite`, chave única, `buster` = `tenantId`; trocar de tenant ou sair chama `queryClient.clear()` + `removeClient()` | Escopo por tenant (RN-014.2) sem um persister por tenant |
 | `me` offline | Guardado na tabela `meta` do SQLite; tokens continuam só no SecureStore | Abrir o app sem rede com permissões e nome do estabelecimento |

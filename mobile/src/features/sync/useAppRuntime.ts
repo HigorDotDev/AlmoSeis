@@ -39,12 +39,12 @@ export function useAppRuntime(): void {
   }, []);
 
   useEffect(() => {
-    if (!tenantId) return;
-    void usePendingOps.getState().load(tenantId);
+    if (!tenantId || !employeeId) return;
+    void usePendingOps.getState().load(tenantId, employeeId);
     void metaRepo.lastSeq(tenantId).then((v) => {
       lastSeq.current = v;
     });
-  }, [tenantId]);
+  }, [tenantId, employeeId]);
 
   useEffect(() => {
     if (!tenantId) return;
@@ -91,6 +91,14 @@ export function useAppRuntime(): void {
           void queryClient.invalidateQueries({ queryKey: qk.subscription });
           break;
         case 'AccessRevoked':
+          if (e.data?.reason === 'DEVICE_REVOKED' && useSession.getState().sharedDevice) {
+            // Aparelho revogado (06 §6.14): o segredo não vale mais; volta para o login com senha.
+            void useSession
+              .getState()
+              .setSharedDevice(null)
+              .then(() => useSession.getState().signOut('deviceRevoked'));
+            break;
+          }
           // Perfis mudaram: um token novo traz as permissões novas. Desativado: o refresh é recusado e a sessão sai.
           void refreshSingleFlight()
             .then((ok) => (ok ? queryClient.invalidateQueries({ queryKey: qk.me }) : useSession.getState().signOut('revoked')))

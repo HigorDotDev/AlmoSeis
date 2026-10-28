@@ -36,7 +36,7 @@ import { formatBRL, toCents } from '@/lib/money';
 import { maskBR, toE164, formatPhone } from '@/lib/phone';
 import { gramsToKgLabel, previewKiloAmountCents } from '@/lib/weight';
 import { useIsOnline } from '@/stores/connectivity';
-import { usePermission, useSession } from '@/stores/session';
+import { useCanWrite, usePermission, useSession } from '@/stores/session';
 
 import {
   beverageItems,
@@ -223,6 +223,8 @@ export function WeighingsScreen() {
   const [grams, setGrams] = useState<number | null>(null);
   const [inputKey, setInputKey] = useState(0);
   const [confirm, setConfirm] = useState(false);
+  const [conflict, setConflict] = useState<Order | null>(null);
+  const canEdit = useCanWrite('orders.edit');
   const add = useAddWeighings(order.data, () => router.back());
   if (!order.data) return <Loading query={order} />;
   const o = order.data;
@@ -251,7 +253,8 @@ export function WeighingsScreen() {
         </Row>
       ))}
       {add.error ? <Banner tone="danger" text={add.error} /> : null}
-      <Button title="Registrar pesagens" disabled={weighings.length === 0 || !online || !price} onPress={() => setConfirm(true)} />
+      {add.state === 'unknown' ? <Banner tone="warning" text="Não sabemos se as pesagens foram registradas. Verificando…" /> : null}
+      <Button title="Registrar pesagens" disabled={weighings.length === 0 || !online || !price || !canEdit || add.busy} onPress={() => setConfirm(true)} />
       <ConfirmDialog
         visible={confirm}
         title="Registrar pesagens?"
@@ -261,9 +264,11 @@ export function WeighingsScreen() {
         onCancel={() => setConfirm(false)}
         onConfirm={async () => {
           const outcome = await add.run({ weighings: weighings.map((weightGrams) => ({ weightGrams })), version: o.version });
-          if (outcome.kind !== 'unknown') setConfirm(false);
+          if (outcome.kind === 'conflict') setConflict(outcome.current as Order);
+          setConfirm(false);
         }}
       />
+      <ConflictSheet visible={conflict !== null} summary={conflict ? summarizeOrder(conflict) : []} onClose={() => setConflict(null)} onRedo={() => setConflict(null)} />
     </Screen>
   );
 }

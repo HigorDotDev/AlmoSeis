@@ -6,7 +6,7 @@ import { Button, Card, ErrorState, Row, Skeleton, Text, space, useColors } from 
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { formatBusinessDate } from '@/lib/dates';
 import { formatBRL } from '@/lib/money';
-import { usePermission } from '@/stores/session';
+import { useCanWrite, usePermission } from '@/stores/session';
 
 import { ClosingSummaryView } from '../components';
 import { useClosingHistory, useClosingSummary } from '../hooks';
@@ -16,9 +16,10 @@ export default function ClosingTab() {
   const c = useColors();
   const day = useCurrentBusinessDay();
   const summary = useClosingSummary(undefined, !!day.data);
-  const canMove = usePermission('cash.movement');
+  const canMove = useCanWrite('cash.movement');
+  // Com SUSPENDED o fechamento continua liberado no servidor (06 §6.1, 402); o app só não mostra a ação a quem não tem permissão.
   const canFinalize = usePermission('closing.finalize');
-  const canOpen = usePermission('cash.open');
+  const canOpen = useCanWrite('cash.open');
 
   if (day.isLoading) return <View style={{ padding: space.lg }}><Skeleton /></View>;
 

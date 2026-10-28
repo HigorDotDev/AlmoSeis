@@ -302,32 +302,31 @@ export function DraftsScreen() {
 
   const load = useCallback(() => {
     void draftsRepo.list(me.tenant.id).then(setDrafts);
-    void usePendingOps.getState().load(me.tenant.id);
-  }, [me.tenant.id]);
+    void usePendingOps.getState().load(me.tenant.id, me.employee.id);
+  }, [me.tenant.id, me.employee.id]);
   useEffect(load, [load]);
 
   const verify = async (op: PendingOperation) => {
     setBusy(op.idempotencyKey);
     const r = await resolveUnknown(op, { maxInProgressRetries: 1 });
     setBusy(null);
-    toast(r.kind === 'completed' ? 'Confirmada pelo servidor' : r.kind === 'failed' ? 'Não chegou ao servidor: pode reenviar' : 'Ainda sem resposta', r.kind === 'completed' ? 'success' : 'info');
+    const messages = {
+      completed: 'Confirmada pelo servidor',
+      failed: 'Não chegou ao servidor: pode reenviar',
+      expired: 'Mais de 72 h: confira no histórico se entrou',
+      stillUnknown: 'Ainda sem resposta',
+    } as const;
+    toast(messages[r.kind], r.kind === 'completed' ? 'success' : 'info');
     load();
   };
 
-  const resend = (op: PendingOperation) => {
-    const go = async () => {
-      setBusy(op.idempotencyKey);
-      const outcome = await resendPending(op);
-      setBusy(null);
-      toast(outcome.kind === 'confirmed' ? 'Enviada' : outcome.kind === 'unknown' ? 'Ainda sem resposta' : 'Recusada pelo servidor', outcome.kind === 'confirmed' ? 'success' : 'error');
-      load();
-    };
-    if (isExpired(op)) {
-      Alert.alert('Pendência antiga', 'Ela tem mais de 72 h. Confira no histórico se já foi registrada antes de reenviar.', [
-        { text: 'Voltar', style: 'cancel' },
-        { text: 'Reenviar', onPress: () => void go() },
-      ]);
-    } else void go();
+  /** Só FAILED dentro das 72 h, com a mesma chave (NOT_FOUND garante que nunca chegou). */
+  const resend = async (op: PendingOperation) => {
+    setBusy(op.idempotencyKey);
+    const outcome = await resendPending(op);
+    setBusy(null);
+    toast(outcome.kind === 'confirmed' ? 'Enviada' : outcome.kind === 'rejected' || outcome.kind === 'conflict' ? 'Recusada pelo servidor' : 'Ainda sem resposta', outcome.kind === 'confirmed' ? 'success' : 'error');
+    load();
   };
 
   const discard = (op: PendingOperation) =>
@@ -345,15 +344,20 @@ export function DraftsScreen() {
           <Card key={op.idempotencyKey}>
             <Text style={{ fontWeight: '700' }}>{op.description}</Text>
             <Row>
-              <SyncStatePill state={op.status === 'SENDING' ? 'sending' : 'unknown'} />
+              <SyncStatePill state={op.status === 'SENDING' ? 'sending' : op.status === 'FAILED' ? 'failed' : 'unknown'} />
               <Text variant="small" muted>
                 {formatDateTime(op.createdAt, me.tenant.timeZone)}
               </Text>
             </Row>
             {op.status === 'FAILED' ? <Text variant="small">Não chegou ao servidor.</Text> : null}
+            {isExpired(op) ? (
+              <Text variant="small">
+                Mais de 72 h: o app não consegue mais saber se ela entrou. Confira no histórico; se não estiver lá, refaça a operação e descarte esta.
+              </Text>
+            ) : null}
             <Row style={{ flexWrap: 'wrap' }}>
               {op.status !== 'FAILED' ? <Button title="Verificar" variant="secondary" loading={busy === op.idempotencyKey} onPress={() => void verify(op)} /> : null}
-              {op.status === 'FAILED' ? <Button title="Reenviar" loading={busy === op.idempotencyKey} onPress={() => resend(op)} /> : null}
+              {op.status === 'FAILED' && !isExpired(op) ? <Button title="Reenviar" loading={busy === op.idempotencyKey} onPress={() => void resend(op)} /> : null}
               <Button title="Descartar" variant="ghost" onPress={() => discard(op)} />
             </Row>
           </Card>

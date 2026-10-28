@@ -8,6 +8,7 @@ import type { PendingOperation, PendingStatus } from './schema';
 interface Row {
   idempotency_key: string;
   tenant_id: string;
+  employee_id: string;
   draft_id: string | null;
   method: string;
   path: string;
@@ -22,6 +23,7 @@ interface Row {
 const toOp = (r: Row): PendingOperation => ({
   idempotencyKey: r.idempotency_key,
   tenantId: r.tenant_id,
+  employeeId: r.employee_id,
   draftId: r.draft_id,
   method: r.method,
   path: r.path,
@@ -37,10 +39,11 @@ export const pendingOpsRepo = {
   async insert(op: PendingOperation): Promise<void> {
     await getDb().runAsync(
       `INSERT INTO pending_operations
-         (idempotency_key, tenant_id, draft_id, method, path, body_json, if_match, status, description, created_at, last_error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (idempotency_key, tenant_id, employee_id, draft_id, method, path, body_json, if_match, status, description, created_at, last_error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       op.idempotencyKey,
       op.tenantId,
+      op.employeeId,
       op.draftId,
       op.method,
       op.path,
@@ -57,16 +60,6 @@ export const pendingOpsRepo = {
     await getDb().runAsync('UPDATE pending_operations SET status = ?, last_error = ? WHERE idempotency_key = ?', status, lastError, key);
   },
 
-  /** Reenvio de pendência com mais de 72 h: a chave expirou no servidor, então vai com uma nova (08 §8.5 passo 5). */
-  async rekey(oldKey: string, newKey: string): Promise<void> {
-    await getDb().runAsync(
-      "UPDATE pending_operations SET idempotency_key = ?, status = 'SENDING', created_at = ? WHERE idempotency_key = ?",
-      newKey,
-      new Date().toISOString(),
-      oldKey,
-    );
-  },
-
   async remove(key: string): Promise<void> {
     await getDb().runAsync('DELETE FROM pending_operations WHERE idempotency_key = ?', key);
   },
@@ -76,11 +69,15 @@ export const pendingOpsRepo = {
     return row ? toOp(row) : null;
   },
 
-  async list(tenantId: string): Promise<PendingOperation[]> {
-    const rows = await getDb().getAllAsync<Row>(
-      'SELECT * FROM pending_operations WHERE tenant_id = ? ORDER BY created_at',
-      tenantId,
-    );
+  /** As do próprio funcionário (06 §6.12); sem `employeeId`, todas do tenant (contagem ao sair da conta). */
+  async list(tenantId: string, employeeId?: string): Promise<PendingOperation[]> {
+    const rows = employeeId
+      ? await getDb().getAllAsync<Row>(
+          'SELECT * FROM pending_operations WHERE tenant_id = ? AND employee_id = ? ORDER BY created_at',
+          tenantId,
+          employeeId,
+        )
+      : await getDb().getAllAsync<Row>('SELECT * FROM pending_operations WHERE tenant_id = ? ORDER BY created_at', tenantId);
     return rows.map(toOp);
   },
 

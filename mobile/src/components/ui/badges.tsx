@@ -71,7 +71,7 @@ export function PaymentBadge({ totalAmount, paidAmount, isPaid, canceled }: { to
   return <Badge testID="payment-badge" shape="square" icon="alert-circle-outline" label="A pagar" fg={c.danger} bg={c.dangerBg} />;
 }
 
-export type SyncPillState = 'draft' | 'sending' | 'unknown' | 'confirmed';
+export type SyncPillState = 'draft' | 'sending' | 'unknown' | 'failed' | 'confirmed';
 
 /** RN-014.5: rascunho, enviando, pendente de confirmação e confirmado nunca se confundem. */
 export function SyncStatePill({ state }: { state: SyncPillState }) {
@@ -80,6 +80,7 @@ export function SyncStatePill({ state }: { state: SyncPillState }) {
     draft: { icon: 'create-outline' as IconName, label: 'Rascunho', fg: c.neutral, bg: c.neutralBg },
     sending: { icon: 'cloud-upload-outline' as IconName, label: 'Enviando', fg: c.info, bg: c.infoBg },
     unknown: { icon: 'help-circle-outline' as IconName, label: 'Pendente de confirmação', fg: c.warning, bg: c.warningBg },
+    failed: { icon: 'cloud-offline-outline' as IconName, label: 'Não enviado', fg: c.danger, bg: c.dangerBg },
     confirmed: { icon: 'cloud-done-outline' as IconName, label: 'Confirmado', fg: c.success, bg: c.successBg },
   }[state];
   return <Badge shape="pill" icon={spec.icon} label={spec.label} fg={spec.fg} bg={spec.bg} />;
