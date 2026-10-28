@@ -274,6 +274,7 @@ AlmoSeis.Modules.Ordering/
 | `RefreshTokenHandler`, `LogoutHandler`, `SwitchTenantHandler` | `/auth/refresh`, `/logout`, `/switch-tenant` | Reuso de refresh revogado → revoga a família |
 | `GetMeQuery` | `GET /auth/me` | Monta o `Me` com `IBillingPort.GetStatus` |
 | `SetOwnPinHandler` | `PUT /auth/me/pin` | Confere a senha atual |
+| `ChangeOwnPasswordHandler` | `PUT /auth/me/password` | Confere a senha atual (`422`, sem contar no bloqueio, como o PIN). `User.SetPasswordHash` troca o stamp; revoga por `ExecuteUpdate` os refresh tokens do usuário com `installation_id` diferente do token. Auditoria `PasswordChanged` |
 | `PinLoginHandler` | `POST /auth/pin-login` | Esquema `DeviceSecret`, tenant do header → `PinPolicy`/bloqueio → tokens com `device_id` |
 | `ForgotPasswordHandler`, `ResetPasswordHandler` | `/auth/password/*` | Token do Identity (`DataProtectorTokenProvider`); código de reset via `EmployeeInvitation` |
 | `RegisterSharedDeviceHandler`, `RevokeSharedDeviceHandler`, `ListSharedDevicesQuery`, `ListPinEmployeesQuery` | `/devices/shared/*` | `deviceSecret` = 32 bytes aleatórios, base64url, prefixo `ds_` |

@@ -284,6 +284,19 @@ Erros: `409 EmailAlreadyRegistered`, `409 PhoneAlreadyRegistered`, `409 TrialAlr
 
 → `204`. PIN de 4 a 6 dígitos, e sequências triviais (`1234`, `0000`) são recusadas com `422`.
 
+### `PUT /auth/me/password` — troca a própria senha
+
+```json
+{ "currentPassword": "S3nha-forte!", "newPassword": "Outra-s3nha!" }
+```
+
+→ `204`. Qualquer perfil, inclusive com a assinatura suspensa (não é escrita do estabelecimento).
+
+- Troca o security stamp do usuário: links de "Esqueci a senha" ainda não usados deixam de valer.
+- Revoga todos os refresh tokens do usuário **exceto os da instalação que fez a troca** (`installation_id` do access token). Os outros aparelhos caem no próximo refresh (em até 15 min). Quem trocou continua logado.
+- Erros: `422 ValidationFailed` com `errors.currentPassword` quando a senha atual está errada (não é `401`, para o app não tratar como sessão vencida; mesma regra do `PUT /auth/me/pin`); `errors.newPassword` quando a nova tem menos de 8 caracteres ou é igual à atual.
+- Auditoria `PasswordChanged` (`USER`). Fora do limite `auth` do ADR-0041, como o `PUT /auth/me/pin`: exige sessão válida.
+
 ### `POST /auth/admin/login` — público (ADR-0043)
 
 Só para administradores de plataforma (`users.is_platform_admin`).

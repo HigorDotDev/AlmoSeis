@@ -23,6 +23,7 @@ O épico cita "OIDC/OAuth 2.0 com JWT" sem escolher um provedor. Na operação r
 4. **Revogação imediata:** desativar o funcionário ou mudar perfis troca o `security_stamp` do vínculo. Um filtro de autenticação compara o stamp com um cache de 30 s, revogando o acesso em até 30 s mesmo com access token válido.
 5. **No app:** tokens em `expo-secure-store`, nunca em AsyncStorage ou SQLite.
    - *Complemento (2026-10-27):* ao ser registrado, o aparelho compartilhado recebe uma única vez um **`deviceSecret`**. O servidor guarda só o SHA-256 dele. O aparelho guarda o segredo no SecureStore e o usa (`X-Device-Secret`) para listar funcionários e para o `pin-login` quando ninguém está logado. Revogar o aparelho invalida o segredo e os tokens emitidos por PIN (`06-contratos-api.md` §6.3).
+   - *Complemento (2026-10-28):* a pessoa logada troca a própria senha com `PUT /auth/me/password`, informando a senha atual. A troca muda o security stamp do usuário e revoga os refresh tokens dele em **outras** instalações; a instalação que fez a troca continua logada (`06-contratos-api.md` §6.3).
 6. A troca de tenant segue o ADR-0026 (`/auth/switch-tenant`).
 
 ## Alternativas consideradas

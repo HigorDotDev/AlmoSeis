@@ -315,7 +315,7 @@ A aba inicial é a primeira visível. O app lembra a última aba usada por apare
 
 | Item | Rota | Permissão |
 |---|---|---|
-| Perfil do usuário | `menu/profile` (nome, PIN, trocar senha, trocar de estabelecimento) | — |
+| Perfil do usuário | `menu/profile` (nome, PIN, trocar senha com `PUT /auth/me/password`, trocar de estabelecimento) | — |
 | Dados do estabelecimento | `menu/tenant` | ver: `orders.view`; editar: `settings.manage` |
 | Funcionários | `menu/employees` | `employees.manage` |
 | Perfis e permissões | `menu/roles` (somente leitura, ADR-0028) | — |
@@ -580,7 +580,7 @@ Critério de pronto do mobile (`docs/02-padroes.md` §2.6): fluxos E2E 1 e 2 pas
 | `me` offline | Guardado na tabela `meta` do SQLite; tokens continuam só no SecureStore | Abrir o app sem rede com permissões e nome do estabelecimento |
 | Formulários | RHF + Zod; nos pedidos, `useWatch` (compatível com o React Compiler) e validação Zod no "Registrar" | O `watch()` do RHF desliga a compilação do componente |
 | Divisão "por itens" | Soma `lineTotal` dos itens marcados (com adicionais), limitada ao saldo, num único pagamento | 8.9 não detalha; é uma parcela por vez |
-| Senha no perfil | Sem "trocar senha": o 06 não tem rota de troca autenticada. O perfil orienta usar "Esqueci a senha" ou o código do proprietário | **Lacuna** do 06 a decidir |
+| Senha no perfil | "Trocar senha" pede senha atual, nova e confirmação e chama `PUT /auth/me/password` (mutação simples, não é [I] nem [M]). Senha atual errada volta como `422` no campo. Escondido em modo compartilhado (sessão por PIN) | Rota criada no 06 em 2026-10-28, a pedido do usuário; os outros aparelhos da pessoa saem no próximo refresh |
 | Inatividade compartilhada | `sharedDeviceIdleSeconds` é editado em "Formas de pagamento" (mesmo `PATCH /tenant/settings`) | `menu/settings` é só local (8.10) |
 | Som | `assets/sounds/new-order.wav` (bipe curto gerado) via `expo-audio` | ADR-0036 |
 | E2E | Fluxos Maestro em `mobile/e2e/` escritos a partir de 8.13; **ainda não rodados** em emulador | Exigem homolog e Dev Client instalado |
