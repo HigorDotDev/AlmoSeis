@@ -1,6 +1,7 @@
 import { TopTabs } from 'expo-router/js-top-tabs';
+import { Text } from 'react-native';
 
-import { SubscriptionBanner, useColors } from '@/components/ui';
+import { SubscriptionBanner, font, useColors } from '@/components/ui';
 import { AppHeader } from '@/features/shell/AppShell';
 import { usePreferences, type TabName } from '@/stores/preferences';
 import { hasPermission, useSession } from '@/stores/session';
@@ -24,7 +25,12 @@ export default function TabsLayout() {
           tabBarActiveTintColor: c.primary,
           tabBarInactiveTintColor: c.textMuted,
           tabBarIndicatorStyle: { backgroundColor: c.primary, height: 3 },
-          tabBarLabelStyle: { fontWeight: '700', fontSize: 14, textTransform: 'none' },
+          // Uma linha só, mesmo com a fonte do sistema grande: "Fechamento" encolhe em vez de quebrar.
+          tabBarLabel: ({ color, children }) => (
+            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75} maxFontSizeMultiplier={1.3} style={{ color, fontWeight: '700', fontSize: font.sm }}>
+              {children}
+            </Text>
+          ),
           tabBarScrollEnabled: false,
         }}
       >
