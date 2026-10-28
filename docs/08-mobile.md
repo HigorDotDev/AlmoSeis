@@ -514,6 +514,8 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 
 **Tema:** tokens de cor com modo claro e escuro; contraste AA; fonte do sistema escalável (respeita a acessibilidade do Android), com limite de escala nos cards da cozinha. Todo ícone de ação tem `accessibilityLabel`.
 
+**Tokens (`theme.ts`, desde 2026-10-28, `docs/10-ux.md` §10.4):** primária `#B23C0B` com `primaryBg` para seleção; fonte 14/16/18/22/28 e `display` 36 (saldo e nº do pedido na cozinha), números tabulares em `title`/`big`/`display`; espaçamento 4/8/12/16/24/32; raio 8/12/20; `TOUCH` 48 em botão, chip, segmentado e item de menu, e `TOUCH_LARGE` 56 no botão principal do rodapé. Chip selecionado = fundo `primaryBg`, borda 2 e ícone de check.
+
 ### Mensagens por `errorCode` (`lib/strings.ts`)
 
 | errorCode | Mensagem / comportamento |

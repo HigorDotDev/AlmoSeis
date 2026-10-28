@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, View } from 'react-native';
 
 import type { Permission } from '@/api/types';
-import { BottomSheet, IconButton, Row, Text, radius, space, useColors, type IconName } from '@/components/ui';
+import { Banner, BottomSheet, IconButton, Row, Text, TOUCH, radius, space, useColors, type IconName } from '@/components/ui';
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { useSettings } from '@/features/session/hooks';
 import { draftsRepo } from '@/db/draftsRepo';
@@ -38,16 +38,22 @@ export function AppHeader() {
   const day = useCurrentBusinessDay();
   const [menuOpen, setMenuOpen] = useState(false);
   if (!me) return null;
-  const dayText = day.data ? `Expediente ${formatBusinessDate(day.data.businessDate)} · aberto` : day.isLoading ? '…' : 'Sem expediente';
+  const open = !!day.data;
+  const dayText = day.data ? `Aberto · ${formatBusinessDate(day.data.businessDate)}` : day.isLoading ? '…' : 'Fechado';
   return (
     <>
-      <Row style={{ backgroundColor: c.surface, paddingHorizontal: space.xs, minHeight: 56 }}>
+      {/* Uma linha só: nome + situação do expediente em selo (docs/10-ux.md D9). */}
+      <Row style={{ backgroundColor: c.surface, paddingLeft: space.xs, paddingRight: space.sm, minHeight: 52 }}>
         <IconButton icon="menu" label="Abrir menu" onPress={() => setMenuOpen(true)} />
-        <View style={{ flex: 1 }}>
-          <Text variant="subtitle" numberOfLines={1}>
-            {me.tenant.name}
-          </Text>
-          <Text variant="small" style={{ color: day.data ? c.success : c.textMuted }}>
+        <Text variant="subtitle" numberOfLines={1} style={{ flex: 1 }}>
+          {me.tenant.name}
+        </Text>
+        <View
+          accessibilityLabel={open ? `Expediente de ${formatBusinessDate(day.data!.businessDate)} aberto` : 'Sem expediente aberto'}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: radius.pill, backgroundColor: open ? c.successBg : c.neutralBg }}
+        >
+          <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: open ? c.success : c.neutral }} />
+          <Text variant="small" style={{ color: open ? c.success : c.neutral, fontWeight: '700' }}>
             {dayText}
           </Text>
         </View>
@@ -80,48 +86,86 @@ interface MenuEntry {
   permission?: Permission;
 }
 
-const ENTRIES: MenuEntry[] = [
-  { label: 'Perfil do usuário', icon: 'person-outline', href: '/menu/profile' },
-  { label: 'Dados do estabelecimento', icon: 'storefront-outline', href: '/menu/tenant', permission: 'orders.view' },
-  { label: 'Funcionários', icon: 'people-outline', href: '/menu/employees', permission: 'employees.manage' },
-  { label: 'Perfis e permissões', icon: 'shield-checkmark-outline', href: '/menu/roles' },
-  { label: 'Pratos e bebidas', icon: 'restaurant-outline', href: '/menu/products', permission: 'orders.view' },
-  { label: 'Tamanhos de marmita', icon: 'resize-outline', href: '/menu/sizes', permission: 'orders.view' },
-  { label: 'Cardápio do dia', icon: 'today-outline', href: '/menu/menus/today', permission: 'menu.manage' },
-  { label: 'Cardápio semanal', icon: 'calendar-outline', href: '/menu/menus/weekly', permission: 'menu.manage' },
-  { label: 'Histórico de cardápios', icon: 'albums-outline', href: '/menu/menus/history', permission: 'menu.manage' },
-  { label: 'Clientes', icon: 'person-circle-outline', href: '/menu/customers', permission: 'orders.view' },
-  { label: 'Configuração de preços', icon: 'pricetag-outline', href: '/menu/pricing', permission: 'settings.manage' },
-  { label: 'Formas de pagamento', icon: 'card-outline', href: '/menu/payment-methods', permission: 'settings.manage' },
-  { label: 'Histórico de operações', icon: 'list-outline', href: '/menu/audit', permission: 'audit.view' },
-  { label: 'Histórico de fechamentos', icon: 'archive-outline', href: '/closing/history', permission: 'closing.view' },
-  { label: 'Configurações gerais', icon: 'settings-outline', href: '/menu/settings' },
-  { label: 'Aparelhos compartilhados', icon: 'tablet-landscape-outline', href: '/menu/devices', permission: 'devices.manage' },
-  { label: 'Rascunhos e pendências', icon: 'document-text-outline', href: '/menu/drafts' },
-  { label: 'Assinatura e plano', icon: 'ribbon-outline', href: '/menu/subscription', permission: 'subscription.view' },
+/** Itens do épico §2.1 agrupados por frequência de uso (docs/10-ux.md D10). */
+const GROUPS: { title: string; entries: MenuEntry[] }[] = [
+  {
+    title: 'Operação',
+    entries: [
+      { label: 'Cardápio do dia', icon: 'today-outline', href: '/menu/menus/today', permission: 'menu.manage' },
+      { label: 'Clientes', icon: 'person-circle-outline', href: '/menu/customers', permission: 'orders.view' },
+      { label: 'Rascunhos e pendências', icon: 'document-text-outline', href: '/menu/drafts' },
+    ],
+  },
+  {
+    title: 'Cardápio',
+    entries: [
+      { label: 'Pratos e bebidas', icon: 'restaurant-outline', href: '/menu/products', permission: 'orders.view' },
+      { label: 'Tamanhos de marmita', icon: 'resize-outline', href: '/menu/sizes', permission: 'orders.view' },
+      { label: 'Cardápio semanal', icon: 'calendar-outline', href: '/menu/menus/weekly', permission: 'menu.manage' },
+      { label: 'Histórico de cardápios', icon: 'albums-outline', href: '/menu/menus/history', permission: 'menu.manage' },
+    ],
+  },
+  {
+    title: 'Financeiro',
+    entries: [
+      { label: 'Histórico de fechamentos', icon: 'archive-outline', href: '/closing/history', permission: 'closing.view' },
+      { label: 'Configuração de preços', icon: 'pricetag-outline', href: '/menu/pricing', permission: 'settings.manage' },
+      { label: 'Formas de pagamento', icon: 'card-outline', href: '/menu/payment-methods', permission: 'settings.manage' },
+      { label: 'Histórico de operações', icon: 'list-outline', href: '/menu/audit', permission: 'audit.view' },
+    ],
+  },
+  {
+    title: 'Equipe',
+    entries: [
+      { label: 'Funcionários', icon: 'people-outline', href: '/menu/employees', permission: 'employees.manage' },
+      { label: 'Perfis e permissões', icon: 'shield-checkmark-outline', href: '/menu/roles' },
+      { label: 'Aparelhos compartilhados', icon: 'tablet-landscape-outline', href: '/menu/devices', permission: 'devices.manage' },
+    ],
+  },
+  {
+    title: 'Conta',
+    entries: [
+      { label: 'Perfil do usuário', icon: 'person-outline', href: '/menu/profile' },
+      { label: 'Dados do estabelecimento', icon: 'storefront-outline', href: '/menu/tenant', permission: 'orders.view' },
+      { label: 'Configurações gerais', icon: 'settings-outline', href: '/menu/settings' },
+      { label: 'Assinatura e plano', icon: 'ribbon-outline', href: '/menu/subscription', permission: 'subscription.view' },
+    ],
+  },
 ];
 
 export function MenuSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const c = useColors();
   const me = useSession((s) => s.me);
   const pending = usePendingOps((s) => s.ops.length);
-  const entries = ENTRIES.filter((e) => !e.permission || hasPermission(me, e.permission));
+  const go = (href: string) => {
+    onClose();
+    router.push(href as never);
+  };
+  const groups = GROUPS.map((g) => ({ ...g, entries: g.entries.filter((e) => !e.permission || hasPermission(me, e.permission)) })).filter((g) => g.entries.length > 0);
   return (
     <BottomSheet visible={visible} title="Menu" onClose={onClose}>
-      {entries.map((e) => (
-        <Pressable
-          key={e.href}
-          accessibilityRole="button"
-          onPress={() => {
-            onClose();
-            router.push(e.href as never);
-          }}
-          style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: space.md, minHeight: 48, opacity: pressed ? 0.6 : 1 })}
-        >
-          <Ionicons name={e.icon} size={22} color={c.text} />
-          <Text style={{ flex: 1 }}>{e.label}</Text>
-          {e.href === '/menu/drafts' && pending > 0 ? <Text style={{ color: c.warning, fontWeight: '700' }}>{pending}</Text> : null}
-        </Pressable>
+      {pending > 0 ? (
+        <Banner tone="warning" text={pending === 1 ? '1 operação pendente neste aparelho.' : `${pending} operações pendentes neste aparelho.`} action={{ label: 'Conferir', onPress: () => go('/menu/drafts') }} />
+      ) : null}
+      {groups.map((g) => (
+        <View key={g.title}>
+          <Text variant="small" muted style={{ fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: space.xs }}>
+            {g.title}
+          </Text>
+          {g.entries.map((e) => (
+            <Pressable
+              key={e.href}
+              accessibilityRole="button"
+              onPress={() => go(e.href)}
+              style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: space.md, minHeight: TOUCH, opacity: pressed ? 0.6 : 1 })}
+            >
+              <Ionicons name={e.icon} size={22} color={c.text} />
+              <Text style={{ flex: 1 }}>{e.label}</Text>
+              {e.href === '/menu/drafts' && pending > 0 ? <Text style={{ color: c.warning, fontWeight: '700' }}>{pending}</Text> : null}
+              <Ionicons name="chevron-forward" size={18} color={c.textMuted} />
+            </Pressable>
+          ))}
+        </View>
       ))}
       <Pressable
         accessibilityRole="button"

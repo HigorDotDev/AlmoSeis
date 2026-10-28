@@ -101,7 +101,7 @@ export function SubmitFooter({
           </Text>
         </Row>
       ) : null}
-      <Button title={label} onPress={onPress} disabled={disabled || !online || unknown} loading={loading} />
+      <Button title={label} size="large" onPress={onPress} disabled={disabled || !online || unknown} loading={loading} />
     </View>
   );
 }

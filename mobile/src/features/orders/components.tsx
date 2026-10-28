@@ -20,7 +20,7 @@ import {
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { useCloneMenu } from '@/features/menu/hooks';
 import { formatBRL } from '@/lib/money';
-import { fulfillmentNames, orderTypeNames } from '@/lib/strings';
+import { fulfillmentNames } from '@/lib/strings';
 import { formatTime } from '@/lib/dates';
 import { useBlockedBy } from '@/stores/pendingOps';
 import { usePermission, useSession } from '@/stores/session';
@@ -31,23 +31,27 @@ export function orderLabel(o: Pick<OrderSummary, 'customerName' | 'tableLabel' |
   return o.customerName ?? 'Sem nome';
 }
 
-/** Número, cliente, atendimento, total, selo financeiro, selo de produção e alerta (08 §8.9). */
+/**
+ * Número, cliente, atendimento, total, selo financeiro, selo de produção e alerta (08 §8.9).
+ * Cliente e total em destaque; nº, hora e atendimento numa linha só (docs/10-ux.md D8). O tipo já vem da aba.
+ */
 export function OrderCard({ order }: { order: OrderSummary }) {
   const timeZone = useSession((s) => s.me?.tenant.timeZone ?? 'America/Sao_Paulo');
   const pending = useBlockedBy(`/orders/${order.id}`);
   const canceled = order.cancellationStatus === 'CANCELED';
   return (
     <Card onPress={() => router.push(`/orders/${order.id}`)} accessibilityLabel={`Pedido ${order.orderNumber}, ${orderLabel(order)}`} style={canceled ? { opacity: 0.6 } : undefined}>
-      <Row style={{ justifyContent: 'space-between' }}>
-        <Row>
-          <Text variant="title">#{order.orderNumber}</Text>
+      <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <Row style={{ flex: 1 }}>
+          <Text variant="title" numberOfLines={1} style={{ flexShrink: 1 }}>
+            {orderLabel(order)}
+          </Text>
           <AlertDot count={order.pendingAlertCount} />
         </Row>
-        <Text variant="subtitle">{formatBRL(order.totalAmount)}</Text>
+        <Text variant="title">{formatBRL(order.totalAmount)}</Text>
       </Row>
-      <Text numberOfLines={1}>{orderLabel(order)}</Text>
-      <Text variant="small" muted>
-        {orderTypeNames[order.orderType]} · {fulfillmentNames[order.fulfillmentType]} · {formatTime(order.createdAt, timeZone)} · {order.itemCount}{' '}
+      <Text muted style={{ fontWeight: '500' }}>
+        #{order.orderNumber} · {formatTime(order.createdAt, timeZone)} · {fulfillmentNames[order.fulfillmentType]} · {order.itemCount}{' '}
         {order.itemCount === 1 ? 'item' : 'itens'}
       </Text>
       <Row style={{ flexWrap: 'wrap' }}>

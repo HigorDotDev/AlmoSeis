@@ -16,6 +16,7 @@ import {
   Row,
   Skeleton,
   Text,
+  font,
   space,
   useColors,
 } from '@/components/ui';
@@ -121,14 +122,14 @@ function ProductionCard({ order: o, status, flash, onFlashed }: { order: Product
 
   const next = NEXT[status];
   const prev = PREV[status];
-  const big = { fontSize: 17 * scale };
+  const big = { fontSize: font.lg * scale };
 
   return (
     <Animated.View style={{ opacity }}>
       <Card style={o.pendingAlertCount > 0 ? { borderColor: c.alert, borderWidth: 2 } : undefined}>
         <Row style={{ justifyContent: 'space-between' }}>
           <Row>
-            <Text style={{ fontSize: 26 * scale, fontWeight: '800' }} maxFontSizeMultiplier={1.3}>
+            <Text style={{ fontSize: font.display * scale, fontWeight: '800' }} maxFontSizeMultiplier={1.3}>
               #{o.orderNumber}
             </Text>
             <AlertDot count={o.pendingAlertCount} />

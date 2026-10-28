@@ -116,7 +116,7 @@ function PayForm({ order: o }: { order: Order }) {
       <Stack.Screen options={{ title: `Receber · #${o.orderNumber}` }} />
       <Card>
         <Text muted>Saldo</Text>
-        <Text variant="big">{formatBRL(o.balance)}</Text>
+        <Text variant="display">{formatBRL(o.balance)}</Text>
         <Text variant="small" muted>
           Total {formatBRL(o.totalAmount)} · pago {formatBRL(o.paidAmount)}
         </Text>
@@ -140,9 +140,9 @@ function PayForm({ order: o }: { order: Order }) {
                   accessibilityRole="radio"
                   accessibilityState={{ selected: method === m }}
                   onPress={() => setMethod(m)}
-                  style={{ flex: 1, minHeight: 64, borderRadius: radius.md, borderWidth: 2, borderColor: method === m ? c.primary : c.border, backgroundColor: c.surface, alignItems: 'center', justifyContent: 'center' }}
+                  style={{ flex: 1, minHeight: 64, borderRadius: radius.md, borderWidth: 2, borderColor: method === m ? c.primary : c.border, backgroundColor: method === m ? c.primaryBg : c.surface, alignItems: 'center', justifyContent: 'center' }}
                 >
-                  <Text style={{ fontWeight: '700' }}>{paymentMethodNames[m]}</Text>
+                  <Text style={{ fontWeight: '700', color: method === m ? c.primary : c.text }}>{paymentMethodNames[m]}</Text>
                 </Pressable>
               ))}
             </Row>

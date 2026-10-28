@@ -16,7 +16,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 
-import { font, radius, space, TOUCH, useColors } from './theme';
+import { font, radius, space, TOUCH, TOUCH_LARGE, useColors } from './theme';
 
 export type IconName = ComponentProps<typeof Ionicons>['name'];
 
@@ -25,11 +25,13 @@ export function Text({
   muted,
   style,
   ...props
-}: TextProps & { variant?: 'title' | 'subtitle' | 'body' | 'small' | 'big'; muted?: boolean }) {
+}: TextProps & { variant?: 'title' | 'subtitle' | 'body' | 'small' | 'big' | 'display'; muted?: boolean }) {
   const c = useColors();
-  const size = { title: font.xl, subtitle: font.lg, body: font.md, small: font.sm, big: font.xxl }[variant];
-  const weight: TextStyle['fontWeight'] = variant === 'title' || variant === 'big' || variant === 'subtitle' ? '700' : '400';
-  return <RNText {...props} style={[{ color: muted ? c.textMuted : c.text, fontSize: size, fontWeight: weight }, style]} />;
+  const size = { title: font.xl, subtitle: font.lg, body: font.md, small: font.sm, big: font.xxl, display: font.display }[variant];
+  const weight: TextStyle['fontWeight'] = variant === 'display' ? '800' : variant === 'title' || variant === 'big' || variant === 'subtitle' ? '700' : '400';
+  // Números alinhados em valores e nº de pedido.
+  const numeric = variant === 'title' || variant === 'big' || variant === 'display';
+  return <RNText {...props} style={[{ color: muted ? c.textMuted : c.text, fontSize: size, fontWeight: weight }, numeric && { fontVariant: ['tabular-nums'] }, style]} />;
 }
 
 export function Screen({ children, scroll = true, style }: { children: ReactNode; scroll?: boolean; style?: StyleProp<ViewStyle> }) {
@@ -70,6 +72,7 @@ export function Button({
   disabled,
   loading,
   icon,
+  size = 'normal',
   style,
   accessibilityHint,
   testID,
@@ -77,6 +80,8 @@ export function Button({
   title: string;
   onPress: () => void;
   variant?: ButtonVariant;
+  /** `large`: 56 dp, para a ação principal do rodapé. */
+  size?: 'normal' | 'large';
   disabled?: boolean;
   /** Bloqueia toque duplo enquanto envia (08 §8.11). */
   loading?: boolean;
@@ -99,15 +104,15 @@ export function Button({
       accessibilityHint={accessibilityHint}
       accessibilityState={{ disabled: !!inactive, busy: !!loading }}
       style={({ pressed }) => [
-        { minHeight: TOUCH, borderRadius: radius.md, backgroundColor: bg, paddingHorizontal: space.lg, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: space.sm },
-        variant === 'secondary' && { borderWidth: 1, borderColor: c.border },
+        { minHeight: size === 'large' ? TOUCH_LARGE : TOUCH, borderRadius: radius.md, backgroundColor: bg, paddingHorizontal: space.lg, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: space.sm },
+        variant === 'secondary' && { borderWidth: 1.5, borderColor: c.border },
         inactive && { opacity: 0.45 },
         pressed && !inactive && { opacity: 0.8 },
         style,
       ]}
     >
       {loading ? <ActivityIndicator color={fg} /> : icon ? <Ionicons name={icon} size={20} color={fg} /> : null}
-      <RNText style={{ color: fg, fontSize: font.md, fontWeight: '700' }}>{title}</RNText>
+      <RNText style={{ color: fg, fontSize: size === 'large' ? font.lg : font.md, fontWeight: '700' }}>{title}</RNText>
     </Pressable>
   );
 }
@@ -175,17 +180,22 @@ export function Chip({ label, selected, onPress, disabled, strike }: { label: st
       accessibilityState={{ checked: !!selected, disabled: !!disabled }}
       accessibilityLabel={label}
       style={{
-        minHeight: 40,
-        paddingHorizontal: space.md,
+        minHeight: TOUCH,
+        paddingHorizontal: space.lg,
         borderRadius: radius.pill,
-        borderWidth: 1,
+        borderWidth: selected ? 2 : 1,
         borderColor: selected ? c.primary : c.border,
-        backgroundColor: selected ? c.primary : c.surface,
+        backgroundColor: selected ? c.primaryBg : c.surface,
+        flexDirection: 'row',
+        alignItems: 'center',
         justifyContent: 'center',
+        gap: space.xs,
         opacity: disabled ? 0.45 : 1,
       }}
     >
-      <RNText style={{ color: selected ? c.primaryText : c.text, fontSize: font.md, textDecorationLine: strike ? 'line-through' : 'none' }}>{label}</RNText>
+      {/* Selecionado também por ícone e peso, não só por cor (RNF-001). */}
+      {selected ? <Ionicons name="checkmark" size={18} color={c.primary} /> : null}
+      <RNText style={{ color: selected ? c.primary : c.text, fontWeight: selected ? '700' : '400', fontSize: font.md, textDecorationLine: strike ? 'line-through' : 'none' }}>{label}</RNText>
     </Pressable>
   );
 }
@@ -193,7 +203,7 @@ export function Chip({ label, selected, onPress, disabled, strike }: { label: st
 export function SegmentedControl<T extends string>({ options, value, onChange }: { options: { value: T; label: string }[]; value: T; onChange: (v: T) => void }) {
   const c = useColors();
   return (
-    <View accessibilityRole="tablist" style={{ flexDirection: 'row', backgroundColor: c.surfaceAlt, borderRadius: radius.md, padding: 3 }}>
+    <View accessibilityRole="tablist" style={{ flexDirection: 'row', backgroundColor: c.surfaceAlt, borderRadius: radius.md, padding: space.xs }}>
       {options.map((o) => {
         const active = o.value === value;
         return (
@@ -202,9 +212,9 @@ export function SegmentedControl<T extends string>({ options, value, onChange }:
             onPress={() => onChange(o.value)}
             accessibilityRole="tab"
             accessibilityState={{ selected: active }}
-            style={{ flex: 1, minHeight: 42, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm, backgroundColor: active ? c.surface : 'transparent' }}
+            style={{ flex: 1, minHeight: TOUCH, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm, backgroundColor: active ? c.surface : 'transparent' }}
           >
-            <RNText style={{ color: active ? c.text : c.textMuted, fontWeight: active ? '700' : '400', fontSize: font.sm }}>{o.label}</RNText>
+            <RNText style={{ color: active ? c.text : c.textMuted, fontWeight: active ? '700' : '500', fontSize: font.sm }}>{o.label}</RNText>
           </Pressable>
         );
       })}
@@ -248,7 +258,7 @@ export function Banner({ tone, text, action }: { tone: 'info' | 'warning' | 'dan
     <View accessibilityRole="alert" style={{ backgroundColor: bg, padding: space.md, borderRadius: radius.md, gap: space.sm }}>
       <RNText style={{ color: fg, fontSize: font.sm, fontWeight: '600' }}>{text}</RNText>
       {action ? (
-        <Pressable onPress={action.onPress} accessibilityRole="button" style={{ minHeight: 36, justifyContent: 'center' }}>
+        <Pressable onPress={action.onPress} accessibilityRole="button" style={{ minHeight: TOUCH, justifyContent: 'center' }}>
           <RNText style={{ color: fg, fontWeight: '700', textDecorationLine: 'underline' }}>{action.label}</RNText>
         </Pressable>
       ) : null}
@@ -309,8 +319,9 @@ export function Fab({ label, icon, onPress, disabled, offset = 0 }: { label: str
         position: 'absolute',
         right: space.lg,
         bottom: space.lg + offset,
-        minHeight: 56,
-        paddingHorizontal: space.lg,
+        minHeight: TOUCH_LARGE,
+        paddingLeft: space.lg,
+        paddingRight: space.xl,
         borderRadius: radius.pill,
         backgroundColor: c.primary,
         flexDirection: 'row',
@@ -324,8 +335,8 @@ export function Fab({ label, icon, onPress, disabled, offset = 0 }: { label: str
         shadowOffset: { width: 0, height: 3 },
       })}
     >
-      <Ionicons name={icon} size={22} color={c.primaryText} />
-      <RNText style={{ color: c.primaryText, fontWeight: '700', fontSize: font.md }}>{label}</RNText>
+      <Ionicons name={icon} size={24} color={c.primaryText} />
+      <RNText style={{ color: c.primaryText, fontWeight: '700', fontSize: font.lg }}>{label}</RNText>
     </Pressable>
   );
 }

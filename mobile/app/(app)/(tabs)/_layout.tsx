@@ -24,7 +24,7 @@ export default function TabsLayout() {
           tabBarActiveTintColor: c.primary,
           tabBarInactiveTintColor: c.textMuted,
           tabBarIndicatorStyle: { backgroundColor: c.primary, height: 3 },
-          tabBarLabelStyle: { fontWeight: '700', fontSize: 13, textTransform: 'none' },
+          tabBarLabelStyle: { fontWeight: '700', fontSize: 14, textTransform: 'none' },
           tabBarScrollEnabled: false,
         }}
       >

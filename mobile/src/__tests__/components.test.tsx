@@ -1,9 +1,10 @@
 /** 08 §8.13: ConfirmDialog, MoneyInput, PermissionGate e OrderCard com os dois selos. */
 import { fireEvent, render, screen, userEvent } from '@testing-library/react-native';
 import { useState } from 'react';
+import { StyleSheet } from 'react-native';
 
 import type { Me, OrderSummary } from '@/api/types';
-import { Button, ConfirmDialog, MoneyInput, PaymentBadge, PermissionGate, ProductionBadge, Text } from '@/components/ui';
+import { Button, Chip, ConfirmDialog, MoneyInput, PaymentBadge, PermissionGate, ProductionBadge, SegmentedControl, Text } from '@/components/ui';
 import { OrderCard } from '@/features/orders/components';
 import { useSession } from '@/stores/session';
 
@@ -109,7 +110,7 @@ describe('selos (RNF-001)', () => {
     const production = screen.getByTestId('production-badge');
     const payment = screen.getByTestId('payment-badge');
     expect(production.props.style.borderRadius).toBe(999);
-    expect(payment.props.style.borderRadius).toBe(3);
+    expect(payment.props.style.borderRadius).toBe(4);
     expect(screen.getByText('Em produção')).toBeTruthy();
     expect(screen.getByText('R$ 20 de R$ 55')).toBeTruthy();
   });
@@ -137,11 +138,24 @@ describe('selos (RNF-001)', () => {
       createdAt: '2026-10-27T14:30:00Z',
     };
     await render(<OrderCard order={order} />);
-    expect(screen.getByText('#12')).toBeTruthy();
+    expect(screen.getByText(/^#12 · /)).toBeTruthy();
     expect(screen.getByText('João Silva')).toBeTruthy();
     expect(screen.getByTestId('production-badge')).toBeTruthy();
     expect(screen.getByTestId('payment-badge')).toBeTruthy();
     expect(screen.getByText('A pagar')).toBeTruthy();
     expect(screen.getByLabelText('1 alteração não vista')).toBeTruthy();
+  });
+});
+
+describe('Alvos de toque (RNF-001, docs/10-ux.md D4)', () => {
+  it('chip e segmentado têm 48 dp', async () => {
+    await render(
+      <>
+        <Chip label="Arroz" selected onPress={() => {}} />
+        <SegmentedControl value="A" onChange={() => {}} options={[{ value: 'A', label: 'Todos' }, { value: 'B', label: 'A pagar' }]} />
+      </>,
+    );
+    expect(StyleSheet.flatten(screen.getByRole('checkbox').props.style).minHeight).toBe(48);
+    for (const tab of screen.getAllByRole('tab')) expect(StyleSheet.flatten(tab.props.style).minHeight).toBe(48);
   });
 });

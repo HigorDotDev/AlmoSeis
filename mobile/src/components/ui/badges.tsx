@@ -23,13 +23,13 @@ function Badge({ shape, icon, label, fg, bg, testID }: { shape: 'pill' | 'square
         gap: 4,
         paddingHorizontal: space.sm,
         paddingVertical: 3,
-        borderRadius: shape === 'pill' ? radius.pill : 3,
+        borderRadius: shape === 'pill' ? radius.pill : 4,
         backgroundColor: bg,
         borderWidth: shape === 'square' ? 1.5 : 0,
         borderColor: fg,
       }}
     >
-      <Ionicons name={icon} size={14} color={fg} />
+      <Ionicons name={icon} size={16} color={fg} />
       <Text variant="small" style={{ color: fg, fontWeight: '700' }}>
         {label}
       </Text>

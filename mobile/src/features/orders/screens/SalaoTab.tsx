@@ -64,11 +64,13 @@ export default function SalaoTab() {
         }
         renderItem={({ item }) => <OrderCard order={item} />}
       />
+      {/* Um botão só: a ação segue o filtro (docs/10-ux.md D6). */}
       {canCreate ? (
-        <>
-          <Fab label="Nova comanda (quilo)" icon="scale-outline" onPress={() => router.push('/orders/new/kilo')} />
-          <Fab label="Nova mesa (PF)" icon="restaurant-outline" offset={68} onPress={() => router.push('/orders/new/pf')} />
-        </>
+        type === 'PF' ? (
+          <Fab label="Nova mesa" icon="restaurant-outline" onPress={() => router.push('/orders/new/pf')} />
+        ) : (
+          <Fab label="Nova comanda" icon="scale-outline" onPress={() => router.push('/orders/new/kilo')} />
+        )
       ) : null}
     </View>
   );
