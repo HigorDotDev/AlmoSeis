@@ -1,0 +1,28 @@
+# 08 §8.13, fluxo 3: PIN no aparelho compartilhado + inatividade.
+#   maestro test e2e/03-aparelho-compartilhado.yaml -e LOGIN=34999990001 -e PASSWORD=S3nha-forte! -e PIN=4821
+# Pré-requisito: o proprietário já definiu o PIN (Perfil → Definir PIN) e "minutos sem uso" = 1
+# (Formas de pagamento → Aparelho compartilhado).
+appId: app.almoseis
+---
+- launchApp:
+    clearState: true
+- tapOn: Telefone ou e-mail
+- inputText: ${LOGIN}
+- tapOn: Senha
+- inputText: ${PASSWORD}
+- tapOn: Entrar
+- tapOn: Abrir menu
+- tapOn: Aparelhos compartilhados
+- tapOn: Nome do aparelho
+- inputText: Tablet E2E
+- tapOn: Registrar este aparelho
+- tapOn: Registrar e sair
+- assertVisible: Quem vai usar?
+- tapOn: "Entrar como .*"
+- tapOn: ${PIN}
+- tapOn: Entrar
+- assertVisible: ".* · Trocar"
+# Sem toque por 1 minuto: volta para a seleção de funcionário.
+- extendedWaitUntil:
+    visible: Quem vai usar?
+    timeout: 90000

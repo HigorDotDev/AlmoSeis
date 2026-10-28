@@ -1,0 +1,39 @@
+# 08 §8.13, fluxo 2: a rede cai no meio do "Receber" → volta → o app resolve por GET /operations/{key}
+# sem duplicar o pagamento. Usa o modo avião do emulador (adb), então roda só em Android:
+#   maestro test e2e/02-rede-cai-no-receber.yaml -e LOGIN=34999990001 -e PASSWORD=S3nha-forte!
+# Pré-requisito: expediente aberto e um pedido #1 com saldo (o fluxo 1 até "Pedido #1 registrado").
+appId: app.almoseis
+---
+- launchApp
+- runFlow:
+    when:
+      visible: Entrar
+    commands:
+      - tapOn: Telefone ou e-mail
+      - inputText: ${LOGIN}
+      - tapOn: Senha
+      - inputText: ${PASSWORD}
+      - tapOn: Entrar
+- tapOn: "#1"
+- tapOn: Receber
+- tapOn: Pix
+- tapOn: Confirmar recebimento
+- setAirplaneMode: enabled
+- tapOn:
+    text: Receber R\$ .*
+- assertVisible: "Não sabemos se o pagamento foi registrado. Verificando…"
+# O botão fica bloqueado enquanto o resultado é desconhecido (RN-009.9).
+- assertVisible: Pendente de confirmação
+- setAirplaneMode: disabled
+- extendedWaitUntil:
+    visible: "Operação confirmada pelo servidor."
+    timeout: 30000
+- back
+# Um pagamento só: o saldo está zerado e há uma única linha Pix.
+- assertVisible: Pedido quitado. Para corrigir, estorne um pagamento.
+- assertVisible:
+    text: "Pix · .*"
+    index: 0
+- assertNotVisible:
+    text: "Pix · .*"
+    index: 1

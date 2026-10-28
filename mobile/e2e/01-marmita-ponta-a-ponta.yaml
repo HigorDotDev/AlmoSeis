@@ -1,0 +1,86 @@
+# 08 §8.13, fluxo 1: cadastro → abrir expediente → marmita com bebida → receber em dinheiro com troco →
+# fechar com diferença e justificativa. Roda em homolog com um Dev Client/preview instalado:
+#   maestro test e2e/01-marmita-ponta-a-ponta.yaml -e PHONE=34999990001 -e DOC=11222333000181
+# Pré-requisito do catálogo: tamanho "M", um prato principal, um acompanhamento e uma bebida cadastrados
+# (o fluxo usa os nomes PRATO, ACOMP e BEBIDA).
+appId: app.almoseis
+env:
+  PRATO: Frango grelhado
+  ACOMP: Arroz
+  BEBIDA: Coca-Cola 350ml
+---
+- launchApp:
+    clearState: true
+- tapOn: Criar conta do estabelecimento
+- tapOn: Seu nome
+- inputText: Ana Teste
+- tapOn: Celular com DDD
+- inputText: ${PHONE}
+- tapOn: Senha
+- inputText: S3nha-forte!
+- tapOn: Continuar
+- tapOn: Nome do estabelecimento
+- inputText: Marmitaria E2E
+- tapOn: CPF ou CNPJ
+- inputText: ${DOC}
+- tapOn: Cidade
+- inputText: Uberlândia
+- tapOn: UF
+- inputText: MG
+- tapOn: Continuar
+- tapOn: Aceito os termos
+- tapOn: Criar estabelecimento
+
+- tapOn: Abrir expediente
+- tapOn: Saldo inicial do caixa (dinheiro na gaveta)
+- inputText: "10000"
+- tapOn: Abrir
+- tapOn:
+    text: Abrir com R\$ 100,00
+- tapOn: Ir para os pedidos
+
+- tapOn: Nova marmita
+- tapOn: Nome
+- inputText: João E2E
+- tapOn: Adicionar
+- tapOn:
+    text: "M · .*"
+- tapOn: ${PRATO}
+- tapOn: ${ACOMP}
+- tapOn: Adicionar ao pedido
+- tapOn: Aumentar ${BEBIDA}
+- tapOn: Registrar pedido
+- tapOn:
+    text: Registrar R\$ .*
+- assertVisible: "Pedido #1 registrado"
+
+- tapOn: Receber
+- tapOn: Dinheiro
+- tapOn: Recebido em dinheiro (opcional)
+- inputText: "10000"
+- assertVisible: "Troco: .*"
+- tapOn: Confirmar recebimento
+- tapOn:
+    text: Receber R\$ .*
+- assertVisible: "Recebido. Troco: .*"
+- back
+- back
+
+- swipe:
+    direction: LEFT
+- swipe:
+    direction: LEFT
+- swipe:
+    direction: LEFT
+- tapOn: Fechar expediente
+- tapOn: Conferido, contar o dinheiro
+- tapOn: Quanto há no caixa?
+- inputText: "10000"
+- assertVisible: "Faltam .*"
+- tapOn: Justificativa (obrigatória com diferença)
+- inputText: Troco conferido com o entregador
+- tapOn: Fechar expediente
+- tapOn:
+    text: Fechar expediente
+    index: 1
+- assertVisible: Expediente fechado.

@@ -549,3 +549,28 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 | E2E (Maestro, emulador Android de entrada) | 1) cadastro → abrir expediente → marmita com bebida → receber em dinheiro com troco → fechar com diferença e justificativa; 2) desligar a rede no meio do "Receber" → religar → app resolve sem duplicar; 3) PIN no aparelho compartilhado + inatividade |
 
 Critério de pronto do mobile (`docs/02-padroes.md` §2.6): fluxos E2E 1 e 2 passando em homolog antes de cada release para as lojas.
+
+---
+
+## 8.14 Notas de implementação (aprendidas no código)
+
+| Tema | Como ficou | Por quê |
+|---|---|---|
+| Versões | Expo SDK 58, React Native 0.88, React 19.3, TypeScript 6 (`types: ["jest","node"]` no `tsconfig`, porque o TS 6 não inclui mais `@types/*` sozinho). **Node ≥ 22.13** | Mínimo do SDK 58; o Node 21 não instala |
+| Abas superiores | `TopTabs` de `expo-router/js-top-tabs` (já vem no Expo Router), filtradas com `TopTabs.Protected guard={permissão}` | Dispensa `@react-navigation/material-top-tabs` + `withLayoutContext`; aba sem permissão some do navegador |
+| Rotas | Cada arquivo em `app/` só reexporta uma tela de `src/features/*/screens`; o ESLint proíbe `fetch` em `app/` | Regra de 8.2 garantida por ferramenta |
+| Escritas [I] | `src/api/critical.ts` descreve cada uma como dado (`{method, path, body, ifMatch}`); a pendência guarda exatamente isso e o reenvio repete chave e corpo | Única fonte desses caminhos; reenvio idêntico ao envio original |
+| Escritas só [M] do pedido | Status, alterar/remover item, remover pesagem, editar dados e cancelar usam `useCriticalMutation` com `idempotent: false`: sem `Idempotency-Key` e sem pendência. Falha de rede recarrega o pedido e pede conferência | Não há o que consultar em `/operations`; reenviar com a mesma versão dá `409`, nunca duplica |
+| Escritas de gestão | Produto, tamanho, cardápio, cliente, funcionário, convite, configurações e estabelecimento usam mutação simples do TanStack Query; `409` aparece como erro e o recurso é recarregado | Telas de cadastro, fora do caixa; **a confirmar** como exceção ao "todo [I]/[M] passa por `useCriticalMutation`" de 8.5 |
+| `SENDING` antigo | No sync, pendência `SENDING` com mais de 30 s é tratada como `UNKNOWN` | É o app que morreu no meio do envio; a recente ainda pode estar em voo |
+| `COMPLETED` com erro | `/operations` com `responseStatus` 4xx encerra a pendência e mantém o rascunho | A operação foi processada e recusada; reenviar daria a mesma recusa |
+| Pendência > 72 h | "Reenviar" avisa para conferir no histórico e vai com **chave nova** | O app não tem como procurar o recurso genericamente (8.5 passo 5 pede isso); **a confirmar** |
+| Primeiro sync | Sem `lastSeq` no aparelho, percorre o feed só para avançar o cursor, sem invalidar | O cache ainda está vazio |
+| Cache persistido | `kv-store` do `expo-sqlite`, chave única, `buster` = `tenantId`; trocar de tenant ou sair chama `queryClient.clear()` + `removeClient()` | Escopo por tenant (RN-014.2) sem um persister por tenant |
+| `me` offline | Guardado na tabela `meta` do SQLite; tokens continuam só no SecureStore | Abrir o app sem rede com permissões e nome do estabelecimento |
+| Formulários | RHF + Zod; nos pedidos, `useWatch` (compatível com o React Compiler) e validação Zod no "Registrar" | O `watch()` do RHF desliga a compilação do componente |
+| Divisão "por itens" | Soma `lineTotal` dos itens marcados (com adicionais), limitada ao saldo, num único pagamento | 8.9 não detalha; é uma parcela por vez |
+| Senha no perfil | Sem "trocar senha": o 06 não tem rota de troca autenticada. O perfil orienta usar "Esqueci a senha" ou o código do proprietário | **Lacuna** do 06 a decidir |
+| Inatividade compartilhada | `sharedDeviceIdleSeconds` é editado em "Formas de pagamento" (mesmo `PATCH /tenant/settings`) | `menu/settings` é só local (8.10) |
+| Som | `assets/sounds/new-order.wav` (bipe curto gerado) via `expo-audio` | ADR-0036 |
+| E2E | Fluxos Maestro em `mobile/e2e/` escritos a partir de 8.13; **ainda não rodados** em emulador | Exigem homolog e Dev Client instalado |
