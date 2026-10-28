@@ -94,6 +94,8 @@ public sealed record AcceptInvitationCommand(string Code, AcceptInvitationReques
 
 public sealed record SetOwnPinCommand(string Pin, string CurrentPassword);
 
+public sealed record ChangeOwnPasswordCommand(string CurrentPassword, string NewPassword);
+
 /// POST /auth/password/reset: `code` + `login` (código emitido por quem gerencia funcionários).
 public sealed record ResetPasswordCommand(string? Code, string? Login, string? EmailToken, string NewPassword);
 

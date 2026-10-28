@@ -497,6 +497,36 @@ internal sealed class SetOwnPinHandler(AppDbContext db, ITenantContext tenant, I
     }
 }
 
+/// PUT /auth/me/password: confere a senha atual, troca a senha (e o stamp) e derruba as sessões das outras instalações.
+internal sealed class ChangeOwnPasswordHandler(AppDbContext db, ITenantContext tenant, IPasswordHasher<User> passwords, IAuditWriter audit, TimeProvider time)
+    : ICommandHandler<ChangeOwnPasswordCommand, bool>
+{
+    public async Task<bool> HandleAsync(ChangeOwnPasswordCommand command, CancellationToken cancellationToken)
+    {
+        var user = await db.Set<User>().SingleAsync(u => u.Id == tenant.UserId, cancellationToken);
+        if (passwords.VerifyHashedPassword(user, user.PasswordHash, command.CurrentPassword) == PasswordVerificationResult.Failed)
+        {
+            // 422, não 401: o app trataria 401 como sessão vencida (mesma regra do PIN).
+            throw BusinessException.Validation("currentPassword", "Senha atual incorreta.");
+        }
+
+        if (passwords.VerifyHashedPassword(user, user.PasswordHash, command.NewPassword) != PasswordVerificationResult.Failed)
+        {
+            throw BusinessException.Validation("newPassword", "A nova senha precisa ser diferente da atual.");
+        }
+
+        user.SetPasswordHash(passwords.HashPassword(user, command.NewPassword));
+        var now = time.GetUtcNow();
+        var installationId = tenant.InstallationId;
+        await db.Set<RefreshToken>()
+            .Where(t => t.UserId == user.Id && t.RevokedAt == null && t.InstallationId != installationId)
+            .ExecuteUpdateAsync(u => u.SetProperty(t => t.RevokedAt, now), cancellationToken);
+
+        audit.Add("PasswordChanged", "USER", user.Id);
+        return true;
+    }
+}
+
 /// Convite pelo código: a política `invitation_by_code` (05 §5.12) libera a leitura sem tenant na sessão.
 internal sealed class InvitationLookup(AppDbContext db, ITenantSession session, TimeProvider time)
 {

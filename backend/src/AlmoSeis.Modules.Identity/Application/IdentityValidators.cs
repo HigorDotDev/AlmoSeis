@@ -138,6 +138,15 @@ internal sealed class SetOwnPinCommandValidator : AbstractValidator<SetOwnPinCom
     }
 }
 
+internal sealed class ChangeOwnPasswordCommandValidator : AbstractValidator<ChangeOwnPasswordCommand>
+{
+    public ChangeOwnPasswordCommandValidator()
+    {
+        RuleFor(x => x.CurrentPassword).NotEmpty().WithMessage("Informe a senha atual.").MaximumLength(128);
+        RuleFor(x => x.NewPassword).StrongPassword();
+    }
+}
+
 internal sealed class RegisterSharedDeviceCommandValidator : AbstractValidator<RegisterSharedDeviceCommand>
 {
     public RegisterSharedDeviceCommandValidator()

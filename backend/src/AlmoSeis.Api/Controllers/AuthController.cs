@@ -73,6 +73,17 @@ public sealed class AuthController : ControllerBase
         return NoContent();
     }
 
+    [HttpPut("me/password")]
+    [Authorize]
+    public async Task<IActionResult> ChangePassword(
+        [FromBody] ChangeOwnPasswordCommand command,
+        [FromServices] ICommandHandler<ChangeOwnPasswordCommand, bool> handler,
+        CancellationToken cancellationToken)
+    {
+        await handler.HandleAsync(command, cancellationToken);
+        return NoContent();
+    }
+
     [HttpPost("password/reset")]
     [AllowAnonymous]
     public async Task<IActionResult> ResetPassword(

@@ -193,6 +193,43 @@ public sealed class ManagementFlowTests(PostgresFixture db) : IDisposable
             .GetProperty("employee").GetProperty("hasPin").GetBoolean().ShouldBeTrue();
     }
 
+    [Fact]
+    public async Task Own_password_change_keeps_this_installation_and_revokes_the_others()
+    {
+        var owner = await _api.SignUpAsync();
+        var email = owner.GetProperty("me").GetProperty("user").GetProperty("email").GetString()!;
+        var anonymous = _api.CreateClient();
+        var here = await (await anonymous.PostAsJsonAsync("/api/v1/auth/login", new { login = email, password = "S3nha-forte!", installationId = "inst_here" }, Ct))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+        var other = await (await anonymous.PostAsJsonAsync("/api/v1/auth/login", new { login = email, password = "S3nha-forte!", installationId = "inst_other" }, Ct))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+        var client = _api.Authenticated(here.AccessToken());
+
+        (await (await client.SendJsonAsync(HttpMethod.Put, "/api/v1/auth/me/password", new { currentPassword = "errada", newPassword = "Outra-s3nha!" }))
+            .ExpectAsync(HttpStatusCode.UnprocessableEntity, _api)).GetProperty("errors").TryGetProperty("currentPassword", out _).ShouldBeTrue();
+        (await (await client.SendJsonAsync(HttpMethod.Put, "/api/v1/auth/me/password", new { currentPassword = "S3nha-forte!", newPassword = "curta" }))
+            .ExpectAsync(HttpStatusCode.UnprocessableEntity, _api)).GetProperty("errors").TryGetProperty("newPassword", out _).ShouldBeTrue();
+        (await (await client.SendJsonAsync(HttpMethod.Put, "/api/v1/auth/me/password", new { currentPassword = "S3nha-forte!", newPassword = "S3nha-forte!" }))
+            .ExpectAsync(HttpStatusCode.UnprocessableEntity, _api)).GetProperty("errors").TryGetProperty("newPassword", out _).ShouldBeTrue();
+        (await client.SendJsonAsync(HttpMethod.Put, "/api/v1/auth/me/password", new { currentPassword = "S3nha-forte!", newPassword = "Outra-s3nha!" }))
+            .StatusCode.ShouldBe(HttpStatusCode.NoContent);
+
+        await (await anonymous.PostAsJsonAsync("/api/v1/auth/refresh", new { refreshToken = RefreshToken(here), installationId = "inst_here" }, Ct))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+        (await (await anonymous.PostAsJsonAsync("/api/v1/auth/refresh", new { refreshToken = RefreshToken(other), installationId = "inst_other" }, Ct))
+            .ExpectAsync(HttpStatusCode.Unauthorized, _api)).GetProperty("errorCode").GetString().ShouldBe("InvalidRefreshToken");
+
+        (await anonymous.PostAsJsonAsync("/api/v1/auth/login", new { login = email, password = "S3nha-forte!", installationId = "inst_here" }, Ct))
+            .StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+        await (await anonymous.PostAsJsonAsync("/api/v1/auth/login", new { login = email, password = "Outra-s3nha!", installationId = "inst_here" }, Ct))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+        (await CountAsync("SELECT count(*) FROM audit_logs a JOIN users u ON u.id = a.entity_id WHERE u.normalized_email = upper(@e) AND a.operation_type = 'PasswordChanged'", email))
+            .ShouldBe(1);
+    }
+
+    private static string RefreshToken(JsonElement authResult) =>
+        authResult.GetProperty("tokens").GetProperty("refreshToken").GetString()!;
+
     private async Task<string> EmployeeWithEmailAsync(JsonElement owner, string email)
     {
         var invitation = await (await _api.Authenticated(owner.AccessToken()).PostAsJsonAsync("/api/v1/employees/invitations", new { roles = new[] { "KITCHEN" } }, Ct))
