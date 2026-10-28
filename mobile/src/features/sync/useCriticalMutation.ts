@@ -23,7 +23,8 @@ export interface CriticalMutationOptions<TVars, TResult> {
   onConfirmed?: (result: TResult, vars: TVars, version: number | null) => void;
   /** Resultado desconhecido que se revelou concluído: a resposta se perdeu, então só há o id do recurso. */
   onResolvedCompleted?: (resourceId: string | null) => void;
-  onRejected?: (error: ApiError, vars: TVars) => void;
+  /** Devolva `true` quando a tela já trata a recusa (ex.: pede confirmação) e a mensagem de erro não deve aparecer. */
+  onRejected?: (error: ApiError, vars: TVars) => boolean | void;
   onConflict?: (current: unknown, error: ApiError, vars: TVars) => void;
   successMessage?: (result: TResult, vars: TVars) => string | null;
   draftId?: string | null;
@@ -111,9 +112,8 @@ export function useCriticalMutation<TVars, TResult>(options: CriticalMutationOpt
         }
         case 'rejected':
           setState('idle');
-          setError(errorMessage(outcome.error));
           setFieldErrors(outcome.error.errors);
-          o.onRejected?.(outcome.error, vars);
+          setError(o.onRejected?.(outcome.error, vars) === true ? null : errorMessage(outcome.error));
           break;
         case 'conflict':
           setState('idle');

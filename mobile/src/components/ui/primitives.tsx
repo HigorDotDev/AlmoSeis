@@ -1,6 +1,7 @@
 /** Blocos básicos: texto, tela, card, botão, campo, chip, segmentado, estados de tela. */
 import { Ionicons } from '@expo/vector-icons';
 import type { ComponentProps, ReactNode } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
   Pressable,
@@ -36,11 +37,12 @@ export function Text({
 
 export function Screen({ children, scroll = true, style }: { children: ReactNode; scroll?: boolean; style?: StyleProp<ViewStyle> }) {
   const c = useColors();
+  const insets = useSafeAreaInsets();
   if (!scroll) {
     return <View style={[{ flex: 1, backgroundColor: c.bg }, style]}>{children}</View>;
   }
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: c.bg }} contentContainerStyle={[{ padding: space.lg, gap: space.md, paddingBottom: 96 }, style]} keyboardShouldPersistTaps="handled">
+    <ScrollView style={{ flex: 1, backgroundColor: c.bg }} contentContainerStyle={[{ padding: space.lg, gap: space.md, paddingBottom: 96 + insets.bottom }, style]} keyboardShouldPersistTaps="handled">
       {children}
     </ScrollView>
   );
@@ -112,7 +114,9 @@ export function Button({
       ]}
     >
       {loading ? <ActivityIndicator color={fg} /> : icon ? <Ionicons name={icon} size={20} color={fg} /> : null}
-      <RNText style={{ color: fg, fontSize: size === 'large' ? font.lg : font.md, fontWeight: '700' }}>{title}</RNText>
+      <RNText numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} style={{ flexShrink: 1, textAlign: 'center', color: fg, fontSize: size === 'large' ? font.lg : font.md, fontWeight: '700' }}>
+        {title}
+      </RNText>
     </Pressable>
   );
 }
@@ -308,6 +312,8 @@ export function Skeleton({ lines = 3 }: { lines?: number }) {
 
 export function Fab({ label, icon, onPress, disabled, offset = 0 }: { label: string; icon: IconName; onPress: () => void; disabled?: boolean; offset?: number }) {
   const c = useColors();
+  // Edge-to-edge: sem o inset, a barra de navegação do Android cobre o botão.
+  const insets = useSafeAreaInsets();
   return (
     <Pressable
       disabled={!!disabled}
@@ -318,7 +324,7 @@ export function Fab({ label, icon, onPress, disabled, offset = 0 }: { label: str
       style={({ pressed }) => ({
         position: 'absolute',
         right: space.lg,
-        bottom: space.lg + offset,
+        bottom: space.lg + insets.bottom + offset,
         minHeight: TOUCH_LARGE,
         paddingLeft: space.lg,
         paddingRight: space.xl,

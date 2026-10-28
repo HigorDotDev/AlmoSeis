@@ -1,6 +1,7 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { RefreshControl, ScrollView, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { errorMessage } from '@/api/errors';
 import type { Order, OrderItem } from '@/api/types';
@@ -250,6 +251,8 @@ function FinancialBlock({ order: o }: { order: Order }) {
 
 function ActionBar({ order: o }: { order: Order }) {
   const c = useColors();
+  // Edge-to-edge: a barra fica acima da navegação do Android.
+  const insets = useSafeAreaInsets();
   const online = useIsOnline();
   const canEdit = useCanWrite('orders.edit');
   const canPay = useCanWrite('payments.register');
@@ -260,7 +263,7 @@ function ActionBar({ order: o }: { order: Order }) {
   const editable = active && !o.isPaid && online;
 
   return (
-    <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: c.surface, borderTopWidth: 1, borderTopColor: c.border, padding: space.sm, gap: space.sm }}>
+    <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: c.surface, borderTopWidth: 1, borderTopColor: c.border, padding: space.sm, paddingBottom: space.sm + insets.bottom, gap: space.sm }}>
       <Row style={{ flexWrap: 'wrap' }}>
         {canPay && active && !o.isPaid ? <Button title="Receber" icon="cash-outline" disabled={!online} onPress={() => router.push(`/orders/${o.id}/pay`)} style={{ flex: 1 }} /> : null}
         {canEdit && editable && o.orderType !== 'KILO' ? <Button title="Adicionar itens" variant="secondary" onPress={() => router.push(`/orders/${o.id}/add-items`)} style={{ flex: 1 }} /> : null}

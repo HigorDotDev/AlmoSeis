@@ -42,7 +42,10 @@ export function useOpenBusinessDay(onOpened: (result: OpenBusinessDayResult) => 
       void client.invalidateQueries({ queryKey: qk.businessDay });
     },
     onRejected: (error) => {
-      if (error.is('BusinessDayClosedToday')) onClosedToday();
+      if (error.is('BusinessDayClosedToday')) {
+        onClosedToday();
+        return true;
+      }
       if (error.is('BusinessDayAlreadyOpen')) void client.invalidateQueries({ queryKey: qk.businessDay });
     },
     successMessage: () => 'Expediente aberto.',
