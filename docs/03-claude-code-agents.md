@@ -12,6 +12,7 @@
 | `backend-agent` | Handlers, agregados, controllers, hub SignalR, outbox, idempotência | Sim (`backend/`) |
 | `mobile-agent` | Telas Expo Router, hooks de API, rascunhos SQLite, sincronização | Sim (`mobile/`) |
 | `devops-agent` | Docker Compose, GitHub Actions, Azure, Key Vault, EAS | Sim (`infra/`, `.github/`, Dockerfiles) |
+| `ux-agent` | Telas atuais e proposta de UI/UX no Figma (plugin Figma), design system, acessibilidade e textos | Não (Figma e docs) |
 
 ## 3.2 Regras permanentes ("skills")
 

@@ -45,6 +45,7 @@ Definidos em `.claude/agents/`:
 - `database-agent`: modelagem física, migrations, RLS, índices, consultas de fechamento.
 - `devops-agent`: Docker, GitHub Actions, Azure, EAS.
 - `domain-agent`: regras de negócio de restaurante e financeiras; transforma lacunas em perguntas e ADRs. Não gera código.
+- `ux-agent`: UI/UX; telas atuais e proposta de redesenho no Figma, design system e acessibilidade. Não altera o código do app.
 
 Prefira acionar o agente do domínio em vez de gerar código de vários domínios na sessão principal.
 
