@@ -2,13 +2,15 @@
  * Montagem de uma marmita (08 §8.9): tamanho, pratos e acompanhamentos do dia, adicionais, quantidade e observação.
  * O estado nasce de `initial`: quem usa remonta pelo `key` a cada abertura.
  */
+import { router } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 
 import type { MarmitaSize, Menu, Product } from '@/api/types';
-import { BottomSheet, Button, Chip, QuantityStepper, Row, Text, TextField } from '@/components/ui';
+import { Banner, BottomSheet, Button, Chip, QuantityStepper, Row, Text, TextField } from '@/components/ui';
 import { formatBRL } from '@/lib/money';
 import { newKey } from '@/lib/ids';
+import { usePermission } from '@/stores/session';
 
 import type { MarmitaLine } from './compose';
 import { AddonPicker } from './formParts';
@@ -32,6 +34,7 @@ export function MarmitaBuilderSheet({
 }) {
   const blank = (): MarmitaLine => ({ key: newKey(), sizeId: sizes[0]?.id ?? '', quantity: 1, mainDishIds: [], sideDishIds: [], notes: '', addons: [] });
   const [line, setLine] = useState<MarmitaLine>(initial ?? blank());
+  const canManageCatalog = usePermission('catalog.manage');
 
   const toggle = (field: 'mainDishIds' | 'sideDishIds', id: string) =>
     setLine((l) => ({ ...l, [field]: l[field].includes(id) ? l[field].filter((x) => x !== id) : [...l[field], id] }));
@@ -62,6 +65,28 @@ export function MarmitaBuilderSheet({
           <Chip key={s.id} label={`${s.name} · ${formatBRL(s.price)}`} selected={line.sizeId === s.id} onPress={() => setLine({ ...line, sizeId: s.id })} />
         ))}
       </Row>
+      {sizes.length === 0 ? (
+        // O preço da marmita vem do tamanho (ADR-0020): sem tamanho cadastrado não dá para montar o pedido.
+        <Banner
+          tone="warning"
+          text={
+            canManageCatalog
+              ? 'Nenhum tamanho de marmita cadastrado. O preço da marmita vem do tamanho (ex.: P, M, G).'
+              : 'Nenhum tamanho de marmita cadastrado. Peça ao proprietário ou gerente para cadastrar.'
+          }
+          action={
+            canManageCatalog
+              ? {
+                  label: 'Cadastrar tamanhos',
+                  onPress: () => {
+                    onClose();
+                    router.push('/menu/sizes');
+                  },
+                }
+              : undefined
+          }
+        />
+      ) : null}
       <Text variant="subtitle">Prato principal</Text>
       <Row style={{ flexWrap: 'wrap' }}>
         {mains.map((m) => (
