@@ -3,6 +3,7 @@
 - **Status:** Aceito
 - **Data:** 2026-10-27
 - **Origem:** EP-001 §15, §16
+- **Substituído em parte por:** ADR-0044 (canal web de pedidos no lugar do chatbot) e ADR-0050 (pagamento online de pedidos), ambos Propostos, no EP-002 (`docs/11-epico-ep002.md`). O chatbot de WhatsApp continua fora do escopo.
 
 ## Contexto
 

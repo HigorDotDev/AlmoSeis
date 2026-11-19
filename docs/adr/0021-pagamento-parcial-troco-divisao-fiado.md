@@ -4,6 +4,7 @@
 - **Data:** 2026-10-27
 - **Origem:** Lacuna em RF-004, RF-009, RF-010, RF-011
 - **Relacionados:** ADR-0007, ADR-0013, ADR-0016, ADR-0024
+- **Refinado por:** ADR-0048 (Proposto): taxa de entrega por distância nos pedidos da página. Os pedidos do app continuam com a taxa padrão editável deste ADR.
 
 ## Contexto
 

@@ -4,6 +4,7 @@
 - **Data:** 2026-10-27
 - **Origem:** Lacuna em RN-001.3/RN-001.4, ADR-0004
 - **Relacionados:** ADR-0025, ADR-0027
+- **Complementado por:** ADR-0045 (Proposto): as rotas públicas `/public/*` resolvem o tenant pelo slug ou pelo token de acompanhamento e aplicam o mesmo RLS. As rotas autenticadas continuam com o tenant só do JWT.
 
 ## Contexto
 

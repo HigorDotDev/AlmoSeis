@@ -4,6 +4,7 @@
 - **Data:** 2026-10-27
 - **Origem:** EP-001 §16
 - **Relacionados:** ADR-0025 (administração da plataforma sem UI web)
+- **Complementado por:** ADR-0044 e ADR-0051 (Propostos): página web pública para o **consumidor**. Este ADR continua valendo para o restaurante.
 
 ## Contexto
 

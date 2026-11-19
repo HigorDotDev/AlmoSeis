@@ -4,7 +4,7 @@ Toda decisão arquitetural ou de negócio que afeta modelagem, contrato de API, 
 
 **Status possíveis:** `Proposto` (aguarda revisão), `Aceito`, `Substituído por ADR-XXXX`, `Descartado`.
 
-Quando um ADR conflita com o texto do épico (`docs/01-epico-ep001.md`), **o ADR prevalece**. Um ADR `Proposto` já orienta a implementação, mas precisa ser revisado antes do código que depende dele ir para produção.
+Quando um ADR conflita com o texto de um épico (`docs/01-epico-ep001.md`, `docs/11-epico-ep002.md`), **o ADR prevalece**. Um ADR `Proposto` já orienta a implementação, mas precisa ser revisado antes do código que depende dele ir para produção.
 
 ## Índice
 
@@ -84,6 +84,22 @@ O ADR-0026 também recebeu o item 9 (RLS das tabelas de vínculo por `user_id`).
 | [0043](0043-login-administrador-plataforma.md) | `POST /auth/admin/login` só para `is_platform_admin`: token sem tenant, sem refresh, revalidado a cada requisição | Aceito |
 
 Complementos: ADR-0027 (`deviceSecret` do aparelho compartilhado) e ADR-0028 (permissões `orders.view`/`production.view` e matriz em `06-contratos-api.md` §6.2).
+
+### EP-002 — página de pedidos (`docs/11-epico-ep002.md`)
+
+| ADR | Decisão | Status |
+|---|---|---|
+| [0044](0044-canal-web-pagina-publica-slug.md) | Página pública `dominio/{slug}` só com marmitas e bebidas, entrega e retirada; `Origin = WEB`; perfil público, estados da página e regras do slug | Proposto |
+| [0045](0045-rotas-publicas-tenant-por-slug-anti-abuso.md) | Rotas `/public/*` resolvem o tenant pelo slug ou token e aplicam RLS (complementa 0026); idempotência sem usuário; Turnstile e limites | Proposto |
+| [0046](0046-aceite-pedido-web-status-atendimento-entrega.md) | `AcceptanceStatus` (aceite, recusa com motivo, expiração, desistência) e `FulfillmentStatus` (saiu, entregue, retirado); número só no aceite; permissões e eventos novos | Proposto |
+| [0047](0047-acompanhamento-pedido-pelo-cliente.md) | Acompanhamento por link com token opaco de 128 bits, 7 dias, consulta a cada 20 s | Proposto |
+| [0048](0048-taxa-entrega-por-distancia.md) | Taxa = `max(km × preço/km, mínimo)`, rota de carro sem trânsito, km com 1 casa, cotação de 15 min, sem entrega se o provedor falhar (refina 0021) | Proposto |
+| [0049](0049-push-pedidos-da-pagina.md) | Push (Expo → FCM/APNs) para pedido do site aguardando aceite, sem dado pessoal (substitui em parte 0036) | Proposto |
+| [0050](0050-pagamento-online-split-asaas.md) | Fase 2: cobrança emitida pela subconta do restaurante com split da comissão, `IOrderPaymentGateway`, `apiKey` no Key Vault, online fora do caixa físico | Proposto |
+| [0051](0051-projeto-web-nextjs-hospedagem.md) | Next.js em `web/`, `packages/shared`, Container App `almoseis-web` com Cloudflare na frente | Proposto |
+| [0052](0052-lgpd-cliente-da-pagina.md) | Aviso de privacidade na página, anonimização dos pedidos não aceitos em 7 dias, dados só no navegador (complementa 0024) | Proposto |
+
+Afetados (linha de referência no próprio ADR): 0001, 0016, 0021, 0026, 0036. Também complementados, sem linha própria: 0006, 0013, 0022, 0023/0039, 0024, 0028, 0033, 0041.
 
 ## Impacto no modelo do épico (§6)
 

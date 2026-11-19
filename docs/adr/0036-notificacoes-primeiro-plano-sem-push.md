@@ -4,6 +4,7 @@
 - **Data:** 2026-10-27
 - **Origem:** Lacuna em RF-007/RF-008 (alertas com o app em segundo plano)
 - **Relacionados:** ADR-0009
+- **Substituído em parte por:** ADR-0049 (Proposto): push para pedidos da página (item 4). Os demais alertas continuam só em primeiro plano.
 
 ## Contexto
 
