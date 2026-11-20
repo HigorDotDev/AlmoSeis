@@ -53,17 +53,21 @@ O mobile continua **exatamente** como está: tokens e `deviceSecret` no SecureSt
    - nome `__Secure-almoseis-rt`, `HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`, sem `Domain` (cookie só do host da API, que separa homologação de produção), `Max-Age` igual à validade do refresh (30 dias, rotativo, ADR-0027);
    - é emitido por `login`, `signup`, `pin-login`, `switch-tenant`, aceite de convite e `refresh`. Na web, o campo `refreshToken` do objeto `Tokens` vem `null` e o resto não muda;
    - `/auth/refresh` e `/auth/logout` leem o refresh do cookie quando a plataforma é `WEB`. Um `refreshToken` no corpo vindo da web é recusado (`422`);
-   - o refresh token continua ligado ao `installationId`, com rotação e revogação da família no reuso, como no ADR-0027.
+   - o refresh token continua ligado ao `installationId`, com rotação e revogação da família no reuso, como no ADR-0027;
+   - `switch-tenant` revoga o refresh da mesma instalação antes de emitir o novo, em todas as plataformas, para não deixar um refresh órfão válido por 30 dias.
 4. **CSRF**, nas rotas que aceitam cookie (refresh, logout, pin-login e lista de funcionários do aparelho compartilhado):
    - o `Origin` tem de estar na lista de origens permitidas (§4). Sem `Origin` ou com outra origem, a resposta é `403`;
    - o header customizado `X-App-Platform: WEB` é obrigatório. Ele força o *preflight* do CORS, que falha para qualquer origem fora da lista.
    - O `SameSite=Strict` sozinho não basta: outros subdomínios do mesmo site (inclusive a página pública `{dominio}`) contam como *same-site*. A checagem de `Origin` cobre esse caso.
+   - A checagem de `Origin` acontece na própria leitura do cookie, não só por atributo na rota: uma rota nova que leia o cookie fica protegida sem depender de lembrar do atributo. Um teste de arquitetura impede leitura de cookie fora desse ponto.
 5. **Logout** revoga o refresh no servidor e apaga o cookie (`Max-Age=0`). Um aviso entre abas (`BroadcastChannel`) faz as outras abas saírem também.
 6. **Várias abas:** a renovação é feita por uma aba de cada vez (Web Locks API, `navigator.locks`). Quem obtém o lock e vê que outra aba acabou de renovar reaproveita o resultado, avisado pelo `BroadcastChannel`. Sem isso, duas abas renovando juntas apresentariam o mesmo refresh e o servidor revogaria a família inteira (ADR-0027).
 7. **`installationId`:** não é segredo. Fica em `localStorage`, gerado uma vez com `crypto.randomUUID()`. Se o navegador for limpo, nasce outro: a pessoa entra de novo e o aparelho compartilhado é registrado de novo.
 8. **Aparelho compartilhado com PIN: suportado na web.** Recomendação do agente, a confirmar na Q-24. O computador do balcão é justamente o aparelho que vários funcionários usam. Sem PIN, a equipe volta a usar uma conta só, que é o problema que o ADR-0027 resolve.
    - O `deviceSecret` vai em um cookie separado, `__Secure-almoseis-ds`, `HttpOnly; Secure; SameSite=Strict`, sem `Domain`, emitido por `POST /devices/shared` quando a plataforma é `WEB` (e **fora** do corpo da resposta).
-   - Os dois usos do segredo (lista de funcionários e `pin-login`) ficam sob o mesmo prefixo, para que o `Path` do cookie seja restrito. Recomendação: na web, a lista de funcionários é pedida por uma rota sob `/api/v1/auth`, com a mesma resposta da rota atual. O nome final fica com o `06-contratos-api.md`.
+   - Os dois usos do segredo (lista de funcionários e `pin-login`) ficam sob o mesmo prefixo, para que o `Path` do cookie seja restrito. Na web, a lista de funcionários é `GET /api/v1/auth/shared-device/employees?installationId=…`, com a mesma resposta da rota atual (06 §6.3).
+   - Na web o segredo vem **só** do cookie: `X-Device-Secret` é ignorado e não está na lista de headers do CORS.
+   - "Deixar de usar como compartilhado" chama `DELETE /api/v1/auth/shared-device`, que só apaga o cookie (o JavaScript não apaga cookie `HttpOnly`). Revogar no servidor continua pela rota de revogação do aparelho.
    - O Chrome limita cookies a 400 dias. Cada `pin-login` bem-sucedido reemite o cookie com o mesmo valor, o que estende a validade.
    - Revogar o aparelho (ADR-0027) invalida o segredo no servidor. O app trata `401 InvalidDeviceSecret` saindo do modo compartilhado. "Deixar de usar como compartilhado", no próprio navegador, apaga o cookie.
    - `SharedDevice.platform` e `X-App-Platform` ganham o valor `WEB`.
@@ -76,9 +80,11 @@ O mobile continua **exatamente** como está: tokens e `deviceSecret` no SecureSt
    - Desenvolvimento: `http://localhost:8082`.
    - Homologação: `https://app-homolog.{dominio}`.
    - Produção: `https://app.{dominio}`.
+   - Só `https://host[:porta]` é aceito; `http://` só para `localhost` e `127.0.0.1`. Curinga, caminho ou origem inválida impedem a API de subir.
+   - Atrás do ingress, a API usa `X-Forwarded-For` só de proxies/redes configurados como confiáveis, para o *rate limit* por IP (ADR-0041) enxergar o cliente real. A web aumenta o número de `/auth/refresh`, então isso é condição para produção.
 2. Política do app do restaurante: `AllowCredentials` **só** para essas origens, em todas as rotas autenticadas, nas rotas de `/auth/*` e no hub do SignalR. A conexão do hub também confere o `Origin`.
 3. Headers permitidos: `Authorization`, `Content-Type`, `Idempotency-Key`, `If-Match`, `X-App-Version`, `X-App-Platform`, `X-Tenant-Id`.
-4. Headers expostos: `ETag` (sem ele o JavaScript não lê a versão para o `If-Match`, ADR-0034), `Location` e `Retry-After` (ADR-0041).
+4. Headers expostos: `ETag` (sem ele o JavaScript não lê a versão para o `If-Match`, ADR-0034), `Location`, `Retry-After` (ADR-0041) e `Idempotent-Replayed` (ADR-0033).
 5. `Access-Control-Max-Age: 600`, para não repetir o *preflight* a cada requisição.
 6. A política da página pública (`/public/*`, ADR-0051) é **outra**: a origem é a da página, sem credenciais. As duas listas não se misturam.
 7. Em desenvolvimento, `localhost:8082` e a API em `localhost` são o mesmo *site*. O Chrome e o Edge aceitam cookie `Secure` em `http://localhost`.
@@ -105,6 +111,7 @@ O mobile continua **exatamente** como está: tokens e `deviceSecret` no SecureSt
 ### 7. Conexão, tempo real e alertas no desktop (complementa os ADRs 0036 e 0049)
 
 1. **SignalR fica conectado enquanto a aba estiver aberta, mesmo oculta ou minimizada.** No celular, o app desconecta em segundo plano (ADR-0036). No desktop, a aba oculta é o caso normal: o atendente está no WhatsApp Web, em outra aba. Ao voltar a aba para a frente (`visibilitychange`), ao voltar a rede (`online`) e ao acordar o computador, o app reconecta e sincroniza pelo feed (ADR-0032).
+   - A API fecha a conexão do hub quando o access token vence (`CloseOnAuthenticationExpiration`). O app renova o token antes de reconectar e, se a reconexão automática desistir, tenta de novo com espera. Sem isso, uma aba aberta por dias ficaria conectada com o token vencido.
 2. **Som:** o navegador só toca áudio depois de uma interação na página. A cada carregamento, enquanto o som estiver bloqueado, o app mostra a faixa **"Som desativado neste navegador — Ativar som"**, e um clique libera o áudio. Depois disso, o som toca mesmo com a aba oculta. Valem os mesmos sons e regras: pedido novo na cozinha (ADR-0036) e o som próprio dos pedidos do site (ADR-0049, item 9).
 3. **Tela ligada:** na aba Pedidos, a Wake Lock API (pela implementação web do `expo-keep-awake` ou por um `.web.ts`), readquirida ao voltar a aba para a frente. Fora do Chrome e do Edge, segue sem ela.
 4. **Com a aba oculta:** o título da aba mostra o contador ("(2) Novos do site · AlmoSeis"). Recomendação P1: notificação **local** do navegador (Notifications API, sem servidor de push) para pedido do site aguardando aceite, com a aba aberta. Segue o mesmo conteúdo mínimo do ADR-0049 (sem nome, telefone, endereço nem valor) e a permissão é pedida no mesmo momento do ADR-0049, item 6.

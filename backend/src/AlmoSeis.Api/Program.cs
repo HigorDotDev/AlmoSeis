@@ -75,7 +75,9 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
-app.MapHub<RealtimeHub>("/hubs/realtime");
+// O app renova o token no accessTokenFactory antes de reconectar (08 §8.6); sem isto, uma aba do desktop
+// ficaria conectada com o JWT vencido (ADR-0053).
+app.MapHub<RealtimeHub>("/hubs/realtime", o => o.CloseOnAuthenticationExpiration = true);
 app.MapHealthChecks("/health/live", new() { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new() { Predicate = c => c.Tags.Contains("ready") });
 
