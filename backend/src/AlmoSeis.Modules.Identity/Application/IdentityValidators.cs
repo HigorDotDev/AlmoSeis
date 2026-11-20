@@ -74,7 +74,8 @@ internal sealed class RefreshTokenCommandValidator : AbstractValidator<RefreshTo
 {
     public RefreshTokenCommandValidator()
     {
-        RuleFor(x => x.RefreshToken).NotEmpty().MaximumLength(200);
+        // Obrigatório só fora da web; a Api confere de onde ele vem (corpo ou cookie, ADR-0053).
+        RuleFor(x => x.RefreshToken).MaximumLength(200);
         RuleFor(x => x.InstallationId).InstallationId();
     }
 }
@@ -153,7 +154,7 @@ internal sealed class RegisterSharedDeviceCommandValidator : AbstractValidator<R
     {
         RuleFor(x => x.InstallationId).InstallationId();
         RuleFor(x => x.Name).NotEmpty().WithMessage("Dê um nome ao aparelho.").MaximumLength(40);
-        RuleFor(x => x.Platform).Must(p => p is "ANDROID" or "IOS").WithMessage("Use ANDROID ou IOS.");
+        RuleFor(x => x.Platform).Must(p => p is "ANDROID" or "IOS" or "WEB").WithMessage("Use ANDROID, IOS ou WEB.");
     }
 }
 

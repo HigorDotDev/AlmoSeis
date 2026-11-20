@@ -1052,3 +1052,16 @@ psql -U postgres -v ON_ERROR_STOP=1 -f schema.sql && psql -U postgres -f docs/05
 ```
 
 **Regras que ficam só na aplicação** (dependem de outra tabela ou de estado): `menu_items.section = products.kind`; `pf_price` obrigatório em menu PF; pedido com ao menos um item ou pesagem ativa; `items_total`/`weighings_total` = soma dos filhos; `paid_amount` = soma dos pagamentos `CONFIRMED`; pedido pago imutável; pelo menos um `OWNER` ativo; método de pagamento habilitado no tenant; adicional filho só de `MARMITA`/`PF`.
+
+## 5.17 Alterações (ADR-0042)
+
+Cada alteração é uma migration nova, gerada do bloco `sql` da sua subseção por `pwsh backend/tools/Sync-DdlMigration.ps1 -Target NNNN_Nome.sql`. O título da subseção começa pelo nome do script. Os blocos acima desta seção formam a `0001_InitialSchema.sql`, que não muda depois de aplicada em homologação. Validação: as migrations em ordem, do zero, e depois o `05-ddl-smoke-test.sql` (o `SchemaTests` faz isso).
+
+### 0002_SharedDeviceWebPlatform — 2026-11-19 (ADR-0053)
+
+O app do restaurante no navegador registra o aparelho compartilhado com `platform = 'WEB'`. O `CHECK` da coluna tem o nome padrão do PostgreSQL.
+
+```sql
+ALTER TABLE shared_devices DROP CONSTRAINT shared_devices_platform_check;
+ALTER TABLE shared_devices ADD CONSTRAINT shared_devices_platform_check CHECK (platform IN ('ANDROID', 'IOS', 'WEB'));
+```

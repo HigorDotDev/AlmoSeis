@@ -6,9 +6,9 @@ namespace AlmoSeis.Modules.Identity.Contracts;
 
 public sealed record RegisterSharedDeviceCommand(string InstallationId, string Name, string Platform);
 
-/// `deviceSecret` aparece só nesta resposta.
+/// `deviceSecret` aparece só nesta resposta (na web, `null`: vai no cookie, ADR-0053).
 public sealed record RegisteredSharedDeviceDto(
-    Guid Id, Guid TenantId, string InstallationId, string Name, string Platform, string DeviceSecret, DateTimeOffset RegisteredAt, AuthorDto RegisteredBy);
+    Guid Id, Guid TenantId, string InstallationId, string Name, string Platform, string? DeviceSecret, DateTimeOffset RegisteredAt, AuthorDto RegisteredBy);
 
 public sealed record SharedDeviceDto(Guid Id, string Name, string Platform, DateTimeOffset RegisteredAt, AuthorDto RegisteredBy, DateTimeOffset? RevokedAt);
 

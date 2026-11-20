@@ -131,6 +131,11 @@ internal sealed class RefreshTokenHandler(
 {
     public async Task<AuthOutcome<TokensDto>> HandleAsync(RefreshTokenCommand command, CancellationToken cancellationToken)
     {
+        if (string.IsNullOrEmpty(command.RefreshToken))
+        {
+            return Invalid();
+        }
+
         var now = time.GetUtcNow();
         var hash = hasher.Hash(command.RefreshToken);
         var current = await db.Set<RefreshToken>().SingleOrDefaultAsync(t => t.TokenHash == hash, cancellationToken);
@@ -180,6 +185,11 @@ internal sealed class LogoutHandler(AppDbContext db, ISecretHasher hasher, TimeP
 {
     public async Task<bool> HandleAsync(LogoutCommand command, CancellationToken cancellationToken)
     {
+        if (string.IsNullOrEmpty(command.RefreshToken))
+        {
+            return true; // web sem cookie: nada a revogar
+        }
+
         var hash = hasher.Hash(command.RefreshToken);
         var token = await db.Set<RefreshToken>().SingleOrDefaultAsync(t => t.TokenHash == hash, cancellationToken);
         token?.Revoke(time.GetUtcNow());

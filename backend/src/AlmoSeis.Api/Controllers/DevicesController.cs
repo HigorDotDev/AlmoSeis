@@ -19,6 +19,12 @@ public sealed class DevicesController : ControllerBase
         [FromBody] RegisterSharedDeviceCommand command,
         [FromServices] ICommandHandler<RegisterSharedDeviceCommand, RegisteredSharedDeviceDto> handler, CancellationToken cancellationToken)
     {
+        // Na web o segredo vai em cookie HttpOnly (ADR-0053); `platform` e `X-App-Platform` precisam concordar.
+        if ((command.Platform == WebSession.WebPlatform) != WebSession.IsWeb(Request))
+        {
+            throw BusinessException.Validation("platform", "Use WEB só no navegador, com o header X-App-Platform: WEB.");
+        }
+
         var device = await handler.HandleAsync(command, cancellationToken);
         return Created("/api/v1/devices/shared", device);
     }

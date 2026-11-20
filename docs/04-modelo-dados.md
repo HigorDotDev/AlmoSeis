@@ -159,7 +159,7 @@ Aparelho registrado como compartilhado (ADR-0027).
 |---|---|---|
 | InstallationId | string(64) | id da instalação do app, gerado pelo cliente; único por tenant |
 | Name | string(40) | ex.: "Tablet cozinha" |
-| Platform | enum `ANDROID`, `IOS` | |
+| Platform | enum `ANDROID`, `IOS`, `WEB` | `WEB` = navegador do desktop, com o `deviceSecret` em cookie `HttpOnly` (ADR-0053) |
 | SecretHash | string(64) | SHA-256 do `deviceSecret` entregue uma única vez no registro. O aparelho se autentica com ele para listar funcionários e fazer o login por PIN (`06-contratos-api.md` §6.3) |
 | RegisteredByEmployeeId, RegisteredAt | | |
 | RevokedAt | DateTimeOffset? | |

@@ -9,7 +9,8 @@
 | Base | `https://{host}/api/v1` (ADR-0035). Todos os caminhos abaixo são relativos a ela |
 | Autenticação | `Authorization: Bearer {accessToken}` em tudo, exceto onde marcado **público** |
 | Tenant | Vem só do token (ADR-0026). Nenhum endpoint recebe `tenantId`, exceto os de dispositivo compartilhado e de admin |
-| Versão do app | `X-App-Version: 1.4.0` e `X-App-Platform: ANDROID`/`IOS` em toda requisição (ADR-0035) |
+| Versão do app | `X-App-Version: 1.4.0` e `X-App-Platform: ANDROID`/`IOS`/`WEB` em toda requisição (ADR-0035). `WEB` é o app do restaurante no navegador (ADR-0053) |
+| Navegador (`WEB`) | Refresh token e `deviceSecret` em cookies `HttpOnly`, nunca no corpo; conferência de `Origin` nas rotas que leem cookie; CORS só para as origens do ambiente (§6.3, "App no navegador") |
 | Idempotência | `Idempotency-Key: {uuid}` nos endpoints marcados **[I]** (ADR-0033) |
 | Concorrência | `If-Match: "{version}"` nos endpoints marcados **[M]**. Toda resposta de recurso versionado traz `ETag: "{version}"` e `version` no corpo (ADR-0034) |
 | JSON | `camelCase`; enums `UPPER_SNAKE`; campos ausentes = `null` (nunca omitidos) |
@@ -98,6 +99,7 @@ Conflito de versão (`409`) traz o estado atual em `current` (ADR-0034):
 | 402 | `SubscriptionInactive` | escrita com assinatura `SUSPENDED`/`CANCELED` (ADR-0017); extensão `subscriptionStatus`. Fora do bloqueio: leituras, `/auth`, `/admin`, `/webhooks` e, com `SUSPENDED`, `POST /closing/finalize` |
 | 403 | `PermissionDenied` | falta permissão (a extensão `permission` diz qual) |
 | 403 | `NoActiveMembership` | usuário sem vínculo ativo em nenhum estabelecimento |
+| 403 | `OriginNotAllowed` | requisição `X-App-Platform: WEB` sem `Origin` ou com `Origin` fora de `Cors:RestaurantAppOrigins`, nas rotas que leem cookie (anti-CSRF, ADR-0053; §6.3 "App no navegador") e na conexão do hub (§6.14) |
 | 404 | `NotFound` | recurso inexistente **ou de outro tenant** (nunca 403, para não revelar existência) |
 | 404 | `MenuNotFound` | sem cardápio do dia (traz `sources`, §6.7) |
 | 404 | `NoOpenBusinessDay` | `GET /business-days/current` sem expediente aberto |
@@ -126,7 +128,7 @@ Conflito de versão (`409`) traz o estado atual em `current` (ADR-0034):
 | 422 | `KiloPriceNotConfigured` | pesagem sem preço do quilo configurado |
 | 422 | `JustificationRequired` | fechamento com diferença ≠ 0 sem justificativa |
 | 423 | `PinLocked` | PIN bloqueado (extensão `lockedUntil`) |
-| 426 | `AppVersionUnsupported` | versão do app abaixo da mínima (extensões `minVersion`, `storeUrl`) |
+| 426 | `AppVersionUnsupported` | versão do app abaixo da mínima (extensões `minVersion`, `storeUrl`; em `WEB`, `storeUrl` é sempre `null`) |
 | 428 | `IdempotencyKeyRequired` / `IfMatchRequired` | header obrigatório ausente |
 | 429 | `TooManyRequests` | limite dos endpoints públicos (ADR-0041); header `Retry-After` |
 
@@ -183,6 +185,8 @@ Leitura de produtos, tamanhos, cardápios e clientes exige só `orders.view`.
   "refreshTokenExpiresAt": "2026-11-26T15:04:05Z"
 }
 ```
+
+Com `X-App-Platform: WEB`, `refreshToken` vem `null` e o refresh vai no cookie `__Secure-almoseis-rt` (ver "App no navegador", no fim desta seção). Os demais campos não mudam.
 
 `Me` (também é a resposta de `GET /auth/me`):
 
@@ -256,7 +260,7 @@ Erros: `409 EmailAlreadyRegistered`, `409 PhoneAlreadyRegistered`, `409 TrialAlr
 { "refreshToken": "rt_7Qm2xN0pLw8vB4kZ1sYdF6hJ3cT9eR5u", "installationId": "inst_8f3a2c1e9b7d4f60" }
 ```
 
-→ `200` `Tokens`, com o refresh **rotacionado** (ADR-0027). Reusar um refresh já trocado → `401 InvalidRefreshToken` e revogação da família inteira.
+→ `200` `Tokens`, com o refresh **rotacionado** (ADR-0027). Reusar um refresh já trocado → `401 InvalidRefreshToken` e revogação da família inteira. Na web, o refresh vem do cookie e o corpo traz só `installationId` ("App no navegador").
 
 ### `POST /auth/logout`
 
@@ -264,7 +268,7 @@ Erros: `409 EmailAlreadyRegistered`, `409 PhoneAlreadyRegistered`, `409 TrialAlr
 { "refreshToken": "rt_7Qm2xN0pLw8vB4kZ1sYdF6hJ3cT9eR5u" }
 ```
 
-→ `204`.
+→ `204`. Na web, o corpo é `{}` (ou vazio), o refresh vem do cookie e a resposta apaga o cookie ("App no navegador").
 
 ### `POST /auth/switch-tenant`
 
@@ -360,7 +364,7 @@ Registra **a instalação atual** como aparelho compartilhado.
 }
 ```
 
-`deviceSecret` aparece **só nesta resposta** e é guardado no SecureStore do aparelho. O servidor guarda só o hash.
+`deviceSecret` aparece **só nesta resposta** e é guardado no SecureStore do aparelho. O servidor guarda só o hash. `platform`: `ANDROID`, `IOS` ou `WEB`. `WEB` exige `X-App-Platform: WEB` (e vice-versa; senão `422` com `errors.platform`); nesse caso `deviceSecret` vem `null` e o segredo vai no cookie `__Secure-almoseis-ds` ("App no navegador").
 
 #### `GET /devices/shared` — `devices.manage`
 
@@ -371,6 +375,8 @@ Registra **a instalação atual** como aparelho compartilhado.
 → `204`. Revoga também todos os refresh tokens emitidos por PIN nesse aparelho.
 
 #### `GET /devices/shared/{installationId}/employees` — público + `X-Device-Secret` + `X-Tenant-Id`
+
+Rota do mobile. Na web, a mesma resposta vem de `GET /auth/shared-device/employees` ("App no navegador"), porque o cookie do segredo só vale sob `/api/v1/auth`.
 
 Lista quem pode entrar por PIN (funcionários ativos com PIN definido):
 
@@ -396,7 +402,138 @@ Lista quem pode entrar por PIN (funcionários ativos com PIN definido):
 }
 ```
 
-→ `200` `{ "tokens": {...}, "me": {...} }` (com `me.sharedDevice` preenchido). Erros: `401 InvalidDeviceSecret`, `401 InvalidCredentials` (extensão `attemptsLeft`), `423 PinLocked` (extensão `lockedUntil`).
+→ `200` `{ "tokens": {...}, "me": {...} }` (com `me.sharedDevice` preenchido). Erros: `401 InvalidDeviceSecret`, `401 InvalidCredentials` (extensão `attemptsLeft`), `423 PinLocked` (extensão `lockedUntil`). Na web, o segredo vem do cookie quando não há `X-Device-Secret` ("App no navegador").
+
+### App no navegador — `X-App-Platform: WEB` (ADR-0053)
+
+O app do restaurante no navegador do desktop usa as mesmas rotas, com três diferenças: o refresh token e o `deviceSecret` ficam em cookies que o JavaScript não lê, as rotas que leem esses cookies conferem o `Origin`, e a API responde CORS para as origens do ambiente. **`ANDROID` e `IOS` não mudam:** refresh e segredo no corpo e nos headers, como acima, sem `Set-Cookie`; a API ignora esses cookies quando a plataforma não é `WEB`.
+
+**Cookies.** Só do host da API (sem `Domain`), `HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`:
+
+| Cookie | Valor | `Max-Age` | Emitido por (só com `X-App-Platform: WEB`) | Lido por | Apagado por (`Max-Age=0`) |
+|---|---|---|---|---|---|
+| `__Secure-almoseis-rt` | o refresh token (`rt_…`) | segundos até `refreshTokenExpiresAt` (30 dias, ADR-0027) | `signup`, `login`, `refresh`, `switch-tenant`, `pin-login`, `POST /invitations/{code}/accept` | `refresh`, `logout` | `logout`; `refresh` que falha com `401 InvalidRefreshToken` (inclusive no reuso, que revoga a família) |
+| `__Secure-almoseis-ds` | o `deviceSecret` (`ds_…`) | `34560000` (400 dias, o limite do Chrome) | `POST /devices/shared`; reemitido com o mesmo valor a cada `pin-login` bem-sucedido pelo cookie | `GET /auth/shared-device/employees`, `pin-login` | `DELETE /auth/shared-device`; `401 InvalidDeviceSecret` numa das duas rotas, quando o segredo veio do cookie |
+
+Nas respostas com `Tokens`, o campo `refreshToken` vem `null` e os demais campos não mudam. No `POST /devices/shared`, `deviceSecret` vem `null`.
+
+```text
+POST /api/v1/auth/login HTTP/1.1
+Host: api.almoseis.app
+Origin: https://app.almoseis.app
+X-App-Version: 1.4.0
+X-App-Platform: WEB
+Content-Type: application/json
+
+{ "login": "+5534999990001", "password": "S3nha-forte!", "installationId": "3f0c9a6e-1b2d-4c5e-8f7a-9b0c1d2e3f4a", "preferredTenantId": null }
+
+HTTP/1.1 200 OK
+Access-Control-Allow-Origin: https://app.almoseis.app
+Access-Control-Allow-Credentials: true
+Access-Control-Expose-Headers: ETag,Location,Retry-After,Idempotent-Replayed
+Vary: Origin
+Set-Cookie: __Secure-almoseis-rt=rt_7Qm2xN0pLw8vB4kZ1sYdF6hJ3cT9eR5u; max-age=2592000; path=/api/v1/auth; secure; samesite=strict; httponly
+Content-Type: application/json
+```
+
+```json
+{
+  "tokens": {
+    "tokenType": "Bearer",
+    "accessToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwMTkyZDZhMC0uLi4ifQ.sig",
+    "accessTokenExpiresAt": "2026-10-27T15:19:05Z",
+    "refreshToken": null,
+    "refreshTokenExpiresAt": "2026-11-26T15:04:05Z"
+  },
+  "me": { "...": "Me" }
+}
+```
+
+O `installationId` da web é um UUID gerado pelo navegador e guardado em `localStorage` (não é segredo, ADR-0053 §3.7). O app chama a API com `credentials: 'include'`.
+
+**Anti-CSRF.** Nas rotas que leem cookie (`POST /auth/refresh`, `POST /auth/logout`, `POST /auth/pin-login`, `GET /auth/shared-device/employees`, `DELETE /auth/shared-device`), uma requisição `X-App-Platform: WEB` sem `Origin`, ou com `Origin` fora de `Cors:RestaurantAppOrigins`, recebe `403 OriginNotAllowed` antes de qualquer leitura do cookie. Sem `X-App-Platform: WEB`, o cookie não é lido (a requisição segue o fluxo do mobile e precisa do refresh no corpo ou do `X-Device-Secret`), então o header é, na prática, obrigatório para usar o cookie. Como é um header customizado, ele força o *preflight* do CORS, que falha para qualquer origem fora da lista.
+
+```json
+{
+  "type": "urn:almoseis:error:origin-not-allowed",
+  "title": "Origem não permitida.",
+  "status": 403,
+  "instance": "/api/v1/auth/refresh",
+  "errorCode": "OriginNotAllowed",
+  "traceId": "00-2b7c9d1e3f4a5b6c7d8e9f0a1b2c3d4e-2b7c9d1e3f4a5b6c-01"
+}
+```
+
+#### `POST /auth/refresh` na web
+
+```text
+POST /api/v1/auth/refresh HTTP/1.1
+Origin: https://app.almoseis.app
+X-App-Version: 1.4.0
+X-App-Platform: WEB
+Cookie: __Secure-almoseis-rt=rt_7Qm2xN0pLw8vB4kZ1sYdF6hJ3cT9eR5u
+Content-Type: application/json
+
+{ "installationId": "3f0c9a6e-1b2d-4c5e-8f7a-9b0c1d2e3f4a" }
+
+HTTP/1.1 200 OK
+Set-Cookie: __Secure-almoseis-rt=rt_Lw0Xk3Vb9QzP2nRt6Yc1Hs8Jd4Fm7Ga5; max-age=2592000; path=/api/v1/auth; secure; samesite=strict; httponly
+```
+
+→ `200` `Tokens` com `refreshToken: null` e o cookie **rotacionado**. A rotação, a ligação com o `installationId` e a revogação da família no reuso são as do ADR-0027.
+
+- `refreshToken` no corpo vindo da web → `422 ValidationFailed` com `errors.refreshToken` ("Na web, o refresh token vem do cookie.");
+- sem o cookie, ou com refresh inválido, vencido ou reutilizado → `401 InvalidRefreshToken` + `Set-Cookie: __Secure-almoseis-rt=; expires=Thu, 01 Jan 1970 00:00:00 GMT; max-age=0; path=/api/v1/auth; secure; samesite=strict; httponly`.
+
+Duas abas que renovam juntas com o mesmo cookie contam como reuso: a segunda recebe `401` e a família é revogada. O app evita isso com o lock entre abas (ADR-0053 §3.6).
+
+#### `POST /auth/logout` na web
+
+Corpo `{}` ou vazio. → `204` + `Set-Cookie: __Secure-almoseis-rt=; expires=Thu, 01 Jan 1970 00:00:00 GMT; max-age=0; path=/api/v1/auth; secure; samesite=strict; httponly`. Revoga o refresh do cookie, se houver (sem cookie, só apaga). `refreshToken` no corpo vindo da web → `422`.
+
+#### Aparelho compartilhado na web
+
+1. `POST /devices/shared` (`devices.manage`) com `X-App-Platform: WEB` e `"platform": "WEB"` → `201` com `"deviceSecret": null` e `Set-Cookie: __Secure-almoseis-ds=ds_Hk29sLq0Pz7mVx3Nc8Bt1Rw6Yf4Ju5Ea; max-age=34560000; path=/api/v1/auth; secure; samesite=strict; httponly`.
+2. `GET /auth/shared-device/employees?installationId={installationId}` — público + `X-Tenant-Id` + `X-App-Platform: WEB` + cookie `__Secure-almoseis-ds`. Mesma resposta, mesmos erros e mesmo limite (ADR-0041, 30/min por instalação) de `GET /devices/shared/{installationId}/employees`. O `installationId` vai na query (não é segredo); o segredo vem do `X-Device-Secret`, se enviado, ou do cookie. Sem `installationId` → `422` com `errors.installationId`.
+3. `POST /auth/pin-login`: mesmo corpo. Na web, sem `X-Device-Secret`, o segredo vem do cookie. Sucesso pelo cookie reemite o cookie com o mesmo valor (renova os 400 dias).
+4. `DELETE /auth/shared-device` — público + `X-App-Platform: WEB` → `204` + `Set-Cookie: __Secure-almoseis-ds=; expires=Thu, 01 Jan 1970 00:00:00 GMT; max-age=0; path=/api/v1/auth; secure; samesite=strict; httponly`. É o "Deixar de usar como compartilhado" do navegador: só apaga o cookie. A revogação no servidor continua sendo `POST /devices/shared/{id}/revoke`.
+
+`401 InvalidDeviceSecret` numa rota que leu o segredo do cookie (aparelho revogado ou registrado de novo) também apaga o cookie.
+
+#### CORS
+
+| Item | Valor |
+|---|---|
+| Origens | `Cors:RestaurantAppOrigins` (lista por ambiente, sem curinga; a barra final é ignorada). Development: `http://localhost:8082`; homolog: `https://app-homolog.almoseis.app`; produção: `https://app.almoseis.app`. Lista vazia ou ausente → nenhuma origem recebe CORS. `*` na lista impede a API de subir |
+| Credenciais | `Access-Control-Allow-Credentials: true` |
+| Métodos | `GET`, `POST`, `PUT`, `PATCH`, `DELETE` |
+| Headers permitidos | `Authorization`, `Content-Type`, `Idempotency-Key`, `If-Match`, `X-App-Version`, `X-App-Platform`, `X-Tenant-Id`, `X-Device-Secret`, e os do cliente SignalR (`X-Requested-With`, `X-SignalR-User-Agent`) |
+| Headers expostos | `ETag`, `Location`, `Retry-After`, `Idempotent-Replayed` |
+| `Access-Control-Max-Age` | `600` |
+| Rotas | todas (`/api/v1/*` e `/hubs/realtime`, inclusive o `negotiate`). Erros (`401`, `403`, `426`…) também levam os headers de CORS, para o app ler o `ProblemDetails` |
+
+*Preflight* de origem permitida → `204` com os headers abaixo. Origem fora da lista → `204` **sem** `Access-Control-Allow-Origin`, e o navegador bloqueia a requisição.
+
+```text
+OPTIONS /api/v1/auth/refresh HTTP/1.1
+Origin: https://app.almoseis.app
+Access-Control-Request-Method: POST
+Access-Control-Request-Headers: content-type,x-app-platform,x-app-version
+
+HTTP/1.1 204 No Content
+Access-Control-Allow-Origin: https://app.almoseis.app
+Access-Control-Allow-Credentials: true
+Access-Control-Allow-Methods: POST
+Access-Control-Allow-Headers: content-type,x-app-platform,x-app-version
+Access-Control-Max-Age: 600
+Vary: Origin
+```
+
+A página pública do EP-002 (`/public/*`, ADR-0051) terá outra política, sem credenciais e com outra lista.
+
+**Desenvolvimento:** o app web em `http://localhost:8082` e a API em `http://localhost:5080` são o mesmo *site* (a porta não conta), então o `SameSite=Strict` deixa o cookie seguir. O Chrome e o Edge aceitam cookies `Secure` e o prefixo `__Secure-` em `http://localhost`.
+
+**Versão mínima:** `App:MinSupportedAppVersion:WEB` (ADR-0035). O `426 AppVersionUnsupported` da web vem com `storeUrl: null` (não há loja; o app recarrega a página, ADR-0053 §6).
 
 ---
 
@@ -1572,6 +1709,7 @@ Uma repetição de `POST /orders` com a mesma chave e o mesmo corpo devolve **a 
 ## 6.14 Tempo real — SignalR (ADR-0009, ADR-0031)
 
 - **Hub:** `wss://{host}/hubs/realtime?access_token={accessToken}` (o mesmo JWT; o app envia `X-App-Version` como query `appVersion`).
+- **Na web** (ADR-0053): o cliente usa `accessTokenFactory` (o token vai na query `access_token`, como no mobile) e envia `appVersion` e `appPlatform=WEB` na query. O `negotiate` passa pelo CORS (§6.3, "App no navegador"). A conexão confere o `Origin`: presente, diferente do próprio host da API e fora de `Cors:RestaurantAppOrigins` → `403 OriginNotAllowed`. Sem `Origin` (clientes nativos) passa.
 - **Grupos**, atribuídos pelo servidor na conexão:
   - `tenant:{id}:orders` — `orders.view`;
   - `tenant:{id}:production` — `production.view`;
@@ -1682,4 +1820,5 @@ O `ETag` da resposta de pagamento é a **nova versão do pedido**, para o app us
 | `POST /orders/{id}/alerts/acknowledge` | igual, com `eventIds` |
 | `GET /closing/summary`, `/history`, `/finalize`, `/cash-movements`, `/{id}`, `/{id}/adjustments` | iguais; mais `/closing/monthly` |
 | `GET /sync/changes`, `GET /operations/{id}` | iguais; o id da operação é a `Idempotency-Key` |
+| — | novos (ADR-0053, web): `GET /auth/shared-device/employees`, `DELETE /auth/shared-device` |
 | — | novos: `/business-days`, `/customers`, `/marmita-sizes`, `/production/orders`, `/devices/shared`, `/subscription`, `/roles`, `/audit-logs`, `/admin/*`, `/webhooks/asaas` |

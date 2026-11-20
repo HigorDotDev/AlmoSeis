@@ -118,10 +118,14 @@ internal static class RateLimitPolicies
 
     private static bool IsPin(HttpContext http) =>
         Starts(http, "/api/v1/auth/pin-login")
+        || Starts(http, "/api/v1/auth/shared-device/employees")
         || (Starts(http, "/api/v1/devices/shared") && http.Request.Path.Value!.EndsWith("/employees", StringComparison.OrdinalIgnoreCase));
 
+    /// Mobile: `/devices/shared/{installationId}/employees`; web: `/auth/shared-device/employees?installationId=` (ADR-0053).
     private static string? InstallationFromPath(HttpContext http) =>
-        http.Request.Path.Value!.Split('/', StringSplitOptions.RemoveEmptyEntries) is [.., var installation, "employees"] ? installation : null;
+        Starts(http, "/api/v1/auth/shared-device/employees")
+            ? http.Request.Query["installationId"].FirstOrDefault()
+            : http.Request.Path.Value!.Split('/', StringSplitOptions.RemoveEmptyEntries) is [.., var installation, "employees"] ? installation : null;
 
     private static bool Starts(HttpContext http, string prefix) => http.Request.Path.StartsWithSegments(prefix, StringComparison.OrdinalIgnoreCase);
 

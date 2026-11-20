@@ -34,6 +34,7 @@ public static class ErrorCodes
     public static readonly ErrorCode SubscriptionInactive = new("SubscriptionInactive", 402, "A assinatura do estabelecimento não está ativa.");
     public static readonly ErrorCode PermissionDenied = new("PermissionDenied", 403, "Você não tem permissão para esta ação.");
     public static readonly ErrorCode NoActiveMembership = new("NoActiveMembership", 403, "Você não tem vínculo ativo com nenhum estabelecimento.");
+    public static readonly ErrorCode OriginNotAllowed = new("OriginNotAllowed", 403, "Origem não permitida.");
     public static readonly ErrorCode NotFound = new("NotFound", 404, "Registro não encontrado.");
     public static readonly ErrorCode MenuNotFound = new("MenuNotFound", 404, "Ainda não há cardápio para hoje.");
     public static readonly ErrorCode NoOpenBusinessDay = new("NoOpenBusinessDay", 404, "Não há expediente aberto.");
@@ -71,7 +72,7 @@ public static class ErrorCodes
     public static IReadOnlyList<ErrorCode> All { get; } =
     [
         MalformedRequest, Unauthenticated, InvalidCredentials, InvalidRefreshToken, InvalidDeviceSecret,
-        SubscriptionInactive, PermissionDenied, NoActiveMembership, NotFound, MenuNotFound, NoOpenBusinessDay,
+        SubscriptionInactive, PermissionDenied, NoActiveMembership, OriginNotAllowed, NotFound, MenuNotFound, NoOpenBusinessDay,
         VersionConflict, OperationInProgress, BusinessDayRequired, BusinessDayAlreadyOpen, BusinessDayClosedToday,
         OrderAlreadyPaid, OrderCanceled, OrderHasPayments, PaymentAlreadyReversed, ClosingAlreadyFinalized,
         EmailAlreadyRegistered, PhoneAlreadyRegistered, TrialAlreadyClaimed, LastOwner, InvitationNotPending,

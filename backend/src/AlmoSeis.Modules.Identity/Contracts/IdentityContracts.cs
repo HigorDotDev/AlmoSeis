@@ -19,9 +19,11 @@ public sealed record SignUpCommand(
 
 public sealed record LoginCommand(string Login, string Password, string InstallationId, Guid? PreferredTenantId);
 
-public sealed record RefreshTokenCommand(string RefreshToken, string InstallationId);
+/// Na web (ADR-0053) o refresh vem do cookie: o corpo traz só `installationId` e a Api preenche `RefreshToken`.
+public sealed record RefreshTokenCommand(string? RefreshToken, string InstallationId);
 
-public sealed record LogoutCommand(string RefreshToken);
+/// Na web, o corpo é vazio e o refresh vem do cookie.
+public sealed record LogoutCommand(string? RefreshToken);
 
 public sealed record SwitchTenantCommand(Guid TenantId);
 
@@ -35,7 +37,7 @@ public sealed record TokensDto(
     string TokenType,
     string AccessToken,
     DateTimeOffset AccessTokenExpiresAt,
-    string RefreshToken,
+    string? RefreshToken, // null na web: vai no cookie (ADR-0053)
     DateTimeOffset RefreshTokenExpiresAt);
 
 public sealed record MeUserDto(Guid Id, string FullName, string? Email, string? PhoneNumber);

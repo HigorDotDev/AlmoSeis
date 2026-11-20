@@ -32,12 +32,15 @@ builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ProblemDetailsExceptionHandler>();
 builder.Services.AddScoped<ValidationFilter>();
 builder.Services.AddScoped<SubscriptionWriteGuardFilter>();
+builder.Services.AddSingleton<WebSessionCookieFilter>();
+builder.Services.AddRestaurantAppCors();
 builder.Services
     .AddControllers(o =>
     {
         o.Filters.AddService<SubscriptionWriteGuardFilter>();
         o.Filters.AddService<ValidationFilter>();
         o.Filters.Add<ETagResultFilter>();
+        o.Filters.AddService<WebSessionCookieFilter>();
         o.ModelBinderProviders.Insert(0, new UpperSnakeEnumModelBinderProvider());
     })
     .ConfigureApiBehaviorOptions(o => o.UseAlmoSeisModelStateResponse())
@@ -59,6 +62,9 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
+// CORS logo depois do tratador de erros: o preflight responde aqui, e os erros também levam os headers (ADR-0053 §4).
+app.UseCors(RestaurantAppCorsOptions.Policy);
+app.UseMiddleware<HubOriginMiddleware>();
 app.UseMiddleware<AppVersionMiddleware>();
 app.UseMiddleware<RateLimitKeyMiddleware>();
 app.UseRateLimiter();

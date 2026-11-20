@@ -174,6 +174,8 @@ Ordem em `Program.cs`:
 UseForwardedHeaders            // IP real do Container Apps (ADR-0041)
 UseExceptionHandler            // ProblemDetailsExceptionHandler
 UseHsts / UseHttpsRedirection  // só fora de Development
+UseCors("RestaurantApp")       // Cors:RestaurantAppOrigins com credenciais (ADR-0053 §4); o preflight responde aqui
+HubOriginMiddleware            // /hubs: Origin presente, fora da lista e diferente do host da API → 403 OriginNotAllowed
 AppVersionMiddleware           // X-App-Version < MinSupportedAppVersion → 426 (ADR-0035); ignora /health, /webhooks
 UseRateLimiter                 // políticas auth, pin, invitation, webhook (ADR-0041)
 UseAuthentication              // JwtBearer + OnTokenValidated → EmployeeAccessValidator
@@ -193,6 +195,8 @@ MapHealthChecks("/health/live" | "/health/ready")
 | `[RequiresIfMatch]` → `IfMatchFilter` | ações marcadas [M] em 06 | Sem `If-Match` → `428 IfMatchRequired`. Parse de `"N"` → `IConcurrencyContext.ExpectedVersion` |
 | `ETagResultFilter` | global | Resposta com `IVersionedDto` → header `ETag: "{version}"` |
 | `ValidationFilter` | global | Executa o `IValidator<TRequest>` do corpo → `422 ValidationFailed` com `errors` |
+| `[WebOriginCheck]` (`IResourceFilter`) | `refresh`, `logout`, `pin-login`, `GET /auth/shared-device/employees`, `DELETE /auth/shared-device` | Anti-CSRF (ADR-0053 §3.4): com `X-App-Platform: WEB`, `Origin` ausente ou fora de `Cors:RestaurantAppOrigins` → `403 OriginNotAllowed`, antes do model binding e de ler cookie |
+| `WebSessionCookieFilter` (`IResultFilter`) | global | Só com `X-App-Platform: WEB`: `AuthResultDto`/`TokensDto` → refresh no cookie `__Secure-almoseis-rt` e `refreshToken: null`; `RegisteredSharedDeviceDto` → segredo no cookie `__Secure-almoseis-ds` e `deviceSecret: null` (06 §6.3 "App no navegador") |
 
 **`ProblemDetailsExceptionHandler`** mapeia exceções para HTTP:
 - `BusinessException` → `ErrorCode.HttpStatus`, com `errorCode`, `traceId` e as extensões;
@@ -211,7 +215,9 @@ MapHealthChecks("/health/live" | "/health/ready")
 | `PermissionAuthorizationHandler` | Confere a permissão em `IEmployeeAccessCache`. Falha → `403 PermissionDenied` com a extensão `permission` |
 | `[HasPermission(Permissions.Orders.Create)]` | Atributo usado nos controllers |
 | `IPermissionChecker` (scoped) | `bool Has(string permission)` sobre o mesmo cache. Usado em handlers quando a permissão depende do **valor** enviado (ex.: `orders.delivery-fee.edit` só se a taxa difere da padrão) |
-| `DeviceSecretAuthenticationHandler` (esquema `DeviceSecret`) | Só para `GET /devices/shared/{installationId}/employees` e `POST /auth/pin-login`: valida `X-Device-Secret` + `X-Tenant-Id` |
+| `DeviceSecretAuthenticationHandler` (esquema `DeviceSecret`) | Só para `GET /devices/shared/{installationId}/employees`, `GET /auth/shared-device/employees` (web) e `POST /auth/pin-login`: valida `X-Device-Secret` (ou o cookie, na web) + `X-Tenant-Id`. Implementado sem esquema próprio (§7.13, "Login por PIN") |
+| `WebSession` (estático) | Transporte da sessão na web (ADR-0053): `IsWeb(request)` (`X-App-Platform: WEB`); `RefreshToken(request, corpo, required)` (web: cookie, e refresh no corpo → `422`; mobile: corpo); `DeviceSecret(request, header)` (header, ou o cookie na web); emissão e remoção dos cookies (`HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`, sem `Domain`). Fora da web, cookies são ignorados |
+| `RestaurantAppCorsOptions` / `AddRestaurantAppCors` | Seção `Cors` (`RestaurantAppOrigins`), validada no início (sem `*`, só origens completas). Política `RestaurantApp`: essas origens, `AllowCredentials`, métodos `GET/POST/PUT/PATCH/DELETE`, headers de 06 §6.3 "App no navegador", expostos `ETag`, `Location`, `Retry-After`, `Idempotent-Replayed`, `Max-Age` 600. Lista vazia → nenhuma origem |
 | `PlatformAdminRequirement` / `[PlatformAdmin]` | Política `PlatformAdmin` (ADR-0043): só tokens de `POST /auth/admin/login`. O `EmployeeAccessValidator` reconhece o token sem `tenant_id` com `platform_admin`, aceita-o **só** em `/api/v1/admin` e confere, a cada requisição, `is_platform_admin` e o `security_stamp` do usuário (`IPlatformAdminCheck`). Token de estabelecimento em `/admin/*` → `403`; token de admin fora de `/admin` → `401` |
 
 **JSON** (`AddControllers().AddJsonOptions`):
@@ -222,7 +228,7 @@ MapHealthChecks("/health/live" | "/health/ready")
 - `UtcDateTimeOffsetConverter` (sempre `Z`);
 - `DateOnly` ISO.
 
-**Controllers:** finos e sem regra. Recebem DTO, montam o comando e chamam `ICommandHandler<,>`/`IQueryHandler<,>` dos `Contracts`. Um controller por recurso de 06: `AuthController`, `DevicesController`, `TenantController`, `SubscriptionController`, `EmployeesController`, `InvitationsController`, `RolesController`, `ProductsController`, `MarmitaSizesController`, `BusinessDaysController`, `MenusController`, `CustomersController`, `OrdersController`, `OrderItemsController`, `OrderAlertsController`, `ProductionController`, `PaymentsController`, `ClosingController`, `SyncController`, `OperationsController`, `AuditLogsController`, `AdminTenantsController`, `AsaasWebhookController`.
+**Controllers:** finos e sem regra. A origem do refresh e do segredo do aparelho (corpo/header × cookie) é transporte e fica no `WebSession`, chamado pelo `AuthController`. Recebem DTO, montam o comando e chamam `ICommandHandler<,>`/`IQueryHandler<,>` dos `Contracts`. Um controller por recurso de 06: `AuthController`, `DevicesController`, `TenantController`, `SubscriptionController`, `EmployeesController`, `InvitationsController`, `RolesController`, `ProductsController`, `MarmitaSizesController`, `BusinessDaysController`, `MenusController`, `CustomersController`, `OrdersController`, `OrderItemsController`, `OrderAlertsController`, `ProductionController`, `PaymentsController`, `ClosingController`, `SyncController`, `OperationsController`, `AuditLogsController`, `AdminTenantsController`, `AsaasWebhookController`.
 
 ---
 
@@ -271,13 +277,13 @@ AlmoSeis.Modules.Ordering/
 |---|---|---|
 | `SignUpHandler` | `POST /auth/signup` | Rota pública: o handler gera o `TenantId` e chama `ITenantContext.InitializeForSignup(tenantId, userId)` **antes** de abrir a conexão, para a RLS aceitar os inserts. Cria `User`, `Tenant`, `TenantSettings`, `TenantSyncCounter`, `Subscription(TRIALING)` (via `IBillingPort`), `TenantEmployee(OWNER)` e `TrialClaim` (hash) |
 | `LoginHandler` | `POST /auth/login` | Sem tenant: define só `app.user_id` → lista vínculos (05 §5.12 grupo 2). Lockout de senha do Identity |
-| `RefreshTokenHandler`, `LogoutHandler`, `SwitchTenantHandler` | `/auth/refresh`, `/logout`, `/switch-tenant` | Reuso de refresh revogado → revoga a família |
+| `RefreshTokenHandler`, `LogoutHandler`, `SwitchTenantHandler` | `/auth/refresh`, `/logout`, `/switch-tenant` | Reuso de refresh revogado → revoga a família. O handler não sabe de cookie: recebe o refresh já resolvido pela Api (`WebSession.RefreshToken`); refresh vazio → `InvalidRefreshToken` (refresh) ou nada a revogar (logout) |
 | `GetMeQuery` | `GET /auth/me` | Monta o `Me` com `IBillingPort.GetStatus` |
 | `SetOwnPinHandler` | `PUT /auth/me/pin` | Confere a senha atual |
 | `ChangeOwnPasswordHandler` | `PUT /auth/me/password` | Confere a senha atual (`422`, sem contar no bloqueio, como o PIN). `User.SetPasswordHash` troca o stamp; revoga por `ExecuteUpdate` os refresh tokens do usuário com `installation_id` diferente do token. Auditoria `PasswordChanged` |
 | `PinLoginHandler` | `POST /auth/pin-login` | Esquema `DeviceSecret`, tenant do header → `PinPolicy`/bloqueio → tokens com `device_id` |
 | `ForgotPasswordHandler`, `ResetPasswordHandler` | `/auth/password/*` | Token do Identity (`DataProtectorTokenProvider`); código de reset via `EmployeeInvitation` |
-| `RegisterSharedDeviceHandler`, `RevokeSharedDeviceHandler`, `ListSharedDevicesQuery`, `ListPinEmployeesQuery` | `/devices/shared/*` | `deviceSecret` = 32 bytes aleatórios, base64url, prefixo `ds_` |
+| `RegisterSharedDeviceHandler`, `RevokeSharedDeviceHandler`, `ListSharedDevicesQuery`, `ListPinEmployeesQuery` | `/devices/shared/*`, `GET /auth/shared-device/employees` | `deviceSecret` = 32 bytes aleatórios, base64url, prefixo `ds_`. `platform` `ANDROID`/`IOS`/`WEB`; o `DevicesController` exige `WEB` ⇔ `X-App-Platform: WEB` (`422 errors.platform`) |
 | `UpdateTenantHandler`, `UpdateTenantSettingsHandler` | `/tenant`, `/tenant/settings` | [M] |
 | `ListEmployeesQuery`, `UpdateEmployeeHandler`, `DeactivateEmployeeHandler`, `ReactivateEmployeeHandler`, `IssuePasswordResetCodeHandler` | `/employees/*` | Regra `LastOwner`. Invalidam o `IEmployeeAccessCache` e publicam `AccessRevoked` |
 | `CreateInvitationHandler`, `ListInvitationsQuery`, `RevokeInvitationHandler` | `/employees/invitations*` | |
@@ -503,7 +509,7 @@ O `IAuditWriter` vive em Infrastructure (§7.3). O módulo Audit tem só leitura
 
 | Classe | Responsabilidade |
 |---|---|
-| `RealtimeHub : Hub` (Api) | `[Authorize]`. Em `OnConnectedAsync`, adiciona aos grupos de 06 §6.14 conforme as permissões. Valida o `appVersion` da query. Sem métodos de cliente |
+| `RealtimeHub : Hub` (Api) | `[Authorize]`. Em `OnConnectedAsync`, adiciona aos grupos de 06 §6.14 conforme as permissões. Valida o `appVersion` da query. Sem métodos de cliente. O `negotiate` passa pelo CORS; o `HubOriginMiddleware` confere o `Origin`, porque o WebSocket não passa pelo CORS (ADR-0053 §4.2) |
 | `OutboxDispatcher` (`BackgroundService`, `PlatformDbContext`) | A cada 250 ms (ou `LISTEN outbox` via `NOTIFY` no commit, otimização futura): `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 100` → `IRealtimePublisher.PublishAsync(envelope)` → `processed_at`. Em falha, incrementa `attempts` e grava `last_error`. Com `attempts > 10`, registra log de erro e para de tentar a mensagem |
 | `IRealtimePublisher` / `SignalRRealtimePublisher` | `IHubContext<RealtimeHub>`. Resolve os grupos pelo `eventType` (tabela de 06 §6.14). `ClosingUpdated` é agrupado por tenant |
 | `EmployeeAccessNotifier` | Publica `AccessRevoked` no grupo `employee:{id}` direto (sem outbox: não é estado, e o cache já foi invalidado) |
@@ -530,7 +536,8 @@ O `IAuditWriter` vive em Infrastructure (§7.3). O módulo Audit tem só leitura
 | `Billing` (`Asaas:BaseUrl`, `Asaas:ApiKey`, `Asaas:WebhookToken`, `GracePeriodDays`…) | `BillingOptions` | chaves sim |
 | `Storage:R2` (`AccountId`, `Bucket`, `AccessKeyId`, `SecretAccessKey`, `PublicBaseUrl`) | `R2Options` | chaves sim |
 | `Email` (`ConnectionString`, `Sender`) | `EmailOptions` | sim |
-| `App` (`MinSupportedAppVersion:Android`, `:Ios`, `StoreUrl:*`) | `AppVersionOptions` | não |
+| `App` (`MinSupportedAppVersion:ANDROID`, `:IOS`, `:WEB`, `StoreUrl:ANDROID`, `:IOS`; sem `StoreUrl:WEB`, então o `426` da web leva `storeUrl: null`) | `AppVersionOptions` | não |
+| `Cors` (`RestaurantAppOrigins`: Development `http://localhost:8082`; homolog `https://app-homolog.almoseis.app`; produção `https://app.almoseis.app`) | `RestaurantAppCorsOptions` | não |
 | `Idempotency` (`TtlHours = 72`, `LockTimeoutSeconds = 5`) | `IdempotencyOptions` | não |
 
 O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5). A imagem Docker usa a base `aspnet` **não chiseled**, que traz `tzdata`, necessário para `TimeZoneInfo.FindSystemTimeZoneById("America/Sao_Paulo")` no cálculo da `BusinessDate`.
@@ -546,7 +553,8 @@ O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5
 | ↳ `TenantIsolationTests` | **Todo** endpoint autenticado | Teoria sobre o catálogo de rotas: dados no tenant A, chamada como B → `404`/lista vazia, nunca dados de A |
 | ↳ `IdempotencyTests` | Endpoints [I] | Reenvio com mesmo corpo → mesma resposta + `Idempotent-Replayed`; corpo diferente → `422`; dois em paralelo → um registro só |
 | ↳ `ConcurrencyTests` | Endpoints [M] | `If-Match` velho → `409` com `current`; dois pagamentos concorrentes no mesmo saldo → um falha |
-| ↳ `DdlMigrationSyncTests` (unitário) + `SchemaTests` | Migrations × `05-ddl.md` × modelo EF | O script embutido é idêntico aos blocos do `05`. A migration aplicada pelo login de migration passa no `05-ddl-smoke-test.sql` (21 checagens), e toda entidade EF encontra suas colunas no banco (ADR-0042) |
+| ↳ `WebSessionFlowTests` | App no navegador (ADR-0053) | Login web: refresh só no cookie `HttpOnly`; refresh pelo cookie com rotação; reuso revoga a família e apaga o cookie; `Origin` ausente ou estranho → `403`; refresh no corpo vindo da web → `422`; mobile sem `Set-Cookie` e sem ler cookie; logout apaga; aparelho compartilhado web (lista e PIN pelo cookie, revogação apaga o cookie); preflight de origem permitida e negada; `Origin` no hub; `426` da web sem `storeUrl`. Cliente sem `CookieContainer`: os cookies vão no header `Cookie`, como no navegador |
+| ↳ `DdlMigrationSyncTests` (unitário) + `SchemaTests` | Migrations × `05-ddl.md` × modelo EF | O script embutido é idêntico aos blocos do `05` (a inicial = blocos antes de 05 §5.17; cada alteração = os blocos da sua subseção em §5.17). A migration aplicada pelo login de migration passa no `05-ddl-smoke-test.sql` (21 checagens), e toda entidade EF encontra suas colunas no banco (ADR-0042) |
 | `ArchitectureTests` | ADR-0029 | regras abaixo |
 
 **Regras de arquitetura (NetArchTest):**
@@ -625,6 +633,12 @@ O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5
 | Abertura concorrente | `pg_advisory_xact_lock(hashtextextended('business-day-open:{tenant}', 0))` antes de checar o expediente aberto | A segunda abertura espera e responde `409 BusinessDayAlreadyOpen` com `current`, em vez de estourar `ux_business_days_open` no commit |
 | Cursor de `GET /business-days` | Base64url do último id da página; ordem por `id` decrescente (UUID v7 = ordem de abertura) | Opaco, estável e sem `OFFSET` |
 | `dailyClosingId` | Sempre `null` até a finalização do fechamento ser implementada | `DailyClosing` ainda não é mapeado |
+| Cookies de sessão na web (ADR-0053) | Emitidos por um filtro de resultado global (`WebSessionCookieFilter`), não pelos handlers: o módulo Identity não conhece HTTP nem plataforma. Na falha (`401 InvalidRefreshToken`/`InvalidDeviceSecret`), o cookie é apagado por `Response.OnStarting` | O tratador de exceções limpa os headers da resposta antes de escrever o `ProblemDetails`; os callbacks de `OnStarting` rodam depois disso |
+| Plataforma `WEB` só pelo header | Cookies só são lidos com `X-App-Platform: WEB`; sem ele, a requisição é tratada como mobile (refresh no corpo obrigatório) | ADR-0053 §3.1: o mobile ignora cookies. O header customizado força o *preflight*, então uma página de outra origem não consegue usar o cookie |
+| `Secure` em `http://localhost` | O ASP.NET emite `Secure` e o prefixo `__Secure-` também em HTTP (não confere o esquema). O Chrome e o Edge aceitam esses cookies vindos de `http://localhost` | Desenvolvimento com o app em `localhost:8082` e a API em `localhost:5080` (mesmo *site*) |
+| `Origin` no hub | Rejeita só `Origin` presente, fora da lista e diferente do host da própria API | O WebSocket do React Native envia `Origin` = o host do servidor; clientes nativos sem `Origin` também passam. O hub autentica por token na query, sem cookie, então a checagem é defesa em profundidade |
+| Header `Cookie` fora do log | Não há `UseHttpLogging` nem registro de headers; a instrumentação OpenTelemetry do ASP.NET Core não grava headers por padrão. Quem ligar log de headers precisa excluir `Cookie`, `Set-Cookie`, `Authorization` e `X-Device-Secret` | ADR-0053 / `02-padroes.md`: token nunca em log |
+| Alterações de schema | 05 §5.17: uma subseção `### NNNN_Nome` por migration, com o seu bloco `sql`; `Sync-DdlMigration.ps1 -Target NNNN_Nome.sql` gera o script, e a classe de migration tem 10 linhas. A primeira é a `0002_SharedDeviceWebPlatform` (`platform` com `WEB`) | ADR-0042 §3: a `0001` não muda depois de aplicada |
 
 ## 7.14 Exemplo de ponta a ponta: `POST /orders/{id}/payments`
 

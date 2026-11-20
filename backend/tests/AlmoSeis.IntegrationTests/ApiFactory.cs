@@ -17,6 +17,8 @@ public sealed class ApiFactory(PostgresFixture db, Action<IServiceCollection>? s
 {
     public const string WebhookToken = "test-webhook-token";
 
+    public const string WebOrigin = "http://localhost:8082";
+
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     /// Erros logados pela API durante o teste: anexados às falhas para diagnóstico.
@@ -33,6 +35,8 @@ public sealed class ApiFactory(PostgresFixture db, Action<IServiceCollection>? s
             ["Billing:Asaas:WebhookToken"] = WebhookToken,
             // Os testes criam muitos estabelecimentos do mesmo "IP"; o rate limiting é testado à parte.
             ["RateLimiting:Enabled"] = "false",
+            // App do restaurante no navegador (ADR-0053): a mesma origem de desenvolvimento.
+            ["Cors:RestaurantAppOrigins:0"] = WebOrigin,
         }));
         if (services is not null)
         {
