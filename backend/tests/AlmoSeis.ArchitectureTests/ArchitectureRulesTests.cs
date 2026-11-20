@@ -82,8 +82,9 @@ public sealed class ArchitectureRulesTests
     [Fact]
     public void Rule5_platform_context_only_in_allowed_places()
     {
+        // Jobs de plataforma (`*.Jobs`) só acham candidatos entre tenants; a escrita é no contexto do tenant (07 §7.12).
         var result = Types.InAssemblies(ModuleAssemblies)
-            .That().DoNotResideInNamespaceMatching(@"^AlmoSeis\.Modules\.(Billing|Sync)\.")
+            .That().DoNotResideInNamespaceMatching(@"^AlmoSeis\.Modules\.((Billing|Sync)\.|\w+\.Jobs$)")
             .ShouldNot().HaveDependencyOn("AlmoSeis.Infrastructure.Persistence.PlatformDbContext")
             .GetResult();
 

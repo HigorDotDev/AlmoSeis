@@ -285,11 +285,15 @@ internal sealed class OrderDtoBuilder(IEmployeeDirectory employees, IOrderPaymen
         var active = order.Items.Where(i => i.Status == LineStatus.Active).ToList();
         var weighings = order.Weighings.Where(w => w.Status == LineStatus.Active).OrderBy(w => w.CreatedAt).ToList();
         var authorIds = active.Select(i => i.CreatedByEmployeeId)
-            .Concat(weighings.Select(w => w.CreatedByEmployeeId))
+            .Concat(weighings.Select(w => (Guid?)w.CreatedByEmployeeId))
             .Append(order.CreatedByEmployeeId)
-            .Concat(order.CanceledByEmployeeId is { } c ? [c] : []);
+            .Append(order.CanceledByEmployeeId)
+            .Append(order.AcceptedByEmployeeId)
+            .Append(order.RejectedByEmployeeId)
+            .OfType<Guid>();
         var names = await employees.GetDisplayNamesAsync(authorIds, cancellationToken);
         AuthorDto Author(Guid id) => new(id, names.GetValueOrDefault(id, string.Empty));
+        AuthorDto? MaybeAuthor(Guid? id) => id is { } value ? Author(value) : null;
 
         var items = active.Where(i => i.ParentOrderItemId is null)
             .OrderBy(i => i.CreatedAt).ThenBy(i => i.Id)
@@ -299,9 +303,9 @@ internal sealed class OrderDtoBuilder(IEmployeeDirectory employees, IOrderPaymen
                 i.Quantity, i.UnitPrice, i.LineTotal, i.RequiresPreparation, i.Notes,
                 active.Where(a => a.ParentOrderItemId == i.Id).OrderBy(a => a.CreatedAt).ThenBy(a => a.Id)
                     .Select(a => new OrderAddonDto(a.Id, a.ItemKind, a.ProductId!.Value, a.NameSnapshot, a.Quantity, a.UnitPrice, a.LineTotal,
-                        a.RequiresPreparation, a.Notes, a.CreatedAt, Author(a.CreatedByEmployeeId)))
+                        a.RequiresPreparation, a.Notes, a.CreatedAt, MaybeAuthor(a.CreatedByEmployeeId)))
                     .ToList(),
-                i.CreatedAt, Author(i.CreatedByEmployeeId)))
+                i.CreatedAt, MaybeAuthor(i.CreatedByEmployeeId)))
             .ToList();
 
         var customer = order.CustomerId is not null || order.CustomerName is not null
@@ -310,16 +314,23 @@ internal sealed class OrderDtoBuilder(IEmployeeDirectory employees, IOrderPaymen
         var cancellation = order.CanceledAt is { } canceledAt
             ? new CancellationDto(canceledAt, Author(order.CanceledByEmployeeId!.Value), order.CancellationReason!)
             : null;
+        var rejection = order.RejectedAt is { } rejectedAt
+            ? new RejectionDto(order.RejectionReasonCode!.Value, order.RejectionMessage, rejectedAt, MaybeAuthor(order.RejectedByEmployeeId))
+            : null;
 
         return new OrderDto(
             order.Id, order.Version, order.OrderNumber, order.BusinessDayId, order.BusinessDate, order.OrderType, order.Origin,
             order.FulfillmentType, customer, order.DeliveryAddress, order.TableLabel, order.TabNumber, order.Notes,
             order.DeliveryFee, order.ItemsTotal, order.WeighingsTotal, order.TotalAmount, order.PaidAmount, order.Balance, order.IsPaid,
-            order.ProductionStatus, order.ProductionStatusChangedAt, order.CancellationStatus, cancellation, items,
+            order.ProductionStatus, order.ProductionStatusChangedAt, order.CancellationStatus, cancellation,
+            order.AcceptanceStatus, order.AcceptanceDeadline, order.AcceptedAt, MaybeAuthor(order.AcceptedByEmployeeId), order.EstimatedReadyMinutes,
+            rejection, order.ExpiredAt, order.WithdrawnAt,
+            order.FulfillmentStatus, order.FulfillmentStatusChangedAt, order.OutForDeliveryAt, order.DeliveredAt, order.PickedUpAt,
+            order.IsReadyForPickup, items,
             weighings.Select(w => new WeighingDto(w.Id, w.WeightGrams.Value, w.PricePerKg, w.Amount, w.CreatedAt, Author(w.CreatedByEmployeeId))).ToList(),
             await payments.ListAsync(order.Id, cancellationToken),
             await alerts.CountForOrderAsync(order.Id, cancellationToken),
-            order.CreatedAt, Author(order.CreatedByEmployeeId), order.UpdatedAt);
+            order.CreatedAt, MaybeAuthor(order.CreatedByEmployeeId), order.UpdatedAt);
     }
 }
 

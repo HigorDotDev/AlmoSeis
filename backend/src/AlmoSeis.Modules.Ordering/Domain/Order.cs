@@ -23,7 +23,8 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     public string SyncEntityType => "ORDER";
     public Guid BusinessDayId { get; private set; }
     public DateOnly BusinessDate { get; private set; }
-    public int OrderNumber { get; private set; }
+    /// Nulo enquanto o pedido não é aceito (ADR-0046 item 4); recusados, expirados e desistências nunca recebem.
+    public int? OrderNumber { get; private set; }
     public OrderType OrderType { get; private set; }
     public OrderOrigin Origin { get; private set; }
     public FulfillmentType FulfillmentType { get; private set; }
@@ -46,7 +47,25 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     public DateTimeOffset? CanceledAt { get; private set; }
     public Guid? CanceledByEmployeeId { get; private set; }
     public string? CancellationReason { get; private set; }
-    public Guid CreatedByEmployeeId { get; private set; }
+    public AcceptanceStatus AcceptanceStatus { get; private set; }
+    public DateTimeOffset? AcceptanceDeadline { get; private set; }
+    public DateTimeOffset? AcceptedAt { get; private set; }
+    public Guid? AcceptedByEmployeeId { get; private set; }
+    public int? EstimatedReadyMinutes { get; private set; }
+    public RejectionReason? RejectionReasonCode { get; private set; }
+    public string? RejectionMessage { get; private set; }
+    public DateTimeOffset? RejectedAt { get; private set; }
+    public Guid? RejectedByEmployeeId { get; private set; }
+    public DateTimeOffset? ExpiredAt { get; private set; }
+    public DateTimeOffset? WithdrawnAt { get; private set; }
+    public FulfillmentStatus? FulfillmentStatus { get; private set; }
+    public DateTimeOffset? FulfillmentStatusChangedAt { get; private set; }
+    public DateTimeOffset? OutForDeliveryAt { get; private set; }
+    public DateTimeOffset? DeliveredAt { get; private set; }
+    public DateTimeOffset? PickedUpAt { get; private set; }
+
+    /// Nulo só em pedido da página (`Origin = WEB`).
+    public Guid? CreatedByEmployeeId { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
@@ -57,6 +76,22 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     public IReadOnlyList<OrderChangeEvent> ChangeEvents => _changeEvents;
 
     public Money Balance => TotalAmount - PaidAmount;
+
+    public bool IsAccepted => AcceptanceStatus == AcceptanceStatus.Accepted;
+
+    /// "Pronto para retirar" é derivado, não gravado (ADR-0046 item 2).
+    public bool IsReadyForPickup => IsReadyForPickupRule(FulfillmentType, ProductionStatus, FulfillmentStatus);
+
+    /// `fulfillment` nulo em retirada aceita = `PENDING` (pedido gravado pela versão anterior da API, 05 §5.17 0003).
+    public static bool IsReadyForPickupRule(FulfillmentType type, ProductionStatus? production, FulfillmentStatus? fulfillment) =>
+        type == FulfillmentType.Pickup && production == Contracts.ProductionStatus.Completed
+        && (fulfillment ?? Contracts.FulfillmentStatus.Pending) == Contracts.FulfillmentStatus.Pending;
+
+    /// Texto da recusa (ADR-0046 item 12): 5 a 200 caracteres, obrigatório em `OTHER`.
+    public const int RejectionMessageMin = 5;
+    public const int RejectionMessageMax = 200;
+
+    public static readonly int[] EstimatedMinutesOptions = [15, 30, 45, 60];
 
     /// "João Silva", "Mesa 5", "Comanda 47": rótulo do painel da cozinha e do `OrderCreated` (06 §6.9).
     public string? Label => OrderType == OrderType.Marmita
@@ -101,31 +136,293 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
             ProductionStatus = data.OrderType == OrderType.Kilo ? null : Contracts.ProductionStatus.Open,
             ProductionStatusChangedAt = data.OrderType == OrderType.Kilo ? null : now,
             CancellationStatus = CancellationStatus.Active,
+            // Todo pedido do app nasce aceito (ADR-0046 item 1): o aceite é a própria criação.
+            AcceptanceStatus = AcceptanceStatus.Accepted,
+            AcceptedAt = now,
+            AcceptedByEmployeeId = createdBy,
+            FulfillmentStatus = data.FulfillmentType == FulfillmentType.DineIn ? null : Contracts.FulfillmentStatus.Pending,
+            FulfillmentStatusChangedAt = data.FulfillmentType == FulfillmentType.DineIn ? null : now,
             CreatedByEmployeeId = createdBy,
             CreatedAt = now,
             UpdatedAt = now,
         };
 
+        order.AddInitialLines(data, createdBy, newId, now);
+        order.Raise(new OrderCreated(id, orderNumber, order.OrderType, order.Label, now));
+        return order;
+    }
+
+    /// Pedido "pagar na entrega/retirada" da página (ADR-0046): sem número, sem produção, sem cliente vinculado e sem
+    /// autor. Espera o aceite até `deadline`. Pertence ao expediente aberto no envio (item 5).
+    public static Order SubmitFromWeb(
+        Guid id, Guid tenantId, NewOrder data, Guid businessDayId, DateOnly businessDate, DateTimeOffset deadline,
+        Func<Guid> newId, DateTimeOffset now)
+    {
+        if (data.OrderType != OrderType.Marmita)
+        {
+            throw BusinessException.Validation("orderType", "A página de pedidos só vende marmitas.");
+        }
+
+        EnsureFulfillment(data.OrderType, data.FulfillmentType);
+        if (string.IsNullOrWhiteSpace(data.CustomerName))
+        {
+            throw BusinessException.Validation("customerName", "Informe o nome do cliente da marmita.");
+        }
+
+        EnsureDelivery(data.FulfillmentType, data.DeliveryAddress, data.DeliveryFee);
+        if (data.Weighings.Count > 0)
+        {
+            throw BusinessException.Validation("weighings", "Pesagens só existem em pedidos por quilo.");
+        }
+
+        if (deadline <= now)
+        {
+            throw new ArgumentOutOfRangeException(nameof(deadline), "O prazo de aceite precisa estar no futuro.");
+        }
+
+        var order = new Order
+        {
+            Id = id,
+            TenantId = tenantId,
+            BusinessDayId = businessDayId,
+            BusinessDate = businessDate,
+            OrderNumber = null,
+            OrderType = data.OrderType,
+            Origin = OrderOrigin.Web,
+            FulfillmentType = data.FulfillmentType,
+            CustomerId = null,
+            CustomerName = data.CustomerName,
+            CustomerPhone = data.CustomerPhone,
+            DeliveryAddress = data.DeliveryAddress,
+            Notes = data.Notes,
+            DeliveryFee = data.DeliveryFee,
+            PaidAmount = Money.Zero,
+            ProductionStatus = null,
+            CancellationStatus = CancellationStatus.Active,
+            AcceptanceStatus = AcceptanceStatus.AwaitingAcceptance,
+            AcceptanceDeadline = deadline,
+            CreatedByEmployeeId = null,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+
+        order.AddInitialLines(data, by: null, newId, now);
+        order.Raise(new OrderAwaitingAcceptance(
+            id, order.FulfillmentType, order.Items.Where(i => i.ItemKind == OrderItemKind.Marmita).Sum(i => i.Quantity),
+            order.TotalAmount, deadline, now));
+        return order;
+    }
+
+    /// Vencido pelo job ou com o prazo já passado, antes de o job rodar (ADR-0046 item 16).
+    public bool HasAcceptanceExpired(DateTimeOffset now) =>
+        AcceptanceStatus == AcceptanceStatus.Expired
+        || (AcceptanceStatus == AcceptanceStatus.AwaitingAcceptance && AcceptanceDeadline is { } deadline && now >= deadline);
+
+    /// Confere antes de o handler consumir um número do contador (ADR-0046 itens 9 e 16).
+    public void EnsureAwaitingAcceptance(DateTimeOffset now)
+    {
+        switch (AcceptanceStatus)
+        {
+            case AcceptanceStatus.AwaitingAcceptance when AcceptanceDeadline is { } deadline && now >= deadline:
+            case AcceptanceStatus.Expired:
+                throw new BusinessException(ErrorCodes.WebOrderExpired);
+            case AcceptanceStatus.AwaitingAcceptance:
+                return;
+            default:
+                throw new BusinessException(
+                    ErrorCodes.OrderNotAwaitingAcceptance,
+                    extensions: new Dictionary<string, object?> { ["acceptanceStatus"] = UpperSnake(AcceptanceStatus) });
+        }
+    }
+
+    /// Aceite (ADR-0046 item 7): número da data operacional, produção `OPEN`, atendimento `PENDING`, vínculo com o
+    /// cliente. Para a cozinha, o pedido nasce aqui (`OrderCreated`). `by` nulo = aceite do sistema (Fase 2).
+    public void Accept(int orderNumber, Guid? by, string? byName, Guid? customerId, int? estimatedReadyMinutes, DateTimeOffset now)
+    {
+        EnsureAwaitingAcceptance(now);
+        if (estimatedReadyMinutes is { } minutes && !EstimatedMinutesOptions.Contains(minutes))
+        {
+            throw BusinessException.Validation("estimatedReadyMinutes", "Escolha 15, 30, 45 ou 60 minutos.");
+        }
+
+        OrderNumber = orderNumber;
+        AcceptanceStatus = AcceptanceStatus.Accepted;
+        AcceptedAt = now;
+        AcceptedByEmployeeId = by;
+        EstimatedReadyMinutes = estimatedReadyMinutes;
+        CustomerId = customerId;
+        ProductionStatus = Contracts.ProductionStatus.Open;
+        ProductionStatusChangedAt = now;
+        FulfillmentStatus = Contracts.FulfillmentStatus.Pending;
+        FulfillmentStatusChangedAt = now;
+        UpdatedAt = now;
+        Touch(new OrderAccepted(Id, orderNumber, by, byName, now));
+        // No pedido do app o rótulo é o nome do cliente; o da página não leva dado pessoal em evento (item 23).
+        Touch(new OrderCreated(Id, orderNumber, OrderType, Label: null, now));
+    }
+
+    /// Recusa pelo funcionário (ADR-0046 item 12).
+    public void Reject(RejectionReason reason, string? message, Guid by, DateTimeOffset now)
+    {
+        EnsureAwaitingAcceptance(now);
+        if (reason == RejectionReason.BusinessDayClosed)
+        {
+            throw BusinessException.Validation("reasonCode", "Escolha um motivo da lista.");
+        }
+
+        var text = string.IsNullOrWhiteSpace(message) ? null : message.Trim();
+        if (reason == RejectionReason.Other && text is null)
+        {
+            throw BusinessException.Validation("message", "Explique o motivo para o cliente.");
+        }
+
+        if (text is { Length: < RejectionMessageMin or > RejectionMessageMax })
+        {
+            throw BusinessException.Validation("message", $"Use de {RejectionMessageMin} a {RejectionMessageMax} caracteres.");
+        }
+
+        SetRejected(reason, text, by, now);
+    }
+
+    /// Fechamento finalizado com o pedido ainda aguardando (ADR-0046 item 13): o sistema recusa, sem olhar o prazo.
+    public void RejectBecauseBusinessDayClosed(DateTimeOffset now)
+    {
+        if (AcceptanceStatus != AcceptanceStatus.AwaitingAcceptance)
+        {
+            throw new InvalidOperationException("Só pedido aguardando aceite é recusado pelo fechamento.");
+        }
+
+        SetRejected(RejectionReason.BusinessDayClosed, null, null, now);
+    }
+
+    /// Job de expiração (ADR-0046 item 14). Devolve false quando não há o que expirar.
+    public bool Expire(DateTimeOffset now)
+    {
+        if (AcceptanceStatus != AcceptanceStatus.AwaitingAcceptance || AcceptanceDeadline is not { } deadline || deadline > now)
+        {
+            return false;
+        }
+
+        AcceptanceStatus = AcceptanceStatus.Expired;
+        ExpiredAt = now;
+        UpdatedAt = now;
+        Touch(new OrderRejected(Id, AcceptanceStatus.Expired, null, now));
+        return true;
+    }
+
+    /// Desistência do cliente pela página (ADR-0046 item 17), enquanto aguarda aceite ou pagamento.
+    public void Withdraw(DateTimeOffset now)
+    {
+        if (AcceptanceStatus != AcceptanceStatus.AwaitingPayment)
+        {
+            EnsureAwaitingAcceptance(now);
+        }
+
+        AcceptanceStatus = AcceptanceStatus.Withdrawn;
+        WithdrawnAt = now;
+        UpdatedAt = now;
+        Touch(new OrderRejected(Id, AcceptanceStatus.Withdrawn, null, now));
+    }
+
+    /// Atendimento (ADR-0046 item 18). Independente do financeiro (ADR-0006): vale em pedido pago ou não.
+    public void ChangeFulfillment(FulfillmentStatus to, DateTimeOffset now)
+    {
+        EnsureAccepted();
+        EnsureNotCanceled();
+        if (FulfillmentType == FulfillmentType.DineIn)
+        {
+            throw BusinessException.Validation("fulfillmentStatus", "Pedido no salão não tem status de entrega ou retirada.");
+        }
+
+        // Nulo em entrega/retirada aceita = `PENDING`: pedido gravado pela versão anterior da API (05 §5.17 0003).
+        var from = FulfillmentStatus ?? Contracts.FulfillmentStatus.Pending;
+
+        if (from == to)
+        {
+            return;
+        }
+
+        var allowed = (FulfillmentType, from, to) switch
+        {
+            (FulfillmentType.Delivery, Contracts.FulfillmentStatus.Pending, Contracts.FulfillmentStatus.OutForDelivery) => true,
+            (FulfillmentType.Delivery, Contracts.FulfillmentStatus.OutForDelivery, Contracts.FulfillmentStatus.Delivered) => true,
+            (FulfillmentType.Delivery, Contracts.FulfillmentStatus.OutForDelivery, Contracts.FulfillmentStatus.Pending) => true, // voltou sem entregar
+            (FulfillmentType.Delivery, Contracts.FulfillmentStatus.Delivered, Contracts.FulfillmentStatus.OutForDelivery) => true, // correção
+            (FulfillmentType.Pickup, Contracts.FulfillmentStatus.Pending, Contracts.FulfillmentStatus.PickedUp) => true,
+            (FulfillmentType.Pickup, Contracts.FulfillmentStatus.PickedUp, Contracts.FulfillmentStatus.Pending) => true, // correção
+            _ => false,
+        };
+        if (!allowed)
+        {
+            throw BusinessException.Validation(
+                "fulfillmentStatus",
+                $"Não é possível passar de {UpperSnake(from)} para {UpperSnake(to)} neste pedido.");
+        }
+
+        // Sair ou ser retirado exige a produção concluída; "Concluir e marcar" conclui antes, na mesma transação.
+        if (from == Contracts.FulfillmentStatus.Pending && ProductionStatus != Contracts.ProductionStatus.Completed)
+        {
+            throw new BusinessException(ErrorCodes.ProductionNotCompleted);
+        }
+
+        switch (to)
+        {
+            case Contracts.FulfillmentStatus.OutForDelivery:
+                OutForDeliveryAt = from == Contracts.FulfillmentStatus.Pending ? now : OutForDeliveryAt;
+                DeliveredAt = null;
+                break;
+            case Contracts.FulfillmentStatus.Delivered:
+                DeliveredAt = now;
+                break;
+            case Contracts.FulfillmentStatus.PickedUp:
+                PickedUpAt = now;
+                break;
+            default:
+                OutForDeliveryAt = null;
+                DeliveredAt = null;
+                PickedUpAt = null;
+                break;
+        }
+
+        FulfillmentStatus = to;
+        FulfillmentStatusChangedAt = now;
+        UpdatedAt = now;
+        Touch(new OrderFulfillmentChanged(Id, OrderNumber, from, to, now));
+    }
+
+    private void SetRejected(RejectionReason reason, string? message, Guid? by, DateTimeOffset now)
+    {
+        AcceptanceStatus = AcceptanceStatus.Rejected;
+        RejectionReasonCode = reason;
+        RejectionMessage = message;
+        RejectedAt = now;
+        RejectedByEmployeeId = by;
+        UpdatedAt = now;
+        Touch(new OrderRejected(Id, AcceptanceStatus.Rejected, reason, now));
+    }
+
+    private void AddInitialLines(NewOrder data, Guid? by, Func<Guid> newId, DateTimeOffset now)
+    {
         for (var i = 0; i < data.Items.Count; i++)
         {
-            order.EnsureTopLevelKind(data.Items[i].Kind, $"items[{i}].itemKind");
-            order.AddTree(data.Items[i], parent: null, createdBy, newId, now);
+            EnsureTopLevelKind(data.Items[i].Kind, $"items[{i}].itemKind");
+            AddTree(data.Items[i], parent: null, by, newId, now);
         }
 
         foreach (var weighing in data.Weighings)
         {
-            order._weighings.Add(new WeighingEntry(newId(), tenantId, id, weighing, createdBy, now));
+            // Pesagem só no app (quilo): sempre há funcionário.
+            _weighings.Add(new WeighingEntry(newId(), TenantId, Id, weighing, by!.Value, now));
         }
 
-        order.EnsureNotEmpty("items");
-        order.Recalculate();
-        order.Raise(new OrderCreated(id, orderNumber, order.OrderType, order.Label, now));
-        return order;
+        EnsureNotEmpty("items");
+        Recalculate();
     }
 
     /// PATCH /orders/{id}: dados do pedido, não itens. Pago → só notes, tableLabel e tabNumber (ADR-0007).
     public void UpdateDetails(OrderDetailsChanges changes, Money defaultDeliveryFee, Guid by, Func<Guid> newId, DateTimeOffset now)
     {
+        EnsureAccepted();
         EnsureNotCanceled();
 
         var financial = Differs(changes.CustomerName, CustomerName) || Differs(changes.CustomerPhone, CustomerPhone)
@@ -144,6 +441,11 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
 
         var fulfillment = changes.FulfillmentType.GetValueOr(FulfillmentType);
         EnsureFulfillment(OrderType, fulfillment);
+        if (fulfillment != FulfillmentType && IsDispatched)
+        {
+            // Entrega que saiu (ou retirada feita) não vira o outro tipo: corrija o atendimento antes.
+            throw new BusinessException(ErrorCodes.OrderAlreadyDispatched);
+        }
 
         // Saindo de entrega, endereço e taxa somem; entrando, a taxa padrão vale se nenhuma foi enviada.
         var address = fulfillment == FulfillmentType.Delivery ? changes.DeliveryAddress.GetValueOr(DeliveryAddress) : null;
@@ -196,6 +498,11 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     public IReadOnlyList<OrderItem> AddItems(IReadOnlyList<NewItem> items, Guid by, Func<Guid> newId, DateTimeOffset now)
     {
         EnsureEditable();
+        if (IsDispatched)
+        {
+            // ADR-0046 item 19 (EP-002 Q-16): depois que saiu, o atendente cria outro pedido.
+            throw new BusinessException(ErrorCodes.OrderAlreadyDispatched);
+        }
         var added = new List<OrderItem>();
         for (var i = 0; i < items.Count; i++)
         {
@@ -332,6 +639,7 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     /// Qualquer transição entre os três estados, inclusive em pedido pago (RN-007.11). KILO não tem produção.
     public void ChangeProductionStatus(ProductionStatus to, DateTimeOffset now)
     {
+        EnsureAccepted();
         EnsureNotCanceled();
         if (OrderType == OrderType.Kilo)
         {
@@ -353,6 +661,8 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     /// ADR-0022: só sem pagamentos válidos; o pedido cancelado é somente leitura.
     public void Cancel(string reason, Guid by, Func<Guid> newId, DateTimeOffset now)
     {
+        // Pedido não aceito não é cancelado: ele nunca foi venda (ADR-0046 item 4); a recusa é o caminho.
+        EnsureAccepted();
         EnsureNotCanceled();
         if (!PaidAmount.IsZero)
         {
@@ -376,6 +686,7 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     /// Chamado só pelo Payments, via IOrderPaymentPort (07 §7.8). Vale para pedido de expediente já fechado (fiado).
     public void ApplyPayment(Money amount, DateTimeOffset now)
     {
+        EnsureAccepted();
         EnsureNotCanceled();
         if (amount > Balance)
         {
@@ -431,7 +742,10 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
 
     private bool HasProduction => ProductionStatus is not null;
 
-    private List<OrderItem> AddTree(NewItem spec, OrderItem? parent, Guid by, Func<Guid> newId, DateTimeOffset now)
+    private bool IsDispatched => FulfillmentStatus is Contracts.FulfillmentStatus.OutForDelivery
+        or Contracts.FulfillmentStatus.Delivered or Contracts.FulfillmentStatus.PickedUp;
+
+    private List<OrderItem> AddTree(NewItem spec, OrderItem? parent, Guid? by, Func<Guid> newId, DateTimeOffset now)
     {
         EnsureQuantity(spec.Quantity, "quantity");
         var item = new OrderItem(newId(), TenantId, Id, parent?.Id, spec, parent?.Quantity ?? 1, by, newId, now);
@@ -470,6 +784,17 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     private int ParentQuantity(OrderItem item) =>
         item.ParentOrderItemId is { } parentId ? _items.Single(i => i.Id == parentId).Quantity : 1;
 
+    /// Pedido não aceito: sem edição, produção, pagamento, cancelamento nem atendimento (ADR-0046 item 4).
+    public void EnsureAccepted()
+    {
+        if (!IsAccepted)
+        {
+            throw new BusinessException(
+                ErrorCodes.OrderNotAccepted,
+                extensions: new Dictionary<string, object?> { ["acceptanceStatus"] = UpperSnake(AcceptanceStatus) });
+        }
+    }
+
     private void EnsureNotCanceled()
     {
         if (CancellationStatus == CancellationStatus.Canceled)
@@ -481,6 +806,7 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     /// Itens, pesagens, quantidades e taxa: bloqueados em pedido cancelado ou quitado (ADR-0007).
     private void EnsureEditable()
     {
+        EnsureAccepted();
         EnsureNotCanceled();
         if (IsPaid)
         {
@@ -570,7 +896,8 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
 
     private static bool Differs<T>(Optional<T> change, T current) => change.HasValue && !EqualityComparer<T>.Default.Equals(change.Value, current);
 
-    private static string UpperSnake(FulfillmentType value) =>
+    private static string UpperSnake<TEnum>(TEnum value)
+        where TEnum : struct, Enum =>
         string.Concat(value.ToString().Select((c, i) => i > 0 && char.IsUpper(c) ? "_" + c : c.ToString())).ToUpperInvariant();
 }
 
@@ -582,7 +909,7 @@ internal sealed class OrderItem : Entity, ITenantOwned
     {
     }
 
-    internal OrderItem(Guid id, Guid tenantId, Guid orderId, Guid? parentId, NewItem spec, int parentQuantity, Guid by, Func<Guid> newId, DateTimeOffset now)
+    internal OrderItem(Guid id, Guid tenantId, Guid orderId, Guid? parentId, NewItem spec, int parentQuantity, Guid? by, Func<Guid> newId, DateTimeOffset now)
     {
         Id = id;
         TenantId = tenantId;
@@ -618,7 +945,9 @@ internal sealed class OrderItem : Entity, ITenantOwned
     public bool RequiresPreparation { get; private set; }
     public string? Notes { get; private set; }
     public LineStatus Status { get; private set; }
-    public Guid CreatedByEmployeeId { get; private set; }
+
+    /// Nulo nos itens montados pelo cliente na página (`Origin = WEB`).
+    public Guid? CreatedByEmployeeId { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
     public Guid? RemovedByEmployeeId { get; private set; }
     public DateTimeOffset? RemovedAt { get; private set; }
@@ -783,16 +1112,27 @@ internal sealed record OrderDetailsChanges(
 
 internal sealed record OrderCreated(Guid OrderId, int OrderNumber, OrderType OrderType, string? Label, DateTimeOffset OccurredAt) : IDomainEvent;
 
-internal sealed record OrderUpdated(Guid OrderId, int OrderNumber, OrderType OrderType, ProductionStatus? ProductionStatus, bool IsPaid, DateTimeOffset OccurredAt) : IDomainEvent;
+internal sealed record OrderAwaitingAcceptance(
+    Guid OrderId, FulfillmentType FulfillmentType, int MarmitaCount, Money TotalAmount, DateTimeOffset AcceptanceDeadline, DateTimeOffset OccurredAt)
+    : IDomainEvent;
 
-internal sealed record OrderStatusChanged(Guid OrderId, int OrderNumber, ProductionStatus From, ProductionStatus To, DateTimeOffset OccurredAt) : IDomainEvent;
+internal sealed record OrderAccepted(Guid OrderId, int OrderNumber, Guid? AcceptedBy, string? AcceptedByName, DateTimeOffset OccurredAt) : IDomainEvent;
 
-internal sealed record OrderCanceled(Guid OrderId, int OrderNumber, DateTimeOffset OccurredAt) : IDomainEvent;
+/// Recusado, expirado ou desistência: o pedido sai de tudo (ADR-0046 item 23).
+internal sealed record OrderRejected(Guid OrderId, AcceptanceStatus AcceptanceStatus, RejectionReason? ReasonCode, DateTimeOffset OccurredAt) : IDomainEvent;
 
-internal sealed record OrderAlertCreated(Guid OrderId, Guid EventId, int OrderNumber, OrderChangeKind ChangeKind, bool AffectsProduction, DateTimeOffset OccurredAt) : IDomainEvent;
+internal sealed record OrderFulfillmentChanged(Guid OrderId, int? OrderNumber, FulfillmentStatus From, FulfillmentStatus To, DateTimeOffset OccurredAt) : IDomainEvent;
 
-internal sealed record OrderPaymentRegistered(Guid OrderId, int OrderNumber, Money PaidAmount, Money Balance, DateTimeOffset OccurredAt) : IDomainEvent;
+internal sealed record OrderUpdated(Guid OrderId, int? OrderNumber, OrderType OrderType, ProductionStatus? ProductionStatus, bool IsPaid, DateTimeOffset OccurredAt) : IDomainEvent;
 
-internal sealed record OrderPaymentConfirmed(Guid OrderId, int OrderNumber, DateTimeOffset OccurredAt) : IDomainEvent;
+internal sealed record OrderStatusChanged(Guid OrderId, int? OrderNumber, ProductionStatus From, ProductionStatus To, DateTimeOffset OccurredAt) : IDomainEvent;
 
-internal sealed record OrderPaymentReversed(Guid OrderId, int OrderNumber, bool IsPaid, DateTimeOffset OccurredAt) : IDomainEvent;
+internal sealed record OrderCanceled(Guid OrderId, int? OrderNumber, DateTimeOffset OccurredAt) : IDomainEvent;
+
+internal sealed record OrderAlertCreated(Guid OrderId, Guid EventId, int? OrderNumber, OrderChangeKind ChangeKind, bool AffectsProduction, DateTimeOffset OccurredAt) : IDomainEvent;
+
+internal sealed record OrderPaymentRegistered(Guid OrderId, int? OrderNumber, Money PaidAmount, Money Balance, DateTimeOffset OccurredAt) : IDomainEvent;
+
+internal sealed record OrderPaymentConfirmed(Guid OrderId, int? OrderNumber, DateTimeOffset OccurredAt) : IDomainEvent;
+
+internal sealed record OrderPaymentReversed(Guid OrderId, int? OrderNumber, bool IsPaid, DateTimeOffset OccurredAt) : IDomainEvent;

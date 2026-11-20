@@ -1,6 +1,13 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using AlmoSeis.Infrastructure.Tenancy;
+using AlmoSeis.Modules.Ordering.Application;
+using AlmoSeis.Modules.Ordering.Contracts;
+using AlmoSeis.Modules.Ordering.Jobs;
+using AlmoSeis.SharedKernel.Application;
+using AlmoSeis.SharedKernel.Domain;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
 namespace AlmoSeis.IntegrationTests.Ordering;
@@ -163,6 +170,41 @@ public sealed class OrderingScenario
 
     public async Task<JsonElement> CreateOrderAsync(object body, HttpClient? client = null) =>
         await (await (client ?? Client).PostIdempotentAsync("/api/v1/orders", body, Guid.NewGuid())).ExpectAsync(HttpStatusCode.Created, Api);
+
+    /// Pedido "pagar na entrega/retirada" da página (ADR-0046). A rota pública entra na fatia 2: aqui o envio usa o
+    /// caso de uso interno, no contexto do tenant e sem funcionário, como a rota pública fará.
+    /// Entrega: 2 marmitas M (40,00) + 5,00 de taxa = 45,00. Retirada: 40,00.
+    public async Task<Guid> SubmitWebOrderAsync(bool delivery = true, int quantity = 2, string? phone = "+5534988887777", string name = "Carla Souza")
+    {
+        await using var scope = Api.Services.CreateAsyncScope();
+        scope.ServiceProvider.GetRequiredService<ITenantContext>().InitializeForSystem(TenantId);
+        var handler = scope.ServiceProvider.GetRequiredService<ICommandHandler<SubmitWebOrderCommand, Guid>>();
+        return await handler.HandleAsync(
+            new SubmitWebOrderCommand(
+                delivery ? FulfillmentType.Delivery : FulfillmentType.Pickup, name, phone,
+                delivery ? new DeliveryAddressDto("Rua das Palmeiras", "45", "Casa 2", "Centro", null) : null,
+                delivery ? Money.Of(5m) : Money.Zero, null,
+                [new OrderItemInput(OrderItemKind.Marmita, null, SizeM, null, quantity, [Frango], [Arroz, Feijao], null, null)]),
+            Ct);
+    }
+
+    /// Desistência do cliente (ADR-0046 item 17): exposta pela página nas fatias 2/3.
+    public async Task WithdrawWebOrderAsync(Guid orderId)
+    {
+        await using var scope = Api.Services.CreateAsyncScope();
+        scope.ServiceProvider.GetRequiredService<ITenantContext>().InitializeForSystem(TenantId);
+        await scope.ServiceProvider.GetRequiredService<ICommandHandler<WithdrawWebOrderCommand, bool>>()
+            .HandleAsync(new WithdrawWebOrderCommand(orderId), Ct);
+    }
+
+    public Task<int?> RunExpiryJobAsync() => Api.Services.GetRequiredService<WebOrderExpiryJob>().RunOnceAsync(Ct);
+
+    /// Prazo de aceite já vencido (ou daqui a `seconds`), sem mexer na versão.
+    public Task SetAcceptanceDeadlineAsync(Guid orderId, DateTimeOffset deadline) =>
+        SqlAsync("UPDATE orders SET acceptance_deadline = @d WHERE tenant_id = @t AND id = @o", ("d", deadline), ("o", orderId));
+
+    public async Task<JsonElement> GetOrderAsync(Guid orderId, HttpClient? client = null) =>
+        await (await (client ?? Client).GetAsync($"/api/v1/orders/{orderId}", Ct)).ExpectAsync(HttpStatusCode.OK, Api);
 
     private async Task<Guid> ProductAsync(string kind, string name, string? price)
     {

@@ -24,18 +24,31 @@ public sealed class RolePermissionsTests
     [Fact]
     public void Attendant_matrix() =>
         RolePermissions.For(Role.Attendant).ShouldBe(
-            ["orders.view", "orders.create", "orders.edit", "customers.manage"], ignoreOrder: true);
+            ["orders.view", "orders.create", "orders.edit", "customers.manage", "orders.accept", "orders.fulfillment.update"], ignoreOrder: true);
 
     [Fact]
     public void Kitchen_matrix() =>
         RolePermissions.For(Role.Kitchen).ShouldBe(
-            ["orders.view", "production.view", "production.update"], ignoreOrder: true);
+            ["orders.view", "production.view", "production.update", "orders.fulfillment.update"], ignoreOrder: true);
 
     [Fact]
     public void Cashier_matrix() =>
         RolePermissions.For(Role.Cashier).ShouldBe(
-            ["orders.view", "payments.register", "cash.open", "cash.movement", "closing.view", "closing.finalize", "customers.manage"],
+            ["orders.view", "payments.register", "cash.open", "cash.movement", "closing.view", "closing.finalize", "customers.manage",
+             "orders.accept", "orders.fulfillment.update"],
             ignoreOrder: true);
+
+    /// ADR-0046 item 22: aceite para quem atende (não a cozinha); atendimento para todos os perfis.
+    [Fact]
+    public void Accept_and_fulfillment_follow_adr_0046()
+    {
+        foreach (var role in Enum.GetValues<Role>())
+        {
+            var permissions = RolePermissions.For(role);
+            permissions.Contains(Permissions.Orders.Accept).ShouldBe(role != Role.Kitchen, role.ToString());
+            permissions.Contains(Permissions.Orders.UpdateFulfillment).ShouldBeTrue(role.ToString());
+        }
+    }
 
     [Fact]
     public void Multiple_roles_are_the_union() =>

@@ -39,6 +39,7 @@
 | `000000000121` | Coca-Cola 350ml | `000000000902` | cardápio PF 27/10 |
 | `000000000131` | adicional Ovo frito | `000000000a01` | fechamento de 27/10 |
 | `000000000201`–`203` | tamanhos P, M, G | `000000000c01` | tablet da cozinha |
+| `000000000504` | pedido do site (Carla, ADR-0046) | `000000000802` | cliente Carla Souza |
 
 ---
 
@@ -111,6 +112,11 @@ Conflito de versão (`409`) traz o estado atual em `current` (ADR-0034):
 | 409 | `OrderAlreadyPaid` | edição de itens, valores ou taxa em pedido quitado (ADR-0007) |
 | 409 | `OrderCanceled` | qualquer escrita em pedido cancelado |
 | 409 | `OrderHasPayments` | cancelamento com pagamentos válidos (ADR-0022) |
+| 409 | `OrderNotAccepted` | escrita em pedido do site não aceito (aguardando, recusado, expirado ou desistência): dados, itens, pesagens, produção, pagamento, cancelamento e atendimento (ADR-0046 item 4). Extensão `acceptanceStatus` |
+| 409 | `OrderNotAwaitingAcceptance` | aceite, recusa ou desistência de pedido que não aguarda mais aceite (já aceito, recusado ou desistência). Extensão `acceptanceStatus`. Com `If-Match` desatualizado, o `VersionConflict` (com `current`) vem antes |
+| 409 | `WebOrderExpired` | aceite, recusa ou desistência depois do prazo de aceite, vencido ou já `EXPIRED` (ADR-0046 item 16). Vem antes do `VersionConflict`: o job de expiração muda a versão |
+| 409 | `OrderAlreadyDispatched` | incluir itens, ou trocar entrega ↔ retirada, com o atendimento em `OUT_FOR_DELIVERY`, `DELIVERED` ou `PICKED_UP` (ADR-0046 item 19). O atendente cria outro pedido |
+| 409 | `ProductionNotCompleted` | marcar "Saiu para entrega" ou "Retirado" com a produção não concluída e sem `completeProduction` (ADR-0046 item 18) |
 | 409 | `PaymentAlreadyReversed` | estorno repetido |
 | 409 | `ClosingAlreadyFinalized` | finalizar expediente já fechado |
 | 409 | `EmailAlreadyRegistered` / `PhoneAlreadyRegistered` | autocadastro ou aceite com contato já usado (use `existingAccount`); `PhoneAlreadyRegistered` também em `POST`/`PATCH /customers` com telefone de outro cliente, com o cliente existente em `current` |
@@ -144,6 +150,8 @@ Cada endpoint indica a permissão exigida. Matriz em código (`Permissions.cs` /
 | `orders.create`, `orders.edit` | ✓ | ✓ | ✓ | | |
 | `orders.cancel` | ✓ | ✓ | | | |
 | `orders.delivery-fee.edit` | ✓ | ✓ | | | |
+| `orders.accept` (aceitar e recusar pedido do site, ADR-0046) | ✓ | ✓ | ✓ | | ✓ |
+| `orders.fulfillment.update` (saiu para entrega, entregue, retirado, ADR-0046) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `production.view`, `production.update` | ✓ | ✓ | | ✓ | |
 | `payments.register` | ✓ | ✓ | | | ✓ |
 | `payments.reverse` | ✓ | ✓ | | | |
@@ -162,8 +170,8 @@ Leitura de produtos, tamanhos, cardápios e clientes exige só `orders.view`.
 ```json
 {
   "items": [
-    { "role": "OWNER", "name": "Proprietário", "permissions": ["orders.view", "orders.create", "orders.edit", "orders.cancel", "orders.delivery-fee.edit", "production.view", "production.update", "payments.register", "payments.reverse", "cash.open", "cash.movement", "closing.view", "closing.finalize", "closing.adjust", "menu.manage", "catalog.manage", "customers.manage", "employees.manage", "devices.manage", "settings.manage", "audit.view", "subscription.view"] },
-    { "role": "KITCHEN", "name": "Cozinha", "permissions": ["orders.view", "production.view", "production.update"] }
+    { "role": "OWNER", "name": "Proprietário", "permissions": ["orders.view", "orders.create", "orders.edit", "orders.cancel", "orders.delivery-fee.edit", "orders.accept", "orders.fulfillment.update", "production.view", "production.update", "payments.register", "payments.reverse", "cash.open", "cash.movement", "closing.view", "closing.finalize", "closing.adjust", "menu.manage", "catalog.manage", "customers.manage", "employees.manage", "devices.manage", "settings.manage", "audit.view", "subscription.view"] },
+    { "role": "KITCHEN", "name": "Cozinha", "permissions": ["orders.view", "production.view", "production.update", "orders.fulfillment.update"] }
   ]
 }
 ```
@@ -195,7 +203,7 @@ Com `X-App-Platform: WEB`, `refreshToken` vem `null` e o refresh vai no cookie `
   "user": { "id": "0192d6a0-0000-7000-8000-000000000011", "fullName": "Ana Souza", "email": "ana@example.com", "phoneNumber": "+5534999990001" },
   "tenant": { "id": "0192d6a0-0000-7000-8000-000000000001", "name": "Marmitaria da Ana", "timeZone": "America/Sao_Paulo" },
   "employee": { "id": "0192d6a0-0000-7000-8000-000000000301", "displayName": "Ana", "roles": ["OWNER"], "hasPin": true },
-  "permissions": ["orders.view", "orders.create", "orders.edit", "orders.cancel", "orders.delivery-fee.edit", "production.view", "production.update", "payments.register", "payments.reverse", "cash.open", "cash.movement", "closing.view", "closing.finalize", "closing.adjust", "menu.manage", "catalog.manage", "customers.manage", "employees.manage", "devices.manage", "settings.manage", "audit.view", "subscription.view"],
+  "permissions": ["orders.view", "orders.create", "orders.edit", "orders.cancel", "orders.delivery-fee.edit", "orders.accept", "orders.fulfillment.update", "production.view", "production.update", "payments.register", "payments.reverse", "cash.open", "cash.movement", "closing.view", "closing.finalize", "closing.adjust", "menu.manage", "catalog.manage", "customers.manage", "employees.manage", "devices.manage", "settings.manage", "audit.view", "subscription.view"],
   "memberships": [
     { "tenantId": "0192d6a0-0000-7000-8000-000000000001", "tenantName": "Marmitaria da Ana", "employeeId": "0192d6a0-0000-7000-8000-000000000301", "roles": ["OWNER"] }
   ],
@@ -963,6 +971,8 @@ Para gerar um modelo semanal a partir de um dia: `{ "kind": "WEEKLY_TEMPLATE", "
 
 `409` em `POST /customers` com telefone já cadastrado, trazendo o cliente existente em `current`.
 
+Fiado (`pendingAmount`, `pendingOrderCount` e `pending-orders`) só considera pedidos aceitos; pedido do site só é vinculado ao cliente no aceite (ADR-0044 item 20, ADR-0046 item 4).
+
 ---
 
 ## 6.9 Pedidos (RF-004 a RF-007, ADR-0005, 0007, 0020–0023)
@@ -995,6 +1005,20 @@ Para gerar um modelo semanal a partir de um dia: `{ "kind": "WEEKLY_TEMPLATE", "
   "productionStatusChangedAt": "2026-10-27T11:42:00Z",
   "cancellationStatus": "ACTIVE",
   "cancellation": null,
+  "acceptanceStatus": "ACCEPTED",
+  "acceptanceDeadline": null,
+  "acceptedAt": "2026-10-27T11:30:00Z",
+  "acceptedBy": { "id": "0192d6a0-0000-7000-8000-000000000302", "displayName": "Bruno" },
+  "estimatedReadyMinutes": null,
+  "rejection": null,
+  "expiredAt": null,
+  "withdrawnAt": null,
+  "fulfillmentStatus": "PENDING",
+  "fulfillmentStatusChangedAt": "2026-10-27T11:30:00Z",
+  "outForDeliveryAt": null,
+  "deliveredAt": null,
+  "pickedUpAt": null,
+  "isReadyForPickup": false,
   "items": [
     {
       "id": "0192d6a0-0000-7000-8000-000000000601",
@@ -1068,6 +1092,14 @@ Para gerar um modelo semanal a partir de um dia: `{ "kind": "WEEKLY_TEMPLATE", "
 - `cancellation` (quando cancelado): `{ "canceledAt": "...", "canceledBy": {...}, "reason": "Cliente desistiu" }`.
 - `customer` existe quando há cliente cadastrado **ou** nome avulso. Com nome avulso (ex.: `"Mesa 3"` num pedido por quilo), `customer.id` é `null`. Sem nenhum dos dois, `customer` é `null`.
 - `items` e `addons` saem na ordem de inclusão.
+- **Aceite e atendimento (ADR-0046)**, duas dimensões independentes da produção, do financeiro e do cancelamento:
+  - `origin`: `APP` (criado no app) ou `WEB` (página de pedidos, EP-002). Pedido `WEB` tem `createdBy: null`, e os itens montados pelo cliente também (`items[].createdBy: null`, `addons[].createdBy: null`).
+  - `acceptanceStatus`: `AWAITING_ACCEPTANCE`, `ACCEPTED`, `REJECTED`, `EXPIRED`, `WITHDRAWN` (e `AWAITING_PAYMENT`, reservado à Fase 2). **Todo pedido do app nasce `ACCEPTED`**, com `acceptedAt = createdAt` e `acceptedBy = createdBy`. Enquanto não é `ACCEPTED`: `orderNumber`, `productionStatus`, `fulfillmentStatus` e `customer.id` são `null`, e toda escrita responde `409 OrderNotAccepted`. `REJECTED`, `EXPIRED` e `WITHDRAWN` são finais e nunca recebem número.
+  - `acceptanceDeadline`: prazo do aceite (envio + 10 min); `null` em pedido do app. `estimatedReadyMinutes`: 15, 30, 45 ou 60, informado no aceite (opcional).
+  - `rejection` (quando recusado): `{ "reasonCode": "ITEM_UNAVAILABLE", "message": "A costela acabou.", "rejectedAt": "...", "rejectedBy": {...} }`. Na recusa do sistema ao finalizar o fechamento, `reasonCode: "BUSINESS_DAY_CLOSED"`, `message: null` e `rejectedBy: null`. `expiredAt`/`withdrawnAt` preenchidos nos outros estados finais.
+  - `fulfillmentStatus`: só em `DELIVERY`/`PICKUP` aceitos (`null` em `DINE_IN`). Entrega: `PENDING` → `OUT_FOR_DELIVERY` → `DELIVERED`. Retirada: `PENDING` → `PICKED_UP`. `outForDeliveryAt`, `deliveredAt` e `pickedUpAt` são os horários de cada passo; voltar um passo limpa o horário do passo desfeito.
+  - `isReadyForPickup` ("Pronto para retirar") é **derivado**, não gravado: `PICKUP` + `productionStatus: "COMPLETED"` + `fulfillmentStatus: "PENDING"`.
+  - Mudar o atendimento não mexe no financeiro: pedido entregue e não pago continua com saldo e vira fiado no fechamento.
 
 Pedido `PF`: `fulfillmentType: "DINE_IN"`, `tableLabel: "5"`, itens `itemKind: "PF"` com `productId` do prato e `unitPrice` = `pfPrice` do cardápio.
 
@@ -1080,11 +1112,92 @@ Pedido `KILO`: `productionStatus: null`, e `weighings`:
 ]
 ```
 
+### Pedido do site (ADR-0046)
+
+Pedido "pagar na entrega/retirada" enviado pela página, aguardando aceite. A rota pública de envio entra com a página (EP-002 F-204); aqui está o formato que o app do restaurante lê:
+
+```json
+{
+  "id": "0192d6a0-0000-7000-8000-000000000504",
+  "version": 1,
+  "orderNumber": null,
+  "businessDayId": "0192d6a0-0000-7000-8000-000000000401",
+  "businessDate": "2026-10-27",
+  "orderType": "MARMITA",
+  "origin": "WEB",
+  "fulfillmentType": "DELIVERY",
+  "customer": { "id": null, "name": "Carla Souza", "phoneNumber": "+5534988887777" },
+  "deliveryAddress": { "street": "Rua das Palmeiras", "number": "45", "complement": "Casa 2", "neighborhood": "Centro", "reference": null },
+  "tableLabel": null,
+  "tabNumber": null,
+  "notes": null,
+  "deliveryFee": "5.00",
+  "itemsTotal": "40.00",
+  "weighingsTotal": "0.00",
+  "totalAmount": "45.00",
+  "paidAmount": "0.00",
+  "balance": "45.00",
+  "isPaid": false,
+  "productionStatus": null,
+  "productionStatusChangedAt": null,
+  "cancellationStatus": "ACTIVE",
+  "cancellation": null,
+  "acceptanceStatus": "AWAITING_ACCEPTANCE",
+  "acceptanceDeadline": "2026-10-27T12:10:00Z",
+  "acceptedAt": null,
+  "acceptedBy": null,
+  "estimatedReadyMinutes": null,
+  "rejection": null,
+  "expiredAt": null,
+  "withdrawnAt": null,
+  "fulfillmentStatus": null,
+  "fulfillmentStatusChangedAt": null,
+  "outForDeliveryAt": null,
+  "deliveredAt": null,
+  "pickedUpAt": null,
+  "isReadyForPickup": false,
+  "items": [
+    {
+      "id": "0192d6a0-0000-7000-8000-000000000641",
+      "itemKind": "MARMITA",
+      "marmitaSizeId": "0192d6a0-0000-7000-8000-000000000202",
+      "productId": null,
+      "name": "Marmita M",
+      "composition": "Frango grelhado · Arroz, Feijão",
+      "components": [
+        { "productId": "0192d6a0-0000-7000-8000-000000000101", "role": "MAIN_DISH", "name": "Frango grelhado" },
+        { "productId": "0192d6a0-0000-7000-8000-000000000111", "role": "SIDE_DISH", "name": "Arroz" },
+        { "productId": "0192d6a0-0000-7000-8000-000000000112", "role": "SIDE_DISH", "name": "Feijão" }
+      ],
+      "quantity": 2,
+      "unitPrice": "20.00",
+      "lineTotal": "40.00",
+      "requiresPreparation": true,
+      "notes": null,
+      "addons": [],
+      "createdAt": "2026-10-27T12:00:00Z",
+      "createdBy": null
+    }
+  ],
+  "weighings": [],
+  "payments": [],
+  "pendingAlertCount": 0,
+  "createdAt": "2026-10-27T12:00:00Z",
+  "createdBy": null,
+  "updatedAt": "2026-10-27T12:00:00Z"
+}
+```
+
+- Não aparece na lista padrão, no painel da cozinha, no fechamento nem nas pendências do cliente (RN-206.9). O app lê a faixa "Novos do site" com `GET /orders?acceptanceStatus=AWAITING_ACCEPTANCE` e conta o prazo com `acceptanceDeadline`.
+- Depois do aceite é um pedido comum (edita, recebe pagamento manual, pode ser cancelado pelo ADR-0022).
+- `customer.phoneNumber` não é verificado (ADR-0044): o app mostra "telefone não verificado" nos pedidos `WEB`.
+
 ### `GET /orders` — `orders.view`
 
 Filtros:
 - `businessDayId` (padrão: o expediente aberto);
 - `allDays=true` (ignora o expediente; útil para pendências);
+- `acceptanceStatus` (padrão `ACCEPTED`): a lista comum **só traz pedidos aceitos**; `AWAITING_ACCEPTANCE` é a faixa "Novos do site"; `REJECTED`, `EXPIRED` e `WITHDRAWN` listam os que não viraram venda (ADR-0046);
 - `orderType`, `isPaid`, `cancellationStatus`, `productionStatus`, `customerId`;
 - `search` (nome do cliente, mesa ou comanda);
 - `limit`, `cursor`.
@@ -1100,6 +1213,7 @@ Ordenação: `createdAt` decrescente (na prática, pelo id UUID v7, que segue a 
       "orderNumber": 12,
       "businessDate": "2026-10-27",
       "orderType": "MARMITA",
+      "origin": "APP",
       "fulfillmentType": "DELIVERY",
       "customerName": "João Silva",
       "tableLabel": null,
@@ -1110,12 +1224,51 @@ Ordenação: `createdAt` decrescente (na prática, pelo id UUID v7, que segue a 
       "isPaid": false,
       "productionStatus": "IN_PROGRESS",
       "cancellationStatus": "ACTIVE",
+      "acceptanceStatus": "ACCEPTED",
+      "acceptanceDeadline": null,
+      "fulfillmentStatus": "PENDING",
+      "isReadyForPickup": false,
       "itemCount": 3,
       "pendingAlertCount": 1,
       "createdAt": "2026-10-27T11:30:00Z"
     }
   ],
   "nextCursor": "eyJjIjoiMjAyNi0xMC0yN1QxMToyOTowMFoiLCJpIjoiLi4uIn0"
+}
+```
+
+`GET /orders?acceptanceStatus=AWAITING_ACCEPTANCE` (faixa "Novos do site"):
+
+```json
+{
+  "items": [
+    {
+      "id": "0192d6a0-0000-7000-8000-000000000504",
+      "version": 1,
+      "orderNumber": null,
+      "businessDate": "2026-10-27",
+      "orderType": "MARMITA",
+      "origin": "WEB",
+      "fulfillmentType": "DELIVERY",
+      "customerName": "Carla Souza",
+      "tableLabel": null,
+      "tabNumber": null,
+      "totalAmount": "45.00",
+      "paidAmount": "0.00",
+      "balance": "45.00",
+      "isPaid": false,
+      "productionStatus": null,
+      "cancellationStatus": "ACTIVE",
+      "acceptanceStatus": "AWAITING_ACCEPTANCE",
+      "acceptanceDeadline": "2026-10-27T12:10:00Z",
+      "fulfillmentStatus": null,
+      "isReadyForPickup": false,
+      "itemCount": 1,
+      "pendingAlertCount": 0,
+      "createdAt": "2026-10-27T12:00:00Z"
+    }
+  ],
+  "nextCursor": null
 }
 ```
 
@@ -1212,6 +1365,8 @@ Quilo:
 
 Erros: `409 BusinessDayRequired`, `404 MenuNotFound`, `422 ProductUnavailable`, `422 KiloPriceNotConfigured`, `422 ValidationFailed` (pedido vazio, `itemKind` incompatível com `orderType`, endereço faltando em entrega).
 
+O pedido criado no app nasce `acceptanceStatus: "ACCEPTED"`, com número, `acceptedAt = createdAt` e, em entrega ou retirada, `fulfillmentStatus: "PENDING"` (ADR-0046 item 1).
+
 ### `PATCH /orders/{id}` — `orders.edit` [M]
 
 Altera dados do pedido, não itens:
@@ -1229,7 +1384,7 @@ Altera dados do pedido, não itens:
 }
 ```
 
-Campos ausentes não mudam. Em pedido pago, só `notes`, `tableLabel` e `tabNumber` podem mudar. Os demais campos respondem `409 OrderAlreadyPaid`. → `200 Order`.
+Campos ausentes não mudam. Em pedido pago, só `notes`, `tableLabel` e `tabNumber` podem mudar. Os demais campos respondem `409 OrderAlreadyPaid`. Trocar `fulfillmentType` com o atendimento em `OUT_FOR_DELIVERY`, `DELIVERED` ou `PICKED_UP` → `409 OrderAlreadyDispatched`. → `200 Order`.
 
 ### `POST /orders/{id}/items` — `orders.edit` [I][M]
 
@@ -1244,7 +1399,7 @@ Inclui um ou mais itens numa só confirmação (RN-012.3):
 }
 ```
 
-→ `200 Order`. O efeito colateral (RN-007.10): se algum item exigir preparo e o pedido estiver `COMPLETED`, ele volta para `IN_PROGRESS`. Gera `OrderChangeEvent`.
+→ `200 Order`. O efeito colateral (RN-007.10): se algum item exigir preparo e o pedido estiver `COMPLETED`, ele volta para `IN_PROGRESS`. Gera `OrderChangeEvent`. Com o atendimento em `OUT_FOR_DELIVERY`, `DELIVERED` ou `PICKED_UP` → `409 OrderAlreadyDispatched` (ADR-0046 item 19): o atendente cria outro pedido. "Voltou sem entregar" (`PENDING`) libera de novo.
 
 ### `PATCH /orders/{id}/items/{itemId}` — `orders.edit` [M]
 
@@ -1284,7 +1439,126 @@ Remoção lógica, que leva junto os adicionais filhos. → `200 Order`. Não po
 { "reason": "Cliente desistiu do pedido" }
 ```
 
-→ `200 Order`. Erros: `409 OrderHasPayments`, `409 OrderCanceled`.
+→ `200 Order`. Erros: `409 OrderHasPayments`, `409 OrderCanceled`, `409 OrderNotAccepted` (pedido do site não aceito não é cancelado: ele nunca foi venda; o caminho é a recusa).
+
+Em todas as escritas acima (`PATCH /orders/{id}`, itens, pesagens, status, cancelamento), pedido do site ainda não aceito → `409 OrderNotAccepted`.
+
+### `POST /orders/{id}/accept` — `orders.accept` [I][M]
+
+Aceite do pedido do site (ADR-0046 itens 6 a 9). `If-Match` = versão do pedido.
+
+```json
+{ "estimatedReadyMinutes": 30 }
+```
+
+`estimatedReadyMinutes`: `15`, `30`, `45`, `60` ou `null` (mostrado ao cliente).
+
+Na mesma transação: `acceptanceStatus: "ACCEPTED"`, o próximo `orderNumber` da data operacional (o mesmo contador dos pedidos do app, ADR-0039), `productionStatus: "OPEN"`, `fulfillmentStatus: "PENDING"`, `acceptedAt`/`acceptedBy` e o vínculo com o cliente pelo telefone (ADR-0044 item 20: cliente existente sem alterar o cadastro; sem cadastro, um novo só com nome e telefone). Para a cozinha, o pedido nasce aqui (`OrderCreated`).
+
+→ `200 Order` + `ETag: "2"`:
+
+```json
+{
+  "id": "0192d6a0-0000-7000-8000-000000000504",
+  "version": 2,
+  "orderNumber": 15,
+  "origin": "WEB",
+  "customer": { "id": "0192d6a0-0000-7000-8000-000000000802", "name": "Carla Souza", "phoneNumber": "+5534988887777" },
+  "productionStatus": "OPEN",
+  "productionStatusChangedAt": "2026-10-27T12:03:00Z",
+  "acceptanceStatus": "ACCEPTED",
+  "acceptanceDeadline": "2026-10-27T12:10:00Z",
+  "acceptedAt": "2026-10-27T12:03:00Z",
+  "acceptedBy": { "id": "0192d6a0-0000-7000-8000-000000000302", "displayName": "Bruno" },
+  "estimatedReadyMinutes": 30,
+  "fulfillmentStatus": "PENDING",
+  "fulfillmentStatusChangedAt": "2026-10-27T12:03:00Z",
+  "...": "demais campos do Order"
+}
+```
+
+Erros:
+- `409 VersionConflict` com `current`: outra pessoa aceitou ou recusou antes ("Já aceito por Bruno", item 9). Dois aceites simultâneos com a mesma versão resultam em **um** aceite e **um** número;
+- `409 WebOrderExpired`: o prazo venceu (mesmo que o job ainda não tenha expirado o pedido);
+- `409 OrderNotAwaitingAcceptance` (extensão `acceptanceStatus`): já aceito, recusado ou desistência;
+- `409 BusinessDayRequired`: o expediente do pedido não está aberto;
+- `422 ValidationFailed` (`estimatedReadyMinutes` fora da lista).
+
+### `POST /orders/{id}/reject` — `orders.accept` [M]
+
+Recusa com motivo da lista (ADR-0046 item 12). O app avisa: "o cliente verá esta mensagem".
+
+```json
+{ "reasonCode": "ITEM_UNAVAILABLE", "message": "A costela acabou." }
+```
+
+| `reasonCode` | O que o cliente vê |
+|---|---|
+| `ITEM_UNAVAILABLE` | "Um item do seu pedido acabou." + `message` |
+| `OUT_OF_DELIVERY_AREA` | "Não entregamos nesse endereço." + `message` |
+| `TOO_BUSY` | "Estamos com muitos pedidos agora." + `message` |
+| `CLOSING_SOON` | "Estamos fechando." + `message` |
+| `SUSPECTED_PRANK` | "O restaurante não pôde aceitar seu pedido." (`message` **não** é mostrada) |
+| `OTHER` | `message` (obrigatória) |
+
+`message`: opcional, 5 a 200 caracteres; obrigatória em `OTHER`. `BUSINESS_DAY_CLOSED` é só do sistema (finalização do fechamento) e responde `422` aqui.
+
+→ `200 Order` com `acceptanceStatus: "REJECTED"`, `orderNumber: null` e:
+
+```json
+{
+  "rejection": {
+    "reasonCode": "ITEM_UNAVAILABLE",
+    "message": "A costela acabou.",
+    "rejectedAt": "2026-10-27T12:02:00Z",
+    "rejectedBy": { "id": "0192d6a0-0000-7000-8000-000000000303", "displayName": "Carla" }
+  }
+}
+```
+
+Erros: os mesmos do aceite, e `422 ValidationFailed` (`message` faltando em `OTHER` ou fora de 5–200; `reasonCode` `BUSINESS_DAY_CLOSED`).
+
+**Prazo e expiração:** o pedido aguarda **10 minutos** a partir do envio (`acceptanceDeadline`). Um job a cada 30 s passa os vencidos para `EXPIRED` (`expiredAt`, auditoria `SYSTEM`). Aceite e expiração disputam pela `version`: só um grava. **Desistência:** enquanto aguarda aceite, o cliente pode desistir pela página de acompanhamento (`WITHDRAWN`, `withdrawnAt`), rota da página (EP-002 F-208). **Fechamento:** ao finalizar, os ainda aguardando viram `REJECTED` com `BUSINESS_DAY_CLOSED` (§6.11).
+
+### `PATCH /orders/{id}/fulfillment` — `orders.fulfillment.update` [M]
+
+Atendimento de entrega e retirada (ADR-0046 item 18), em pedidos do site **e** do app (uso opcional: sem marcação, o pedido fica `PENDING` e nada é bloqueado).
+
+```json
+{ "fulfillmentStatus": "OUT_FOR_DELIVERY", "completeProduction": false }
+```
+
+| De | Para | Regra |
+|---|---|---|
+| `PENDING` | `OUT_FOR_DELIVERY` | só `DELIVERY`; exige `productionStatus: "COMPLETED"` |
+| `OUT_FOR_DELIVERY` | `DELIVERED` | — |
+| `OUT_FOR_DELIVERY` | `PENDING` | "Voltou sem entregar" |
+| `DELIVERED` | `OUT_FOR_DELIVERY` | correção de toque errado |
+| `PENDING` | `PICKED_UP` | só `PICKUP`; exige `productionStatus: "COMPLETED"` |
+| `PICKED_UP` | `PENDING` | correção de toque errado |
+
+- **"Concluir e marcar"**: `completeProduction: true` conclui a produção e marca "Saiu"/"Retirado" na mesma transação (uma versão só). Exige também `production.update` (`403 PermissionDenied` com `permission: "production.update"`). Sem ele, marcar "Saiu"/"Retirado" com a produção aberta → `409 ProductionNotCompleted`.
+- Independente do financeiro: vale em pedido pago ou não; entregue e não pago continua com saldo.
+- O mesmo status → `200` sem mudança de versão.
+
+→ `200 Order`:
+
+```json
+{
+  "id": "0192d6a0-0000-7000-8000-000000000501",
+  "version": 5,
+  "productionStatus": "COMPLETED",
+  "fulfillmentStatus": "OUT_FOR_DELIVERY",
+  "fulfillmentStatusChangedAt": "2026-10-27T12:15:00Z",
+  "outForDeliveryAt": "2026-10-27T12:15:00Z",
+  "deliveredAt": null,
+  "pickedUpAt": null,
+  "isReadyForPickup": false,
+  "...": "demais campos do Order"
+}
+```
+
+Erros: `409 OrderNotAccepted`, `409 OrderCanceled`, `409 ProductionNotCompleted`, `422 ValidationFailed` (transição fora da tabela, ou pedido `DINE_IN`), `403 PermissionDenied`.
 
 ### `GET /orders/{id}/history` — `orders.view`
 
@@ -1312,7 +1586,7 @@ Remoção lógica, que leva junto os adicionais filhos. → `200 Order`. Não po
 }
 ```
 
-Do mais recente para o mais antigo. Inclui itens removidos, pagamentos, estornos, status e cancelamento.
+Do mais recente para o mais antigo. Inclui itens removidos, pagamentos, estornos, status e cancelamento. Em pedido do site: `WebOrderSubmitted` e `WebOrderWithdrawn` (`origin: "WEB"`, `actor: null`), `OrderAccepted`, `OrderRejected`, `WebOrderExpired` e `WebOrderAutoRejected` (`origin: "SYSTEM"`), e `OrderFulfillmentChanged` (ADR-0046 item 24).
 
 ### Alertas (RF-008)
 
@@ -1349,7 +1623,7 @@ O `summary` é montado no servidor a partir de `details`: `+1 Coca-Cola 350ml`, 
 
 ### Produção — `GET /production/orders` — `production.view`
 
-Painel da cozinha (RN-007.4/7.5): só `MARMITA` e `PF` ativos do expediente aberto, agrupados e do mais antigo para o mais novo. Sem expediente aberto → `409 BusinessDayRequired`.
+Painel da cozinha (RN-007.4/7.5): só `MARMITA` e `PF` **aceitos** e ativos do expediente aberto, agrupados e do mais antigo para o mais novo **pelo aceite** (`acceptedAt`: o pedido do site nasce para a cozinha no aceite; no app, `acceptedAt = createdAt`). Sem expediente aberto → `409 BusinessDayRequired`.
 
 ```json
 {
@@ -1361,11 +1635,14 @@ Painel da cozinha (RN-007.4/7.5): só `MARMITA` e `PF` ativos do expediente aber
         "version": 1,
         "orderNumber": 13,
         "orderType": "PF",
+        "origin": "APP",
         "fulfillmentType": "DINE_IN",
+        "fulfillmentStatus": null,
         "label": "Mesa 5",
         "notes": null,
         "isPaid": false,
         "createdAt": "2026-10-27T11:50:00Z",
+        "acceptedAt": "2026-10-27T11:50:00Z",
         "items": [
           { "id": "0192d6a0-0000-7000-8000-000000000621", "name": "PF Frango grelhado", "composition": null, "quantity": 2, "notes": "Um sem salada", "requiresPreparation": true, "addons": [] },
           { "id": "0192d6a0-0000-7000-8000-000000000622", "name": "Coca-Cola 350ml", "composition": null, "quantity": 2, "notes": null, "requiresPreparation": false, "addons": [] }
@@ -1435,6 +1712,7 @@ Pagamento de pedido de outro expediente (fiado, RF-011) usa a mesma rota. O paga
 Erros:
 - `409 BusinessDayRequired`;
 - `409 OrderCanceled`;
+- `409 OrderNotAccepted` (pedido do site não aceito não recebe pagamento manual, ADR-0046 item 4);
 - `422 PaymentExceedsBalance` (extensão `balance`);
 - `422 PaymentMethodDisabled`;
 - `422 ValidationFailed`, para `cashReceived < amount` ou `cashReceived` fora de `CASH`.
@@ -1518,6 +1796,8 @@ O fechamento **parcial**, calculado na hora (RN-010.1). Padrão: o expediente ab
   "totalPending": "220.00",
   "canceled": { "count": 1, "total": "25.00" },
   "reversed": { "count": 0, "total": "0.00" },
+  "webOrders": { "awaitingAcceptanceCount": 2, "autoRejectedCount": 0, "notAcceptedCount": 1 },
+  "unmarkedDeliveryCount": 4,
   "byOrderType": [
     { "orderType": "MARMITA", "count": 41, "sold": "1250.00", "received": "1100.00", "pending": "150.00", "reversed": "0.00" },
     { "orderType": "PF", "count": 30, "sold": "870.00", "received": "800.00", "pending": "70.00", "reversed": "0.00" },
@@ -1546,6 +1826,9 @@ O fechamento **parcial**, calculado na hora (RN-010.1). Padrão: o expediente ab
 - Sem `businessDayId` e sem expediente aberto → `404 NoOpenBusinessDay`.
 - `closedAt` e `closedBy` existem nos dois formatos e só são preenchidos no fechamento finalizado.
 - `byOrderType` e `byPaymentMethod` sempre trazem as três chaves, mesmo zeradas.
+- **Só pedidos aceitos** entram em `orderCount`, vendido, pendente, cancelados e `byOrderType` (ADR-0046 item 4, RF-210). Pedido do site aceito entra como qualquer pedido `MARMITA`.
+- `webOrders` é informativo, fora do vendido (ADR-0046 item 13, RF-210.2): `awaitingAcceptanceCount` = pedidos do site do expediente ainda aguardando aceite, que a finalização vai recusar ("2 pedidos do site aguardando aceite serão recusados"); `notAcceptedCount` = recusados, expirados e desistências do expediente. No fechamento finalizado, `awaitingAcceptanceCount` é 0, `autoRejectedCount` diz quantos a finalização recusou, e eles já estão somados em `notAcceptedCount`.
+- `unmarkedDeliveryCount`: entregas aceitas e ativas sem `fulfillmentStatus: "DELIVERED"` ("N entregas sem marcação de entregue", ADR-0046 item 20). Só informa: a marcação é opcional.
 - `adjustments`: no resumo parcial, os ajustes **registrados** neste expediente; no `DailyClosing`, os que **corrigem** aquele fechamento.
 - Toda movimentação de caixa sobe a `version` do expediente (é ela que dá o `409` da finalização). Pagamentos não sobem: a finalização trava o expediente e calcula com o que já foi confirmado.
 
@@ -1560,6 +1843,8 @@ O fechamento **parcial**, calculado na hora (RN-010.1). Padrão: o expediente ab
 ```
 
 → `201`, `Location: /api/v1/closing/{id}`, corpo `DailyClosing`: o mesmo formato do summary, com `isFinal: true`, `dailyClosingId`, `cash.countedCash: "740.00"`, `cash.cashDifference: "-10.00"`, `cash.justification`, `closedAt` e `closedBy`. O expediente passa a `CLOSED`.
+
+Na mesma transação, os pedidos do site do expediente ainda `AWAITING_ACCEPTANCE` passam a `REJECTED` com `reasonCode: "BUSINESS_DAY_CLOSED"` (sem funcionário; auditoria `SYSTEM`; evento `OrderRejected`), e `webOrders.autoRejectedCount` diz quantos. O fechamento **não** fica bloqueado por eles (ADR-0046 item 13).
 
 Erros: `422 JustificationRequired`, `409 ClosingAlreadyFinalized`, `409 VersionConflict` (uma movimentação aconteceu enquanto a tela estava aberta, então o app precisa recarregar o resumo e confirmar de novo).
 
@@ -1737,7 +2022,11 @@ Uma repetição de `POST /orders` com a mesma chave e o mesmo corpo devolve **a 
 
 | `eventType` | Grupo | `data` |
 |---|---|---|
-| `OrderCreated` | orders, production (exceto KILO) | `orderNumber`, `orderType`, `label` |
+| `OrderCreated` | orders, production (exceto KILO) | `orderNumber`, `orderType`, `label`. Pedido do site: emitido **no aceite**, com `label: null` (evento sem dado pessoal, ADR-0046 item 23) |
+| `OrderAwaitingAcceptance` | orders | `fulfillmentType`, `marmitaCount`, `totalAmount`, `acceptanceDeadline` (pedido do site chegou; sem nome, telefone nem endereço) |
+| `OrderAccepted` | orders | `orderNumber`, `acceptedBy` (`{ "id", "displayName" }`; `null` no aceite do sistema, Fase 2) |
+| `OrderRejected` | orders | `acceptanceStatus` (`REJECTED`/`EXPIRED`/`WITHDRAWN`), `reasonCode` (`null` em `EXPIRED`/`WITHDRAWN`) |
+| `OrderFulfillmentChanged` | orders, production | `orderNumber`, `from`, `to` |
 | `OrderUpdated` | orders, production | `orderNumber`, `orderType`, `productionStatus`, `isPaid` |
 | `OrderStatusChanged` | orders, production | `orderNumber`, `from`, `to` |
 | `OrderCanceled` | orders, production | `orderNumber` |
@@ -1823,4 +2112,5 @@ O `ETag` da resposta de pagamento é a **nova versão do pedido**, para o app us
 | `GET /closing/summary`, `/history`, `/finalize`, `/cash-movements`, `/{id}`, `/{id}/adjustments` | iguais; mais `/closing/monthly` |
 | `GET /sync/changes`, `GET /operations/{id}` | iguais; o id da operação é a `Idempotency-Key` |
 | — | novos (ADR-0053, web): `GET /auth/shared-device/employees`, `DELETE /auth/shared-device` |
+| — | novos (EP-002, ADR-0046): `POST /orders/{id}/accept`, `POST /orders/{id}/reject`, `PATCH /orders/{id}/fulfillment`; filtro `acceptanceStatus` em `GET /orders` |
 | — | novos: `/business-days`, `/customers`, `/marmita-sizes`, `/production/orders`, `/devices/shared`, `/subscription`, `/roles`, `/audit-logs`, `/admin/*`, `/webhooks/asaas` |

@@ -10,6 +10,12 @@ public static class Permissions
         public const string Edit = "orders.edit";
         public const string Cancel = "orders.cancel";
         public const string EditDeliveryFee = "orders.delivery-fee.edit";
+
+        /// Aceitar ou recusar pedido do site (ADR-0046 item 22).
+        public const string Accept = "orders.accept";
+
+        /// Saiu para entrega, entregue, retirado (ADR-0046 item 22).
+        public const string UpdateFulfillment = "orders.fulfillment.update";
     }
 
     public static class Production
@@ -48,7 +54,7 @@ public static class Permissions
 
     public static IReadOnlyList<string> All { get; } =
     [
-        Orders.View, Orders.Create, Orders.Edit, Orders.Cancel, Orders.EditDeliveryFee,
+        Orders.View, Orders.Create, Orders.Edit, Orders.Cancel, Orders.EditDeliveryFee, Orders.Accept, Orders.UpdateFulfillment,
         Production.View, Production.Update,
         Payments.Register, Payments.Reverse,
         Cash.Open, Cash.Movement,
@@ -79,10 +85,12 @@ public static class RolePermissions
         [Role.Attendant] = new HashSet<string>
         {
             Permissions.Orders.View, Permissions.Orders.Create, Permissions.Orders.Edit, Permissions.CustomersManage,
+            Permissions.Orders.Accept, Permissions.Orders.UpdateFulfillment,
         },
         [Role.Kitchen] = new HashSet<string>
         {
             Permissions.Orders.View, Permissions.Production.View, Permissions.Production.Update,
+            Permissions.Orders.UpdateFulfillment,
         },
         [Role.Cashier] = new HashSet<string>
         {
@@ -90,6 +98,7 @@ public static class RolePermissions
             Permissions.Cash.Open, Permissions.Cash.Movement,
             Permissions.Closing.View, Permissions.Closing.Finalize,
             Permissions.CustomersManage,
+            Permissions.Orders.Accept, Permissions.Orders.UpdateFulfillment,
         },
     };
 

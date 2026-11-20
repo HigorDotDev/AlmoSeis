@@ -76,7 +76,10 @@ public static class RealtimeGroups
         "OrderCreated" => envelope["data"]?["orderType"]?.GetValue<string>() == "KILO"
             ? [Orders(tenantId)]
             : [Orders(tenantId), Production(tenantId)],
-        "OrderUpdated" or "OrderStatusChanged" or "OrderCanceled" or "OrderAlertCreated" => [Orders(tenantId), Production(tenantId)],
+        "OrderUpdated" or "OrderStatusChanged" or "OrderCanceled" or "OrderAlertCreated" or "OrderFulfillmentChanged"
+            => [Orders(tenantId), Production(tenantId)],
+        // Pedido do site antes do aceite: só quem vê pedidos (ADR-0046 item 23). A cozinha recebe o OrderCreated do aceite.
+        "OrderAwaitingAcceptance" or "OrderAccepted" or "OrderRejected" => [Orders(tenantId)],
         "OrderPaymentRegistered" => [Orders(tenantId), Closing(tenantId)],
         "OrderPaymentConfirmed" or "OrderPaymentReversed" => [Orders(tenantId), Production(tenantId), Closing(tenantId)],
         "MenuUpdated" or "CatalogUpdated" => [Catalog(tenantId)],

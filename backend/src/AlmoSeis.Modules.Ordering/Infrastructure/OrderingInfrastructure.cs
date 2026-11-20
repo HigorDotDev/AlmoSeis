@@ -44,6 +44,7 @@ internal sealed class OrderingModelConfiguration : IModuleModelConfiguration
                 .HasConversion(
                     v => v == null ? null : JsonSerializer.Serialize(v, AddressJson),
                     v => v == null ? null : JsonSerializer.Deserialize<DeliveryAddressDto>(v, AddressJson));
+            b.Property(x => x.RejectionMessage).HasMaxLength(200);
             b.HasMany(x => x.Items).WithOne().HasForeignKey(i => i.OrderId);
             b.HasMany(x => x.Weighings).WithOne().HasForeignKey(w => w.OrderId);
             b.HasMany(x => x.ChangeEvents).WithOne().HasForeignKey(e => e.OrderId);
@@ -211,18 +212,72 @@ internal sealed class OrderPaymentReversedMapper(ITenantContext tenant) : Integr
     }
 }
 
+/// Pedido do site aguardando aceite (ADR-0046 item 23): sem nome, telefone nem endereço.
+internal sealed class OrderAwaitingAcceptanceMapper(ITenantContext tenant) : IntegrationEventMapper<OrderAwaitingAcceptance>
+{
+    protected override IEnumerable<IntegrationEnvelope> Map(OrderAwaitingAcceptance e)
+    {
+        yield return new IntegrationEnvelope("OrderAwaitingAcceptance", "ORDER", e.OrderId, tenant.EmployeeId, new
+        {
+            fulfillmentType = UpperSnakeEnumConverter<FulfillmentType>.ToText(e.FulfillmentType),
+            marmitaCount = e.MarmitaCount,
+            totalAmount = e.TotalAmount.ToString(),
+            acceptanceDeadline = e.AcceptanceDeadline,
+        });
+    }
+}
+
+internal sealed class OrderAcceptedMapper(ITenantContext tenant) : IntegrationEventMapper<OrderAccepted>
+{
+    protected override IEnumerable<IntegrationEnvelope> Map(OrderAccepted e)
+    {
+        yield return new IntegrationEnvelope("OrderAccepted", "ORDER", e.OrderId, tenant.EmployeeId, new
+        {
+            orderNumber = e.OrderNumber,
+            acceptedBy = e.AcceptedBy is { } id ? new { id, displayName = e.AcceptedByName ?? string.Empty } : null,
+        });
+    }
+}
+
+internal sealed class OrderRejectedMapper(ITenantContext tenant) : IntegrationEventMapper<OrderRejected>
+{
+    protected override IEnumerable<IntegrationEnvelope> Map(OrderRejected e)
+    {
+        yield return new IntegrationEnvelope("OrderRejected", "ORDER", e.OrderId, tenant.EmployeeId, new
+        {
+            acceptanceStatus = UpperSnakeEnumConverter<AcceptanceStatus>.ToText(e.AcceptanceStatus),
+            reasonCode = e.ReasonCode is { } r ? UpperSnakeEnumConverter<RejectionReason>.ToText(r) : null,
+        });
+    }
+}
+
+internal sealed class OrderFulfillmentChangedMapper(ITenantContext tenant) : IntegrationEventMapper<OrderFulfillmentChanged>
+{
+    protected override IEnumerable<IntegrationEnvelope> Map(OrderFulfillmentChanged e)
+    {
+        yield return new IntegrationEnvelope("OrderFulfillmentChanged", "ORDER", e.OrderId, tenant.EmployeeId, new
+        {
+            orderNumber = e.OrderNumber,
+            from = UpperSnakeEnumConverter<FulfillmentStatus>.ToText(e.From),
+            to = UpperSnakeEnumConverter<FulfillmentStatus>.ToText(e.To),
+        });
+    }
+}
+
 internal sealed class OrderPaymentPort(AppDbContext db, TimeProvider time) : IOrderPaymentPort
 {
     public async Task<OrderPaymentSnapshot> LoadForPaymentAsync(Guid orderId, int expectedVersion, CancellationToken cancellationToken)
     {
         var order = await LoadAsync(orderId, cancellationToken);
         order.EnsureVersion(expectedVersion);
+        // Pedido não aceito não recebe pagamento manual (ADR-0046 item 4).
+        order.EnsureAccepted();
         if (order.CancellationStatus == CancellationStatus.Canceled)
         {
             throw new BusinessException(ErrorCodes.OrderCanceled);
         }
 
-        return new OrderPaymentSnapshot(order.Id, order.Version, order.OrderNumber, order.TotalAmount, order.PaidAmount, order.Balance, IsCanceled: false);
+        return new OrderPaymentSnapshot(order.Id, order.Version, order.OrderNumber!.Value, order.TotalAmount, order.PaidAmount, order.Balance, IsCanceled: false);
     }
 
     public async Task<OrderBalanceDto> ApplyPaymentAsync(Guid orderId, Money amount, CancellationToken cancellationToken)

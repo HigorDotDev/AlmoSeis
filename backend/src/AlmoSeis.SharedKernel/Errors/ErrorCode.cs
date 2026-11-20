@@ -46,6 +46,11 @@ public static class ErrorCodes
     public static readonly ErrorCode OrderAlreadyPaid = new("OrderAlreadyPaid", 409, "O pedido já está quitado.");
     public static readonly ErrorCode OrderCanceled = new("OrderCanceled", 409, "O pedido está cancelado.");
     public static readonly ErrorCode OrderHasPayments = new("OrderHasPayments", 409, "Estorne os pagamentos antes de cancelar.");
+    public static readonly ErrorCode OrderNotAccepted = new("OrderNotAccepted", 409, "O pedido ainda não foi aceito.");
+    public static readonly ErrorCode OrderNotAwaitingAcceptance = new("OrderNotAwaitingAcceptance", 409, "O pedido não está mais aguardando aceite.");
+    public static readonly ErrorCode WebOrderExpired = new("WebOrderExpired", 409, "O prazo para aceitar este pedido acabou.");
+    public static readonly ErrorCode OrderAlreadyDispatched = new("OrderAlreadyDispatched", 409, "O pedido já saiu ou foi entregue.");
+    public static readonly ErrorCode ProductionNotCompleted = new("ProductionNotCompleted", 409, "A produção do pedido ainda não foi concluída.");
     public static readonly ErrorCode PaymentAlreadyReversed = new("PaymentAlreadyReversed", 409, "Este pagamento já foi estornado.");
     public static readonly ErrorCode ClosingAlreadyFinalized = new("ClosingAlreadyFinalized", 409, "O expediente já foi fechado.");
     public static readonly ErrorCode EmailAlreadyRegistered = new("EmailAlreadyRegistered", 409, "Este e-mail já está cadastrado.");
@@ -74,7 +79,8 @@ public static class ErrorCodes
         MalformedRequest, Unauthenticated, InvalidCredentials, InvalidRefreshToken, InvalidDeviceSecret,
         SubscriptionInactive, PermissionDenied, NoActiveMembership, OriginNotAllowed, NotFound, MenuNotFound, NoOpenBusinessDay,
         VersionConflict, OperationInProgress, BusinessDayRequired, BusinessDayAlreadyOpen, BusinessDayClosedToday,
-        OrderAlreadyPaid, OrderCanceled, OrderHasPayments, PaymentAlreadyReversed, ClosingAlreadyFinalized,
+        OrderAlreadyPaid, OrderCanceled, OrderHasPayments, OrderNotAccepted, OrderNotAwaitingAcceptance, WebOrderExpired,
+        OrderAlreadyDispatched, ProductionNotCompleted, PaymentAlreadyReversed, ClosingAlreadyFinalized,
         EmailAlreadyRegistered, PhoneAlreadyRegistered, TrialAlreadyClaimed, LastOwner, InvitationNotPending,
         MenuAlreadyExists,
         SyncCursorExpired, ValidationFailed, IdempotencyKeyReused, PaymentExceedsBalance, TotalBelowPaidAmount,

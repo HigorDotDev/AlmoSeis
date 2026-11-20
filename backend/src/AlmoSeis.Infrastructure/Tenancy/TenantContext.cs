@@ -27,6 +27,9 @@ public interface ITenantContext
     /// Autocadastro, login, refresh e aceite de convite: o próprio fluxo define o tenant antes de gravar.
     void InitializeForTenant(Guid tenantId, Guid userId);
 
+    /// Jobs do sistema e o canal web (ADR-0046): só o tenant, sem usuário nem funcionário. A auditoria sai sem ator.
+    void InitializeForSystem(Guid tenantId);
+
     /// Única mutação permitida depois de inicializado: POST /auth/switch-tenant.
     void SwitchTenant(Guid tenantId, Guid employeeId);
 }
@@ -69,6 +72,12 @@ public sealed class TenantContext : ITenantContext
         }
 
         (TenantId, UserId, IsInitialized) = (tenantId, userId, true);
+    }
+
+    public void InitializeForSystem(Guid tenantId)
+    {
+        EnsureNotInitialized();
+        (TenantId, IsInitialized) = (tenantId, true);
     }
 
     public void SwitchTenant(Guid tenantId, Guid employeeId)

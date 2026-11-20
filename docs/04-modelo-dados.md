@@ -285,11 +285,11 @@ Aparelho registrado como compartilhado (ADR-0027).
 |---|---|---|
 | BusinessDayId | Guid | expediente aberto na criação (ADR-0019); imutável |
 | BusinessDate | DateOnly | cópia de `BusinessDay.BusinessDate` = data da venda (ADR-0015) |
-| OrderNumber | int | sequencial por **data operacional** (ADR-0023, ADR-0039) |
+| OrderNumber | int? | sequencial por **data operacional** (ADR-0023, ADR-0039), atribuído **no aceite**: nulo enquanto `AcceptanceStatus ≠ ACCEPTED`; recusados, expirados e desistências nunca recebem (ADR-0046) |
 | OrderType | enum `MARMITA`, `PF`, `KILO` | imutável |
-| Origin | enum `APP` (futuro: `WHATSAPP`) | |
+| Origin | enum `APP`, `WEB` (futuro: `WHATSAPP`) | `WEB` = página de pedidos (EP-002, ADR-0044) |
 | FulfillmentType | enum `DELIVERY`, `PICKUP`, `DINE_IN` | `MARMITA` → `DELIVERY`/`PICKUP`; `PF`/`KILO` → `DINE_IN` |
-| CustomerId | Guid? | → Customer |
+| CustomerId | Guid? | → Customer. Pedido `WEB`: vinculado só no aceite, pelo telefone (ADR-0044 item 20) |
 | CustomerName | string(80)? | snapshot; obrigatório em `MARMITA` |
 | CustomerPhone | string(16)? | snapshot |
 | DeliveryAddress | json? | snapshot do endereço; obrigatório se `DELIVERY` |
@@ -302,11 +302,23 @@ Aparelho registrado como compartilhado (ADR-0027).
 | TotalAmount | Money | `ItemsTotal + WeighingsTotal + DeliveryFee` |
 | PaidAmount | Money | Σ `Payment.Amount` com `Status = CONFIRMED` |
 | IsPaid | bool | `TotalAmount > 0 && PaidAmount == TotalAmount` (RN-009.3) |
-| ProductionStatus | enum `OPEN`, `IN_PROGRESS`, `COMPLETED`? | **nulo** para `KILO` (RN-006.7) |
+| ProductionStatus | enum `OPEN`, `IN_PROGRESS`, `COMPLETED`? | **nulo** para `KILO` (RN-006.7) e enquanto o pedido não é aceito (ADR-0046) |
 | ProductionStatusChangedAt | DateTimeOffset? | |
 | CancellationStatus | enum `ACTIVE`, `CANCELED` | ADR-0022 |
 | CanceledAt, CanceledByEmployeeId, CancellationReason | ?, ?, string(300)? | |
-| CreatedByEmployeeId, CreatedAt, UpdatedAt | | |
+| AcceptanceStatus | enum `AWAITING_PAYMENT`, `AWAITING_ACCEPTANCE`, `ACCEPTED`, `REJECTED`, `EXPIRED`, `WITHDRAWN` | entrada do pedido (ADR-0046). Pedido do app nasce `ACCEPTED`; `REJECTED`/`EXPIRED`/`WITHDRAWN` são finais. `AWAITING_PAYMENT` só na Fase 2 (ADR-0050) |
+| AcceptanceDeadline | DateTimeOffset? | envio + 10 min (pedido `WEB`); nulo no app |
+| AcceptedAt, AcceptedByEmployeeId | ?, Guid? | no app = `CreatedAt`/`CreatedByEmployeeId`; funcionário nulo só no aceite do sistema (Fase 2) |
+| EstimatedReadyMinutes | int? | 15, 30, 45 ou 60, informado no aceite |
+| RejectionReasonCode | enum `ITEM_UNAVAILABLE`, `OUT_OF_DELIVERY_AREA`, `TOO_BUSY`, `CLOSING_SOON`, `SUSPECTED_PRANK`, `OTHER`, `BUSINESS_DAY_CLOSED`? | só em `REJECTED`. `BUSINESS_DAY_CLOSED` = recusa do sistema na finalização do fechamento, sem funcionário |
+| RejectionMessage | string(200)? | 5 a 200; obrigatória em `OTHER`; mostrada ao cliente (exceto `SUSPECTED_PRANK`) |
+| RejectedAt, RejectedByEmployeeId | ?, Guid? | |
+| ExpiredAt, WithdrawnAt | ?, ? | `EXPIRED` (job de expiração) e `WITHDRAWN` (cliente desistiu) |
+| FulfillmentStatus | enum `PENDING`, `OUT_FOR_DELIVERY`, `DELIVERED`, `PICKED_UP`? | atendimento (ADR-0046): só em `DELIVERY`/`PICKUP` aceitos; nulo em `DINE_IN`. "Pronto para retirar" é derivado: `PICKUP` + `COMPLETED` + `PENDING` |
+| FulfillmentStatusChangedAt | DateTimeOffset? | |
+| OutForDeliveryAt, DeliveredAt, PickedUpAt | ?, ?, ? | horário de cada passo; voltar um passo limpa o do passo desfeito |
+| CreatedByEmployeeId | Guid? | nulo só em pedido `WEB` |
+| CreatedAt, UpdatedAt | | |
 
 `ItemsTotal`, `WeighingsTotal`, `TotalAmount`, `PaidAmount` e `IsPaid` são **valores derivados e persistidos**. São recalculados pelo agregado na mesma transação de qualquer mudança em itens, pesagens, taxa ou pagamentos, e nunca recebidos do cliente.
 
@@ -318,6 +330,9 @@ Aparelho registrado como compartilhado (ADR-0027).
 5. Incluir item com `RequiresPreparation` em pedido `COMPLETED` → `ProductionStatus = IN_PROGRESS` (RN-007.10).
 6. `WeighingEntry` só em `KILO`. Itens `MARMITA` só em pedido `MARMITA`, itens `PF` só em pedido `PF`. Bebidas e adicionais avulsos em qualquer modalidade (RN-002.5).
 7. Taxa de entrega diferente da padrão exige `orders.delivery-fee.edit`.
+8. **Pedido não aceito** (`AcceptanceStatus ≠ ACCEPTED`, ADR-0046 item 4): sem número, sem produção, sem cliente vinculado, sem pagamento; não pode ser editado nem cancelado (`409 OrderNotAccepted`) e não gera `OrderChangeEvent`. **Não entra no fechamento** (vendido, pendente, quantidade), na cozinha nem nas pendências do cliente: toda consulta desses filtra `AcceptanceStatus = ACCEPTED`. Pertence ao expediente aberto no envio.
+9. **Aceite** (`orders.accept`): na mesma transação, `OrderNumber` do `BusinessDateCounter`, `ProductionStatus = OPEN`, `FulfillmentStatus = PENDING`, vínculo com `Customer`. Depois do prazo → `409 WebOrderExpired`; aceite e expiração disputam pela `Version`. Ao **finalizar o fechamento**, os `AWAITING_ACCEPTANCE` do expediente viram `REJECTED` (`BUSINESS_DAY_CLOSED`) na mesma transação.
+10. **Atendimento** (`orders.fulfillment.update`): `PENDING → OUT_FOR_DELIVERY → DELIVERED` (entrega), `PENDING → PICKED_UP` (retirada), "voltou sem entregar" (`OUT_FOR_DELIVERY → PENDING`) e correções de um passo. Sair ou ser retirado exige `ProductionStatus = COMPLETED` ("Concluir e marcar" conclui na mesma transação, exigindo também `production.update`). Independente do financeiro. Com o pedido fora (`OUT_FOR_DELIVERY`, `DELIVERED`, `PICKED_UP`), incluir item → `409 OrderAlreadyDispatched` (ADR-0046 item 19). Vale também para entrega e retirada criadas no app (uso opcional).
 
 ### OrderItem [T] — filho de Order
 
@@ -336,7 +351,8 @@ Aparelho registrado como compartilhado (ADR-0027).
 | RequiresPreparation | bool | snapshot de `Product.RequiresPreparation` (MARMITA/PF = `true`) |
 | Notes | string(200)? | |
 | Status | enum `ACTIVE`, `REMOVED` | remoção é lógica; totais ignoram `REMOVED` |
-| CreatedByEmployeeId, CreatedAt, RemovedByEmployeeId, RemovedAt | | |
+| CreatedByEmployeeId | Guid? | nulo só nos itens montados pelo cliente na página (pedido `WEB`) |
+| CreatedAt, RemovedByEmployeeId, RemovedAt | | |
 
 **Regras:**
 - Adicionais só podem ser filhos de `MARMITA`/`PF`. Filho de filho não existe.
@@ -442,7 +458,7 @@ PK `(TenantId, BusinessDate)`, `LastOrderNumber int`. Fonte do `OrderNumber` (`U
 |---|---|---|
 | BusinessDayId | Guid | **único** |
 | BusinessDate | DateOnly | |
-| OrderCount | int | pedidos `ACTIVE` do expediente |
+| OrderCount | int | pedidos `ACTIVE` do expediente. Em todo o fechamento, "pedido" = pedido **aceito** (`AcceptanceStatus = ACCEPTED`, ADR-0046) |
 | TotalSold | Money | Σ `TotalAmount` dos pedidos `ACTIVE` do expediente |
 | DeliveryFeesTotal | Money | parte de `TotalSold` |
 | TotalReceived | Money | Σ pagamentos recebidos neste expediente, de qualquer data de venda. Inclui os que foram estornados depois, porque o estorno é contado à parte em `ReversedTotal` do expediente em que ocorreu |
@@ -458,6 +474,9 @@ PK `(TenantId, BusinessDate)`, `LastOrderNumber int`. Fonte do `OrderNumber` (`U
 | CountedCash | Money | informado |
 | CashDifference | Money | `CountedCash − ExpectedCash` |
 | Justification | string(500)? | obrigatória se `CashDifference ≠ 0` (RN-010.13) |
+| NotAcceptedCount | int | informativo, fora do vendido: pedidos do site do expediente recusados, expirados ou desistências (RF-210.2), incluindo os recusados pela finalização |
+| AutoRejectedCount | int | parte de `NotAcceptedCount`: os `AWAITING_ACCEPTANCE` recusados pela finalização (`BUSINESS_DAY_CLOSED`, ADR-0046 item 13) |
+| UnmarkedDeliveryCount | int | informativo: entregas aceitas e ativas sem `DELIVERED` (ADR-0046 item 20) |
 | ClosedByEmployeeId, ClosedAt | | |
 
 ### DailyClosingLine [T] — detalhamento do snapshot
@@ -494,7 +513,7 @@ O ajuste **não** altera o `DailyClosing` relacionado nem o caixa físico. Apare
 | Campo | Tipo | Regra |
 |---|---|---|
 | TenantId | Guid? | nulo só em ações de plataforma sem tenant |
-| Origin | enum `APP`, `PLATFORM_ADMIN`, `SYSTEM`, `BILLING_WEBHOOK` | RN-013.4 |
+| Origin | enum `APP`, `PLATFORM_ADMIN`, `SYSTEM`, `BILLING_WEBHOOK`, `WEB` | RN-013.4. `WEB` = ação do cliente pela página (envio, desistência), sem ator (ADR-0046) |
 | ActorUserId, ActorEmployeeId | Guid? | |
 | SharedDeviceId | Guid? | |
 | OperationType | string(60) | semântico: `OrderCreated`, `OrderItemAdded`, `PaymentRegistered`, `PaymentReversed`, `ClosingFinalized`, `EmployeeRolesChanged`… |

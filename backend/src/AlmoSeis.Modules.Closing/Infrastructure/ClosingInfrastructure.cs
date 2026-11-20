@@ -109,9 +109,20 @@ internal sealed class ClosingInputsQuery(AppDbContext db, ITenantContext tenant)
                    coalesce(sum(total_amount), 0) AS sold, coalesce(sum(delivery_fee), 0) AS delivery_fees,
                    coalesce(sum(total_amount - paid_amount), 0) AS pending
               FROM orders
-             WHERE tenant_id = {t} AND business_day_id = {businessDayId}
+             WHERE tenant_id = {t} AND business_day_id = {businessDayId} AND acceptance_status = 'ACCEPTED'
              GROUP BY order_type, cancellation_status
             """).ToListAsync(cancellationToken);
+
+        // Fora do vendido, só informativo (ADR-0046 itens 13 e 20).
+        var counts = (await db.Database.SqlQuery<StatusCountsRow>(
+            $"""
+            SELECT count(*) FILTER (WHERE acceptance_status = 'AWAITING_ACCEPTANCE')::int AS awaiting_acceptance,
+                   count(*) FILTER (WHERE acceptance_status IN ('REJECTED', 'EXPIRED', 'WITHDRAWN'))::int AS not_accepted,
+                   count(*) FILTER (WHERE acceptance_status = 'ACCEPTED' AND cancellation_status = 'ACTIVE'
+                                      AND fulfillment_type = 'DELIVERY' AND fulfillment_status IS DISTINCT FROM 'DELIVERED')::int AS unmarked_deliveries
+              FROM orders
+             WHERE tenant_id = {t} AND business_day_id = {businessDayId}
+            """).ToListAsync(cancellationToken)).Single();
 
         // Recebido neste expediente, de qualquer data de venda (inclui os estornados depois: o estorno conta à parte).
         var payments = await db.Database.SqlQuery<PaymentRow>(
@@ -147,8 +158,11 @@ internal sealed class ClosingInputsQuery(AppDbContext db, ITenantContext tenant)
             payments.Select(p => new PaymentTotalsRow(p.OrderType, p.PaymentMethod, p.FromPreviousDay, p.Count, Money.Of(p.Amount))).ToList(),
             reversals.Select(r => new ReversalTotalsRow(r.OrderType, r.PaymentMethod, r.Count, Money.Of(r.Amount))).ToList(),
             Money.Of(movements.Where(m => m.MovementType == "SUPPLY").Sum(m => m.Amount)),
-            Money.Of(movements.Where(m => m.MovementType == "WITHDRAWAL").Sum(m => m.Amount)));
+            Money.Of(movements.Where(m => m.MovementType == "WITHDRAWAL").Sum(m => m.Amount)),
+            new OrderStatusCounts(counts.AwaitingAcceptance, counts.NotAccepted, counts.UnmarkedDeliveries));
     }
+
+    private sealed record StatusCountsRow(int AwaitingAcceptance, int NotAccepted, int UnmarkedDeliveries);
 
     private sealed record OrderRow(string OrderType, bool Canceled, int Count, decimal Sold, decimal DeliveryFees, decimal Pending);
 

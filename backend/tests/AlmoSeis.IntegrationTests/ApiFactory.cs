@@ -37,6 +37,8 @@ public sealed class ApiFactory(PostgresFixture db, Action<IServiceCollection>? s
             ["RateLimiting:Enabled"] = "false",
             // App do restaurante no navegador (ADR-0053): a mesma origem de desenvolvimento.
             ["Cors:RestaurantAppOrigins:0"] = WebOrigin,
+            // O job de expiração (ADR-0046) roda só quando o teste chama RunOnceAsync.
+            ["WebOrders:ExpiryJobEnabled"] = "false",
         }));
         if (services is not null)
         {

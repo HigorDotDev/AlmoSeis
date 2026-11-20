@@ -169,3 +169,39 @@ internal sealed class AnonymizeCustomerRequestValidator : AbstractValidator<Anon
         RuleFor(x => x.Reason).NotEmpty().WithMessage("Informe o motivo.").MaximumLength(300);
     }
 }
+
+/// Tempo estimado do aceite: 15, 30, 45 ou 60 min (ADR-0046 item 6).
+internal sealed class AcceptOrderRequestValidator : AbstractValidator<AcceptOrderRequest>
+{
+    public AcceptOrderRequestValidator()
+    {
+        RuleFor(x => x.EstimatedReadyMinutes)
+            .Must(m => m is null || Domain.Order.EstimatedMinutesOptions.Contains(m.Value))
+            .WithMessage("Escolha 15, 30, 45 ou 60 minutos.");
+    }
+}
+
+/// Motivo da lista e texto de 5 a 200 (obrigatório em OTHER). `BUSINESS_DAY_CLOSED` é só do sistema (ADR-0046 itens 12 e 13).
+internal sealed class RejectOrderRequestValidator : AbstractValidator<RejectOrderRequest>
+{
+    public RejectOrderRequestValidator()
+    {
+        RuleFor(x => x.ReasonCode).IsInEnum()
+            .NotEqual(RejectionReason.BusinessDayClosed).WithMessage("Escolha um motivo da lista.");
+        RuleFor(x => x.Message).NotEmpty().When(x => x.ReasonCode == RejectionReason.Other)
+            .WithMessage("Explique o motivo para o cliente.");
+        RuleFor(x => x.Message!.Trim().Length)
+            .InclusiveBetween(Domain.Order.RejectionMessageMin, Domain.Order.RejectionMessageMax)
+            .OverridePropertyName("message")
+            .WithMessage($"Use de {Domain.Order.RejectionMessageMin} a {Domain.Order.RejectionMessageMax} caracteres.")
+            .When(x => !string.IsNullOrWhiteSpace(x.Message));
+    }
+}
+
+internal sealed class ChangeFulfillmentRequestValidator : AbstractValidator<ChangeFulfillmentRequest>
+{
+    public ChangeFulfillmentRequestValidator()
+    {
+        RuleFor(x => x.FulfillmentStatus).IsInEnum();
+    }
+}

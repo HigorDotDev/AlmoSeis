@@ -13,6 +13,9 @@ public static class AuditOrigins
     public const string PlatformAdmin = "PLATFORM_ADMIN";
     public const string System = "SYSTEM";
     public const string BillingWebhook = "BILLING_WEBHOOK";
+
+    /// Ação do cliente pela página de pedidos (ADR-0046 item 24): sem ator.
+    public const string Web = "WEB";
 }
 
 /// Auditoria explícita de negócio, gravada na mesma transação da operação (ADR-0031).

@@ -152,7 +152,7 @@ public interface IDomainEvent  { DateTimeOffset OccurredAt { get; } }
 
 | Classe | Responsabilidade |
 |---|---|
-| `ITenantContext` / `TenantContext` (scoped, imutável após `Initialize`) | `TenantId`, `UserId`, `EmployeeId`, `SharedDeviceId`, `BypassFilter`. Preenchido pelo `TenantContextMiddleware` a partir das claims. Vazio em rotas públicas |
+| `ITenantContext` / `TenantContext` (scoped, imutável após `Initialize`) | `TenantId`, `UserId`, `EmployeeId`, `SharedDeviceId`, `BypassFilter`. Preenchido pelo `TenantContextMiddleware` a partir das claims. Vazio em rotas públicas. `InitializeForSystem(tenantId)`: só o tenant, sem usuário nem funcionário, para jobs que gravam no tenant (expiração do pedido do site) e o canal web (ADR-0046); a auditoria sai sem ator |
 | `IAuditWriter` / `AuditWriter` | `Add(operationType, entityType, entityId, orderId?, before?, after?)` adiciona `AuditLog` ao contexto (mesma transação). Preenche origem, ator, dispositivo e `correlationId` = `Activity.Current.TraceId`. `before`/`after` são **objetos anônimos escolhidos pelo handler**, nunca a entidade inteira (ADR-0024, ADR-0031) |
 | `ChangeFeedWriter` | Etapa 3b |
 | `OutboxWriter` + `IIntegrationEventMapper<TEvent>` | Etapa 3c. Os mappers ficam nos módulos e produzem o envelope de 06 §6.14 |
@@ -372,6 +372,16 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     public void ChangeProductionStatus(ProductionStatus to, DateTimeOffset now);
     public void Cancel(string reason, EmployeeRef by, DateTimeOffset now);
 
+    // Pedido da página e atendimento (ADR-0046):
+    public static Order SubmitFromWeb(NewOrder data, BusinessDayRef day, DateTimeOffset deadline, DateTimeOffset now); // sem número/autor
+    public void EnsureAwaitingAcceptance(DateTimeOffset now);      // WebOrderExpired / OrderNotAwaitingAcceptance
+    public void Accept(int orderNumber, EmployeeRef? by, Guid? customerId, int? estimatedReadyMinutes, DateTimeOffset now);
+    public void Reject(RejectionReason reason, string? message, EmployeeRef by, DateTimeOffset now);
+    public void RejectBecauseBusinessDayClosed(DateTimeOffset now);  // finalização do fechamento
+    public bool Expire(DateTimeOffset now);                          // job; false se não venceu
+    public void Withdraw(DateTimeOffset now);                        // cliente pela página
+    public void ChangeFulfillment(FulfillmentStatus to, DateTimeOffset now);
+
     // Chamados só pelo módulo Payments, via IOrderPaymentPort:
     internal void ApplyPayment(Money amount);      // PaidAmount += amount; recalcula IsPaid
     internal void UndoPayment(Money amount);       // estorno; IsPaid volta a false se sobrar saldo
@@ -381,7 +391,7 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
 Toda mutação de itens, pesagens ou taxa passa por um único método privado:
 
 ```text
-EnsureEditable()          → CANCELED: OrderCanceled. IsPaid: OrderAlreadyPaid (exceto notes/tableLabel/tabNumber)
+EnsureEditable()          → não aceito: OrderNotAccepted (ADR-0046). CANCELED: OrderCanceled. IsPaid: OrderAlreadyPaid (exceto notes/tableLabel/tabNumber)
 … aplica a mudança …
 RecalculateTotals()       → ItemsTotal, WeighingsTotal, TotalAmount; TotalAmount < PaidAmount → TotalBelowPaidAmount
 EnsureNotEmpty()          → pelo menos 1 item ou pesagem ativa
@@ -411,6 +421,11 @@ RecordChange(kind, details, affectsProduction) → OrderChangeEvent + Touch(Orde
 | `ChangeProductionStatusHandler` [M] | `PATCH /orders/{id}/status` | |
 | `CancelOrderHandler` [M] | `POST /orders/{id}/cancel` | `OrderHasPayments` vem do agregado (`PaidAmount > 0`) |
 | `AcknowledgeAlertsHandler` | `POST /orders/{id}/alerts/acknowledge` | `INSERT ... ON CONFLICT DO NOTHING` |
+| `AcceptOrderHandler` [I][M] | `POST /orders/{id}/accept` | `WebOrderRules.LoadForDecisionAsync` → `WebOrderCustomerLinker` → `OrderNumberGenerator` → `Order.Accept` → auditoria `OrderAccepted` |
+| `RejectOrderHandler` [M] | `POST /orders/{id}/reject` | `WebOrderRules.LoadForDecisionAsync` → `Order.Reject` → auditoria `OrderRejected` |
+| `ChangeFulfillmentHandler` [M] | `PATCH /orders/{id}/fulfillment` | `completeProduction` → `IPermissionChecker` (`production.update`) + `ChangeProductionStatus(COMPLETED)`; depois `ChangeFulfillment`. Auditoria `ProductionStatusChanged` e `OrderFulfillmentChanged` |
+| `ExpireWebOrderHandler` (comando interno) | — (job) | Um pedido por transação, no contexto do tenant (`Origin = SYSTEM`) |
+| `WithdrawWebOrderHandler`, `SubmitWebOrderHandler` (comandos internos) | — (fatias 2/3 do EP-002) | Desistência (`WEB`) e envio pela página (`WEB`, prazo de `WebOrderOptions.AcceptanceMinutes`). Hoje só os testes os chamam |
 | `GetOrderQuery`, `ListOrdersQuery`, `GetOrderHistoryQuery`, `GetOrderAlertsQuery`, `GetProductionBoardQuery` | `GET`s | projeções. `pendingAlertCount` é calculado por subconsulta (04 §4.7) |
 | Clientes: `CreateCustomer`, `UpdateCustomer`, `Add/Update/RemoveAddress`, `AnonymizeCustomer`, `SearchCustomers`, `GetCustomer`, `GetCustomerPendingOrders` | `/customers/*` | |
 
@@ -419,6 +434,10 @@ RecordChange(kind, details, affectsProduction) → OrderChangeEvent + Touch(Orde
 | `IOrderNumberGenerator` / `OrderNumberGenerator` | SQL de 05 §5.14 (`business_date_counters` + `ON CONFLICT ... RETURNING`) |
 | `CustomerResolver` | `customerId`, ou `saveCustomer` → busca por telefone → cria ou reaproveita. Resolve `customerAddressId` → snapshot do endereço |
 | `AlertRecipientsPolicy` | Regras de quem vê o alerta (04 §4.7): o autor é excluído; permissão de produção ou de pedidos |
+| `WebOrderRules.LoadForDecisionAsync` | Aceite e recusa: lê o expediente aberto (`FOR SHARE`); prazo vencido → `WebOrderExpired` **antes** do `If-Match` (o job muda a versão); depois `EnsureVersion` (o segundo aceite recebe `VersionConflict` com `current`) e `EnsureAwaitingAcceptance`; expediente do pedido diferente do aberto → `BusinessDayRequired` |
+| `WebOrderCustomerLinker` | Vínculo com `Customer` no aceite (ADR-0044 item 20): `pg_advisory_xact_lock` por telefone, cliente existente sem alterar, ou novo com nome e telefone |
+| `AwaitingWebOrdersRejector` | Implementa `IAwaitingWebOrdersRejector` (Contracts do Closing): na finalização, `RejectBecauseBusinessDayClosed` nos `AWAITING_ACCEPTANCE` do expediente + auditoria `WebOrderAutoRejected` (`SYSTEM`) |
+| `WebOrderExpiryJob` (namespace `Jobs`) | Ver §7.11 |
 
 **Contracts/Ports públicos:**
 - `IOrderPaymentPort` (para Payments):
@@ -428,6 +447,8 @@ RecordChange(kind, details, affectsProduction) → OrderChangeEvent + Touch(Orde
   A implementação carrega o agregado **no mesmo `AppDbContext` e transação** e chama `ApplyPayment`/`UndoPayment` + `Touch`.
 - `IOrderPaymentsReader`: os `payments` do DTO do pedido. Declarada aqui e implementada pelo Payments; até lá, `NoOrderPayments` (lista vazia, registrada com `TryAdd`).
 - O "produto vendido não muda de `kind`" é o `OrderProductUsageCheck` (`IProductUsageCheck` do Catalog). Não há `IOrderReadPort`: o Closing lê pedidos por SQL (§7.1).
+
+**Aceite e atendimento (ADR-0046):** listas (`GET /orders`, padrão `acceptanceStatus=ACCEPTED`), painel da cozinha (só aceitos, ordenado por `AcceptedAt`), pendências/fiado (`CustomerDtoBuilder.Pending`) e o `IOrderPaymentPort` (`OrderNotAccepted`) só consideram pedido aceito. Pedido do app nasce `ACCEPTED` com `AcceptedAt = CreatedAt`. O aceite levanta `OrderAccepted` e `OrderCreated` (com `label` nulo: evento sem dado pessoal); recusa, expiração e desistência levantam `OrderRejected`; o envio levanta `OrderAwaitingAcceptance`; o atendimento, `OrderFulfillmentChanged`.
 
 **Implementado:** `OrderChangeEvent` é filho do agregado (coleção nunca carregada; só os novos são inseridos), registrado depois do `Touch`, então `OrderVersion` já é a versão nova. `GET /orders/{id}/history` lê `audit_logs` direto (a entidade `AuditLog` é da Infrastructure); o módulo Audit assume quando `GET /audit-logs` for implementado.
 
@@ -458,7 +479,8 @@ RecordChange(kind, details, affectsProduction) → OrderChangeEvent + Touch(Orde
 | `DailyClosing` (agregado [S]) | `Finalize(ClosingFigures figures, countedCash, justification, by, now)`. Valida `JustificationRequired`. Gera `DailyClosingLine`s. Imutável depois de criado |
 | `ClosingAdjustment` (agregado [S]) | Imutável |
 | **`ClosingCalculator`** (serviço de domínio puro) | `ClosingFigures Compute(ClosingInputs inputs)`. Recebe os agregados já somados pelo banco (por tipo de pedido e por forma de pagamento; pedidos ativos, cancelados, pendentes; recebidos de dias anteriores; movimentações; estornos) e devolve **todos** os números de 04 §4.9. É a **única** implementação das fórmulas, usada pelo resumo parcial **e** pela finalização |
-| `ClosingInputsQuery` | Uma consulta SQL por bloco (`GROUP BY order_type`, `GROUP BY payment_method`…), no padrão de 05 §5.14, com `businessDayId` |
+| `ClosingInputsQuery` | Uma consulta SQL por bloco (`GROUP BY order_type`, `GROUP BY payment_method`…), no padrão de 05 §5.14, com `businessDayId`. Pedidos: só `acceptance_status = 'ACCEPTED'` (ADR-0046 item 4). Mais uma consulta de contagens informativas (`OrderStatusCounts`: aguardando aceite, não aceitos, entregas sem `DELIVERED`) |
+| `IAwaitingWebOrdersRejector` (Contracts) | Declarada pelo Closing e implementada pelo Ordering (que fica acima): recusa os pedidos do site ainda aguardando na finalização |
 | `IBusinessDayReader` (Contracts) | `GetOpenAsync()` → `BusinessDayRef { Id, BusinessDate, Version }` ou `null` |
 
 | Handler | Endpoint |
@@ -467,7 +489,7 @@ RecordChange(kind, details, affectsProduction) → OrderChangeEvent + Touch(Orde
 | `GetCurrentBusinessDayQuery`, `ListBusinessDaysQuery` | `GET /business-days*` |
 | `RegisterCashMovementHandler` [I], `ListCashMovementsQuery` | `/closing/cash-movements` |
 | `GetClosingSummaryQuery` | `GET /closing/summary`: expediente aberto → `ClosingCalculator` ao vivo; fechado → snapshot |
-| `FinalizeClosingHandler` [I][M] | `SELECT ... FOR UPDATE` no `business_day` → confere `If-Match` → `ClosingInputsQuery` → `ClosingCalculator` → `DailyClosing.Finalize` → `BusinessDay.Close` → evento `ClosingFinalized` |
+| `FinalizeClosingHandler` [I][M] | `SELECT ... FOR UPDATE` no `business_day` → confere `If-Match` → `ClosingInputsQuery` → `ClosingCalculator` → `IAwaitingWebOrdersRejector.RejectAwaitingAsync` (ADR-0046 item 13, mesma transação) → `DailyClosing.Finalize` (com quantos recusou) → `BusinessDay.Close` → evento `ClosingFinalized` |
 | `CreateClosingAdjustmentHandler` [I] | `/closing/{id}/adjustments` |
 | `GetClosingQuery`, `ListClosingHistoryQuery`, `GetMonthlyClosingQuery` | `GET /closing/*` |
 
@@ -487,6 +509,7 @@ O `IAuditWriter` vive em Infrastructure (§7.3). O módulo Audit tem só leitura
 
 **Catálogo de `operationType`** (constantes em `AuditOperations`):
 - `OrderCreated`, `OrderDetailsUpdated`, `OrderItemAdded`, `OrderItemChanged`, `OrderItemRemoved`, `WeighingAdded`, `WeighingRemoved`, `ProductionStatusChanged`, `OrderCanceled`;
+- pedido da página (ADR-0046 item 24): `WebOrderSubmitted` e `WebOrderWithdrawn` (`WEB`, sem ator), `OrderAccepted`, `OrderRejected`, `WebOrderExpired` e `WebOrderAutoRejected` (`SYSTEM`), `OrderFulfillmentChanged`;
 - `PaymentRegistered`, `PaymentReversed`;
 - `BusinessDayOpened`, `CashMovementRegistered`, `ClosingFinalized`, `ClosingAdjustmentCreated`;
 - `MenuCreated`, `MenuItemsReplaced`, `MenuItemUpdated`, `MenuMaterialized`;
@@ -524,6 +547,7 @@ O `IAuditWriter` vive em Infrastructure (§7.3). O módulo Audit tem só leitura
 | `BillingWebhookProcessor` | contínuo (5 s) | `SKIP LOCKED` |
 | `SubscriptionLifecycleJob` | 1 h | advisory lock |
 | `InvitationExpiryJob` | 15 min | advisory lock |
+| `WebOrderExpiryJob` (Ordering, ADR-0046 item 14) | 30 s (`WebOrders:ExpiryIntervalSeconds`) | advisory lock. O `PlatformDbContext` só acha os vencidos de todos os tenants (`ix_orders_acceptance_deadline`, lote de 500); cada pedido é expirado por `ICommandHandler<ExpireWebOrderCommand>` num escopo com `InitializeForSystem(tenant)`: RLS, auditoria `SYSTEM`, feed e outbox normais, um pedido por transação. `VersionConflict` (o aceite gravou antes) é registrado em log e ignorado |
 | `SyncRetentionJob`, `RefreshTokenCleanupJob` | diário, 04:00 UTC | advisory lock |
 | `TenantRetentionJob` (ADR-0024: 90 dias após `CANCELED`) | diário | advisory lock |
 
@@ -539,6 +563,7 @@ O `IAuditWriter` vive em Infrastructure (§7.3). O módulo Audit tem só leitura
 | `App` (`MinSupportedAppVersion:ANDROID`, `:IOS`, `:WEB`, `StoreUrl:ANDROID`, `:IOS`; sem `StoreUrl:WEB`, então o `426` da web leva `storeUrl: null`) | `AppVersionOptions` | não |
 | `Cors` (`RestaurantAppOrigins`: Development `http://localhost:8082`; homolog `https://app-homolog.almoseis.app`; produção `https://app.almoseis.app`) | `RestaurantAppCorsOptions` | não |
 | `Idempotency` (`TtlHours = 72`, `LockTimeoutSeconds = 5`) | `IdempotencyOptions` | não |
+| `WebOrders` (`AcceptanceMinutes = 10`, `ExpiryJobEnabled = true`, `ExpiryIntervalSeconds = 30`) | `WebOrderOptions` | não |
 | `ForwardedHeaders` (`KnownNetworks`: CIDRs; `KnownProxies`: IPs). Vazio → só loopback (padrão do ASP.NET Core; Development fica assim). Homolog/produção: a sub-rede de onde o ingress do Container Apps conecta (`09-devops.md`) | `ForwardedHeadersSettings` → `ForwardedHeadersOptions` (`XForwardedFor \| XForwardedProto`, `ForwardLimit = 1`) | não |
 
 O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5). A imagem Docker usa a base `aspnet` **não chiseled**, que traz `tzdata`, necessário para `TimeZoneInfo.FindSystemTimeZoneById("America/Sao_Paulo")` no cálculo da `BusinessDate`.
@@ -555,8 +580,9 @@ O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5
 | ↳ `IdempotencyTests` | Endpoints [I] | Reenvio com mesmo corpo → mesma resposta + `Idempotent-Replayed`; corpo diferente → `422`; dois em paralelo → um registro só |
 | ↳ `ConcurrencyTests` | Endpoints [M] | `If-Match` velho → `409` com `current`; dois pagamentos concorrentes no mesmo saldo → um falha |
 | ↳ `WebSessionFlowTests` | App no navegador (ADR-0053) | Login web: refresh só no cookie `HttpOnly`; refresh pelo cookie com rotação; reuso revoga a família e apaga o cookie; `Origin` ausente ou estranho → `403`; refresh no corpo vindo da web → `422`; mobile sem `Set-Cookie` e sem ler cookie; logout apaga; aparelho compartilhado web (lista e PIN pelo cookie, revogação apaga o cookie; `X-Device-Secret` ignorado na web; cookie do tenant A com `X-Tenant-Id`/`tenantId` do B → `401 InvalidDeviceSecret`); cookie emitido por `signup`, aceite de convite e `switch-tenant`; `switch-tenant` revoga o refresh anterior da instalação (web e mobile); erros de `/auth/*` levam CORS; `DELETE /auth/shared-device` sem `WEB` sem `Set-Cookie`; preflight de origem permitida e negada e sem headers fora do contrato; `Origin` no hub; `426` da web sem `storeUrl`. Cliente sem `CookieContainer`: os cookies vão no header `Cookie`, como no navegador |
+| ↳ `WebOrderFlowTests` | ADR-0046 | Pedido do app nasce aceito com número; pedido do site aguarda fora das listas, da cozinha e do fechamento e recusa toda escrita (`OrderNotAccepted`); aceite (número seguinte da data, cliente pelo telefone, `OrderCreated` sem rótulo, reenvio idempotente, `VersionConflict` com `current`); dois aceites simultâneos → um aceite e um número; recusa (permissão, motivo, texto); job de expiração e aceite tardio (`WebOrderExpired`); **corrida aceite × expiração** (o pedido é travado por uma conexão externa até os dois UPDATEs entrarem na fila; só o primeiro grava); **teste obrigatório do fechamento** (recusado, expirado, desistência e aguardando nunca entram no vendido; a finalização recusa os aguardando); desistência; transições de atendimento, "Concluir e marcar", `OrderAlreadyDispatched`; isolamento entre tenants. O envio usa o comando interno `SubmitWebOrderCommand` (a rota pública é da fatia 2); o job desligado por configuração e chamado por `RunOnceAsync` |
 | ↳ `ProtectionFlowTests` | ADR-0035 e ADR-0041 | `426`; limites por login, por IP e por instalação (inclusive `GET /auth/shared-device/employees`, que divide a partição com a rota do mobile); `X-Forwarded-For` de proxy confiável separa os clientes, de endereço não confiável é ignorado, e só a entrada da direita conta (`ForwardLimit = 1`). Um `IStartupFilter` do teste simula o IP de quem conecta, porque o TestServer não tem um |
-| ↳ `DdlMigrationSyncTests` (unitário) + `SchemaTests` | Migrations × `05-ddl.md` × modelo EF | O script embutido é idêntico aos blocos do `05` (a inicial = blocos antes de 05 §5.17; cada alteração = os blocos da sua subseção em §5.17). A migration aplicada pelo login de migration passa no `05-ddl-smoke-test.sql` (22 checagens), e toda entidade EF encontra suas colunas no banco (ADR-0042) |
+| ↳ `DdlMigrationSyncTests` (unitário) + `SchemaTests` | Migrations × `05-ddl.md` × modelo EF | O script embutido é idêntico aos blocos do `05` (a inicial = blocos antes de 05 §5.17; cada alteração = os blocos da sua subseção em §5.17). A migration aplicada pelo login de migration passa no `05-ddl-smoke-test.sql` (31 checagens), e toda entidade EF encontra suas colunas no banco (ADR-0042) |
 | `ArchitectureTests` | ADR-0029 | regras abaixo |
 
 **Regras de arquitetura (NetArchTest):**
@@ -564,7 +590,7 @@ O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5
 2. Um módulo só usa de outro módulo tipos no namespace `*.Contracts`.
 3. Controllers não dependem de `AppDbContext` nem de tipos `*.Domain`.
 4. Nenhum tipo usa `DateTime.Now`/`UtcNow`/`DateTimeOffset.Now`/`UtcNow` (checagem por análise IL do teste).
-5. Nenhum tipo fora de `Infrastructure`/`Admin`/`Billing` usa `PlatformDbContext` ou `IgnoreQueryFilters`.
+5. Nenhum tipo fora de `Infrastructure`/`Admin`/`Billing`/`Sync` usa `PlatformDbContext` ou `IgnoreQueryFilters`. Exceção: jobs de plataforma de um módulo, no namespace `AlmoSeis.Modules.X.Jobs`, que só leem candidatos entre os tenants e gravam no contexto de cada tenant (`WebOrderExpiryJob`).
 6. Toda entidade com propriedade `TenantId` implementa `ITenantOwned`.
 7. Toda ação de controller que não é GET tem `[HasPermission]` ou `[AllowAnonymous]` explícito.
 8. Cookie da requisição só é lido por `WebSession.ReadCookie`, que confere o `Origin` antes (ADR-0053 §3.4). Análise de fonte: `.Cookies` (exceto `Append`/`Delete` da resposta), o header `Cookie` e `IRequestCookieCollection` fora do `ReadCookie` falham. Os testes de fonte (4 e 8) acham `backend/src` subindo a partir da saída do build ou, com `--artifacts-path`, a partir do próprio arquivo do teste.
@@ -645,6 +671,11 @@ O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5
 | Troca de estabelecimento | `SwitchTenantHandler` revoga (`ExecuteUpdate`, na transação) os refresh tokens não revogados do usuário com o `installationId` do access token, depois de confirmar o vínculo, e emite uma família nova | O app guarda uma sessão por instalação; o refresh anterior ficaria válido 30 dias sem dono (web e mobile) |
 | Hub e expiração do token | `MapHub(..., o => o.CloseOnAuthenticationExpiration = true)` | O servidor fecha a conexão quando o JWT vence, para uma aba do desktop não ficar conectada com token vencido (ADR-0053). O app renova o token no `accessTokenFactory` (`refreshIfExpiring`, margem de 60 s) antes de reconectar e, se a reconexão automática desistir, agenda novas tentativas (08 §8.6) |
 | Alterações de schema | 05 §5.17: uma subseção `### NNNN_Nome` por migration, com o seu bloco `sql`; `Sync-DdlMigration.ps1 -Target NNNN_Nome.sql` gera o script (só ASCII no `.ps1`; o cabeçalho com acento sai por `[char]`, porque o Windows PowerShell 5.1 lê o script sem BOM como ANSI), e a classe de migration tem 10 linhas. A primeira é a `0002_SharedDeviceWebPlatform` (`platform` com `WEB`) | ADR-0042 §3: a `0001` não muda depois de aplicada |
+| Aceite × expiração (ADR-0046 item 16) | Disputa pela `version`, sem trava pessimista: o primeiro UPDATE grava, o outro cai no token de concorrência. Aceite e recusa leem o expediente com `FOR SHARE` (como toda escrita de venda), e o job também: a finalização do fechamento não roda no meio | O número do dia só é consumido depois das validações; se o aceite perde no UPDATE, o rollback devolve o número ao `business_date_counters` (sequência sem buracos) |
+| Ordem dos erros no aceite | Prazo vencido → `WebOrderExpired`, depois `If-Match` → `VersionConflict`, depois o estado → `OrderNotAwaitingAcceptance` | O job muda a versão ao expirar: sem isso, o aceite tardio veria só um `VersionConflict`. Já o "Já aceito por Ana" (item 9) precisa do `current` do 409 |
+| Cliente do pedido do site | `pg_advisory_xact_lock` pela chave `customer-phone:{tenant}:{telefone}` antes de procurar o cliente | Dois aceites com o mesmo telefone novo estourariam `ux_customers_phone` (500); assim o segundo espera e acha o cadastro do primeiro |
+| Envio pela página | `SubmitWebOrderCommand` é interno até a fatia 2 (rota pública, `ITenantContext.Source`, anti-abuso). Pedido `WEB` só `MARMITA` (RF-202/ADR-0044) | O modelo, o aceite e os jobs já dependem dele |
+| Expand/contract da 0003 | O banco aceita pedido aceito sem `accepted_at` e entrega/retirada sem `fulfillment_status` (a API anterior grava assim durante o deploy). O código trata o nulo como "aceito na criação" (`AcceptedAt ?? CreatedAt` no painel) e `PENDING` (atendimento, "Pronto para retirar", `IS DISTINCT FROM` no fechamento). A contração (preencher e apertar os `CHECK`s) fica para a release seguinte (05 §5.17) | 09 §9.4: a migration roda antes do deploy e precisa ser compatível com a versão anterior. O backfill dos pedidos existentes tira o `FORCE` da RLS de `orders` só durante o `UPDATE`, porque o papel de migration não é membro de `almoseis_platform` |
 
 ## 7.14 Exemplo de ponta a ponta: `POST /orders/{id}/payments`
 

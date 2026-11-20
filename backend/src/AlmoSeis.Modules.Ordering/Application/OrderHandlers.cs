@@ -349,6 +349,8 @@ internal sealed class OrderCurrentReader(IQueryHandler<GetOrderQuery, OrderDto> 
 }
 
 /// GET /orders: padrão = expediente aberto; `allDays` ignora o expediente. Mais recentes primeiro (id UUID v7).
+/// `acceptanceStatus` (padrão `ACCEPTED`): a lista comum nunca mistura pedido do site não aceito (ADR-0046 item 4);
+/// a faixa "Novos do site" usa `acceptanceStatus=AWAITING_ACCEPTANCE`.
 internal sealed class ListOrdersQueryHandler(AppDbContext db, IBusinessDayReader businessDays, AlertCounter alerts)
     : IQueryHandler<ListOrdersQuery, PageDto<OrderSummaryDto>>
 {
@@ -367,6 +369,8 @@ internal sealed class ListOrdersQueryHandler(AppDbContext db, IBusinessDayReader
 
             orders = orders.Where(o => o.BusinessDayId == dayId);
         }
+
+        orders = orders.Where(o => o.AcceptanceStatus == query.AcceptanceStatus);
 
         if (query.OrderType is { } type)
         {
@@ -409,8 +413,9 @@ internal sealed class ListOrdersQueryHandler(AppDbContext db, IBusinessDayReader
         var rows = await orders.OrderByDescending(o => o.Id).Take(query.Limit + 1)
             .Select(o => new
             {
-                o.Id, o.Version, o.OrderNumber, o.BusinessDate, o.OrderType, o.FulfillmentType, o.CustomerName, o.TableLabel, o.TabNumber,
+                o.Id, o.Version, o.OrderNumber, o.BusinessDate, o.OrderType, o.Origin, o.FulfillmentType, o.CustomerName, o.TableLabel, o.TabNumber,
                 o.TotalAmount, o.PaidAmount, o.IsPaid, o.ProductionStatus, o.CancellationStatus, o.CreatedAt,
+                o.AcceptanceStatus, o.AcceptanceDeadline, o.FulfillmentStatus,
                 ItemCount = o.Items.Count(i => i.Status == LineStatus.Active),
             })
             .ToListAsync(cancellationToken);
@@ -419,15 +424,18 @@ internal sealed class ListOrdersQueryHandler(AppDbContext db, IBusinessDayReader
         var counts = await alerts.CountForOrdersAsync(page.Select(r => r.Id).ToList(), cancellationToken);
         var items = page
             .Select(r => new OrderSummaryDto(
-                r.Id, r.Version, r.OrderNumber, r.BusinessDate, r.OrderType, r.FulfillmentType, r.CustomerName, r.TableLabel, r.TabNumber,
-                r.TotalAmount, r.PaidAmount, r.TotalAmount - r.PaidAmount, r.IsPaid, r.ProductionStatus, r.CancellationStatus, r.ItemCount,
+                r.Id, r.Version, r.OrderNumber, r.BusinessDate, r.OrderType, r.Origin, r.FulfillmentType, r.CustomerName, r.TableLabel, r.TabNumber,
+                r.TotalAmount, r.PaidAmount, r.TotalAmount - r.PaidAmount, r.IsPaid, r.ProductionStatus, r.CancellationStatus,
+                r.AcceptanceStatus, r.AcceptanceDeadline, r.FulfillmentStatus,
+                Order.IsReadyForPickupRule(r.FulfillmentType, r.ProductionStatus, r.FulfillmentStatus), r.ItemCount,
                 counts.GetValueOrDefault(r.Id), r.CreatedAt))
             .ToList();
         return new PageDto<OrderSummaryDto>(items, rows.Count > query.Limit ? Paging.EncodeCursor(items[^1].Id) : null);
     }
 }
 
-/// GET /production/orders: MARMITA e PF ativos do expediente aberto, do mais antigo ao mais novo (RN-007.4/7.5).
+/// GET /production/orders: MARMITA e PF aceitos e ativos do expediente aberto, do mais antigo ao mais novo (RN-007.4/7.5).
+/// A ordem é a do aceite: para a cozinha, o pedido do site nasce no aceite (ADR-0046 item 7); no app, aceite = criação.
 internal sealed class GetProductionBoardQueryHandler(AppDbContext db, IBusinessDayReader businessDays, AlertCounter alerts)
     : IQueryHandler<GetProductionBoardQuery, ProductionBoardDto>
 {
@@ -436,8 +444,9 @@ internal sealed class GetProductionBoardQueryHandler(AppDbContext db, IBusinessD
         var day = await businessDays.GetOpenAsync(cancellationToken) ?? throw new BusinessException(ErrorCodes.BusinessDayRequired);
         var orders = await db.Set<Order>().AsNoTracking()
             .Include(o => o.Items)
-            .Where(o => o.BusinessDayId == day.Id && o.OrderType != OrderType.Kilo && o.CancellationStatus == CancellationStatus.Active)
-            .OrderBy(o => o.CreatedAt).ThenBy(o => o.Id)
+            .Where(o => o.BusinessDayId == day.Id && o.OrderType != OrderType.Kilo && o.CancellationStatus == CancellationStatus.Active
+                && o.AcceptanceStatus == AcceptanceStatus.Accepted)
+            .OrderBy(o => o.AcceptedAt ?? o.CreatedAt).ThenBy(o => o.Id)
             .ToListAsync(cancellationToken);
         var counts = await alerts.CountForOrdersAsync(orders.Select(o => o.Id).ToList(), cancellationToken);
 
@@ -450,7 +459,8 @@ internal sealed class GetProductionBoardQueryHandler(AppDbContext db, IBusinessD
                     active.Where(a => a.ParentOrderItemId == i.Id).Select(a => new ProductionAddonDto(a.Id, a.NameSnapshot, a.Quantity, a.Notes)).ToList()))
                 .ToList();
             return (Status: o.ProductionStatus!.Value, Dto: new ProductionOrderDto(
-                o.Id, o.Version, o.OrderNumber, o.OrderType, o.FulfillmentType, o.Label, o.Notes, o.IsPaid, o.CreatedAt, items, counts.GetValueOrDefault(o.Id)));
+                o.Id, o.Version, o.OrderNumber!.Value, o.OrderType, o.Origin, o.FulfillmentType, o.FulfillmentStatus, o.Label, o.Notes, o.IsPaid,
+                o.CreatedAt, o.AcceptedAt ?? o.CreatedAt, items, counts.GetValueOrDefault(o.Id)));
         }).ToList();
 
         var groups = Enum.GetValues<ProductionStatus>().ToDictionary(

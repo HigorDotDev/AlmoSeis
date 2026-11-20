@@ -16,6 +16,7 @@ public sealed class OrdersController : ControllerBase
     public async Task<ActionResult<PageDto<OrderSummaryDto>>> List(
         [FromQuery] Guid? businessDayId,
         [FromQuery] bool? allDays,
+        [FromQuery] AcceptanceStatus? acceptanceStatus,
         [FromQuery] OrderType? orderType,
         [FromQuery] bool? isPaid,
         [FromQuery] CancellationStatus? cancellationStatus,
@@ -27,7 +28,7 @@ public sealed class OrdersController : ControllerBase
         CancellationToken cancellationToken,
         [FromQuery] int limit = 50) =>
         Ok(await handler.HandleAsync(
-            new ListOrdersQuery(businessDayId, allDays ?? false, orderType, isPaid, cancellationStatus, productionStatus, customerId, search, limit, cursor),
+            new ListOrdersQuery(businessDayId, allDays ?? false, acceptanceStatus ?? AcceptanceStatus.Accepted, orderType, isPaid, cancellationStatus, productionStatus, customerId, search, limit, cursor),
             cancellationToken));
 
     [HttpGet("{id:guid}")]
@@ -113,6 +114,34 @@ public sealed class OrdersController : ControllerBase
         Guid id, [FromBody] CancelOrderRequest request,
         [FromServices] ICommandHandler<CancelOrderCommand, OrderDto> handler, CancellationToken cancellationToken) =>
         Ok(await handler.HandleAsync(new CancelOrderCommand(id, request), cancellationToken));
+
+    /// Aceite do pedido do site (ADR-0046 itens 6 a 9).
+    [HttpPost("{id:guid}/accept")]
+    [HasPermission(Permissions.Orders.Accept)]
+    [Idempotent]
+    [RequiresIfMatch]
+    public async Task<ActionResult<OrderDto>> Accept(
+        Guid id, [FromBody] AcceptOrderRequest request,
+        [FromServices] ICommandHandler<AcceptOrderCommand, OrderDto> handler, CancellationToken cancellationToken) =>
+        Ok(await handler.HandleAsync(new AcceptOrderCommand(id, request), cancellationToken));
+
+    /// Recusa com motivo da lista (ADR-0046 item 12).
+    [HttpPost("{id:guid}/reject")]
+    [HasPermission(Permissions.Orders.Accept)]
+    [RequiresIfMatch]
+    public async Task<ActionResult<OrderDto>> Reject(
+        Guid id, [FromBody] RejectOrderRequest request,
+        [FromServices] ICommandHandler<RejectOrderCommand, OrderDto> handler, CancellationToken cancellationToken) =>
+        Ok(await handler.HandleAsync(new RejectOrderCommand(id, request), cancellationToken));
+
+    /// Saiu para entrega, entregue, retirado (ADR-0046 item 18). `completeProduction` exige também `production.update`.
+    [HttpPatch("{id:guid}/fulfillment")]
+    [HasPermission(Permissions.Orders.UpdateFulfillment)]
+    [RequiresIfMatch]
+    public async Task<ActionResult<OrderDto>> ChangeFulfillment(
+        Guid id, [FromBody] ChangeFulfillmentRequest request,
+        [FromServices] ICommandHandler<ChangeFulfillmentCommand, OrderDto> handler, CancellationToken cancellationToken) =>
+        Ok(await handler.HandleAsync(new ChangeFulfillmentCommand(id, request), cancellationToken));
 
     [HttpGet("{id:guid}/history")]
     [HasPermission(Permissions.Orders.View)]

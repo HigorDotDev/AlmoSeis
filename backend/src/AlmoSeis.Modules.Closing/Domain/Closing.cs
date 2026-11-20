@@ -74,14 +74,18 @@ internal sealed class DailyClosing : Entity, ITenantOwned, ISyncTracked
     public Money CountedCash { get; private set; }
     public Money CashDifference { get; private set; }
     public string? Justification { get; private set; }
+    public int NotAcceptedCount { get; private set; }
+    public int AutoRejectedCount { get; private set; }
+    public int UnmarkedDeliveryCount { get; private set; }
     public Guid ClosedByEmployeeId { get; private set; }
     public DateTimeOffset ClosedAt { get; private set; }
     public IReadOnlyList<DailyClosingLine> Lines => _lines;
 
-    /// RN-010.13: diferença de caixa ≠ 0 exige justificativa.
+    /// RN-010.13: diferença de caixa ≠ 0 exige justificativa. `autoRejected`: pedidos do site recusados por esta
+    /// finalização (ADR-0046 item 13), que passam a contar como não aceitos.
     public static DailyClosing Finalize(
         Guid id, Guid tenantId, Guid businessDayId, DateOnly businessDate, ClosingFigures f, Money countedCash, string? justification,
-        Guid by, Func<Guid> newId, DateTimeOffset now)
+        Guid by, Func<Guid> newId, DateTimeOffset now, int autoRejected = 0)
     {
         if (countedCash.IsNegative)
         {
@@ -122,6 +126,9 @@ internal sealed class DailyClosing : Entity, ITenantOwned, ISyncTracked
             CountedCash = countedCash,
             CashDifference = difference,
             Justification = text,
+            NotAcceptedCount = f.NotAcceptedCount + autoRejected,
+            AutoRejectedCount = autoRejected,
+            UnmarkedDeliveryCount = f.UnmarkedDeliveryCount,
             ClosedByEmployeeId = by,
             ClosedAt = now,
         };
@@ -226,13 +233,18 @@ internal sealed record PaymentTotalsRow(string OrderType, string PaymentMethod, 
 
 internal sealed record ReversalTotalsRow(string OrderType, string PaymentMethod, int Count, Money Amount);
 
+/// Contagens informativas, fora do vendido (ADR-0046 itens 13 e 20).
+internal sealed record OrderStatusCounts(int AwaitingAcceptance, int NotAccepted, int UnmarkedDeliveries);
+
+/// `Orders` traz só pedidos aceitos: pedido não aceito nunca entra no vendido, no pendente nem na contagem (ADR-0046 item 4).
 internal sealed record ClosingInputs(
     Money OpeningBalance,
     IReadOnlyList<OrderTotalsRow> Orders,
     IReadOnlyList<PaymentTotalsRow> Payments,
     IReadOnlyList<ReversalTotalsRow> Reversals,
     Money Supplies,
-    Money Withdrawals);
+    Money Withdrawals,
+    OrderStatusCounts? StatusCounts = null);
 
 internal sealed record OrderTypeFigure(string Key, int Count, Money Sold, Money Received, Money Pending, Money Reversed);
 
@@ -256,7 +268,10 @@ internal sealed record ClosingFigures(
     Money CashReversed,
     Money Supplies,
     Money Withdrawals,
-    Money ExpectedCash);
+    Money ExpectedCash,
+    int AwaitingAcceptanceCount,
+    int NotAcceptedCount,
+    int UnmarkedDeliveryCount);
 
 /// **Única** implementação das fórmulas do fechamento, usada pelo resumo parcial e pela finalização (07 §7.9).
 internal static class ClosingCalculator
@@ -290,6 +305,7 @@ internal static class ClosingCalculator
         var cashReceived = byPaymentMethod.Single(m => m.Key == "CASH").Received;
         var cashReversed = byPaymentMethod.Single(m => m.Key == "CASH").Reversed;
         var expected = i.OpeningBalance + cashReceived + i.Supplies - i.Withdrawals - cashReversed;
+        var counts = i.StatusCounts ?? new OrderStatusCounts(0, 0, 0);
 
         return new ClosingFigures(
             active.Sum(o => o.Count),
@@ -309,6 +325,9 @@ internal static class ClosingCalculator
             cashReversed,
             i.Supplies,
             i.Withdrawals,
-            expected);
+            expected,
+            counts.AwaitingAcceptance,
+            counts.NotAccepted,
+            counts.UnmarkedDeliveries);
     }
 }

@@ -26,7 +26,7 @@ public sealed class AuthFlowTests(PostgresFixture db) : IDisposable
 
         var me = result.GetProperty("me");
         me.GetProperty("employee").GetProperty("roles").EnumerateArray().Select(r => r.GetString()).ShouldBe(["OWNER"]);
-        me.GetProperty("permissions").GetArrayLength().ShouldBe(22);
+        me.GetProperty("permissions").GetArrayLength().ShouldBe(24);
         me.GetProperty("memberships").GetArrayLength().ShouldBe(1);
 
         var subscription = me.GetProperty("subscription");
@@ -210,6 +210,6 @@ public sealed class AuthFlowTests(PostgresFixture db) : IDisposable
 
         var kitchen = roles.GetProperty("items").EnumerateArray().Single(r => r.GetProperty("role").GetString() == "KITCHEN");
         kitchen.GetProperty("permissions").EnumerateArray().Select(p => p.GetString())
-            .ShouldBe(["orders.view", "production.view", "production.update"], ignoreOrder: true);
+            .ShouldBe(["orders.view", "production.view", "production.update", "orders.fulfillment.update"], ignoreOrder: true);
     }
 }

@@ -51,6 +51,14 @@ public interface IBusinessDayReader
     Task<BusinessDayRef?> GetOpenAsync(CancellationToken cancellationToken);
 }
 
+/// Declarada aqui e implementada pelo Ordering (que fica acima do Closing, 07 §7.1): na finalização do fechamento,
+/// recusa com `BUSINESS_DAY_CLOSED` os pedidos do site ainda aguardando aceite, na mesma transação (ADR-0046 item 13).
+/// Devolve quantos foram recusados.
+public interface IAwaitingWebOrdersRejector
+{
+    Task<int> RejectAwaitingAsync(Guid businessDayId, CancellationToken cancellationToken);
+}
+
 // ---------- Caixa e fechamento (06 §6.11) ----------
 
 public enum CashMovementType
@@ -75,6 +83,11 @@ public sealed record CashMovementDto(
 public sealed record ClosingBusinessDayDto(Guid Id, int Version, DateOnly BusinessDate, BusinessDayStatus Status);
 
 public sealed record CountTotalDto(int Count, Money Total);
+
+/// Pedidos do site fora do vendido (ADR-0046 item 13, RF-210.2), só informativo. Resumo parcial: `awaitingAcceptanceCount`
+/// = os que a finalização vai recusar ("2 pedidos do site aguardando aceite serão recusados"). Fechamento: `autoRejectedCount`
+/// = os que ela recusou, já somados em `notAcceptedCount` (recusados, expirados e desistências do expediente).
+public sealed record WebOrdersSummaryDto(int AwaitingAcceptanceCount, int AutoRejectedCount, int NotAcceptedCount);
 
 public sealed record OrderTypeLineDto(string OrderType, int Count, Money Sold, Money Received, Money Pending, Money Reversed);
 
@@ -113,6 +126,8 @@ public sealed record ClosingSummaryDto(
     Money TotalPending,
     CountTotalDto Canceled,
     CountTotalDto Reversed,
+    WebOrdersSummaryDto WebOrders,
+    int UnmarkedDeliveryCount,
     IReadOnlyList<OrderTypeLineDto> ByOrderType,
     IReadOnlyList<PaymentMethodLineDto> ByPaymentMethod,
     ClosingCashDto Cash,

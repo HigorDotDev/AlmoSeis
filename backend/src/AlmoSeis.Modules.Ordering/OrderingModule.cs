@@ -3,6 +3,8 @@ using AlmoSeis.Modules.Catalog.Contracts;
 using AlmoSeis.Modules.Ordering.Application;
 using AlmoSeis.Modules.Ordering.Contracts;
 using AlmoSeis.Modules.Ordering.Infrastructure;
+using AlmoSeis.Modules.Ordering.Jobs;
+using AlmoSeis.Modules.Closing.Contracts;
 using AlmoSeis.SharedKernel.Application;
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,6 +25,13 @@ public static class OrderingModule
         services.AddScoped<AlertCounter>();
         services.AddScoped<IProductUsageCheck, OrderProductUsageCheck>();
         services.AddScoped<IOrderPaymentPort, OrderPaymentPort>();
+
+        // Pedido da página: aceite, recusa, expiração e o fechamento (ADR-0046).
+        services.AddOptions<WebOrderOptions>().BindConfiguration(WebOrderOptions.Section);
+        services.AddScoped<WebOrderCustomerLinker>();
+        services.AddScoped<IAwaitingWebOrdersRejector, AwaitingWebOrdersRejector>();
+        services.AddSingleton<WebOrderExpiryJob>();
+        services.AddHostedService(sp => sp.GetRequiredService<WebOrderExpiryJob>());
         // O Payments registra a implementação real; até lá, pedidos sem pagamentos.
         services.TryAddScoped<IOrderPaymentsReader, NoOrderPayments>();
 

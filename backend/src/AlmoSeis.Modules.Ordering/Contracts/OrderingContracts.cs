@@ -13,6 +13,42 @@ public enum OrderType
 public enum OrderOrigin
 {
     App,
+
+    /// Página de pedidos (EP-002, ADR-0044). Sem funcionário autor.
+    Web,
+}
+
+/// Entrada do pedido (ADR-0046 item 1). Todo pedido do app nasce `ACCEPTED`. `REJECTED`, `EXPIRED` e `WITHDRAWN` são finais.
+public enum AcceptanceStatus
+{
+    /// Fase 2 (ADR-0050): nenhum caminho produz este valor ainda.
+    AwaitingPayment,
+    AwaitingAcceptance,
+    Accepted,
+    Rejected,
+    Expired,
+    Withdrawn,
+}
+
+/// Atendimento (ADR-0046 item 2): só `DELIVERY` e `PICKUP`, e só depois do aceite. "Pronto para retirar" é derivado.
+public enum FulfillmentStatus
+{
+    Pending,
+    OutForDelivery,
+    Delivered,
+    PickedUp,
+}
+
+/// Motivo da recusa (ADR-0046 item 12). `BUSINESS_DAY_CLOSED` só pelo sistema, no fechamento (item 13).
+public enum RejectionReason
+{
+    ItemUnavailable,
+    OutOfDeliveryArea,
+    TooBusy,
+    ClosingSoon,
+    SuspectedPrank,
+    Other,
+    BusinessDayClosed,
 }
 
 public enum FulfillmentType
@@ -89,7 +125,7 @@ public sealed record OrderAddonDto(
     bool RequiresPreparation,
     string? Notes,
     DateTimeOffset CreatedAt,
-    AuthorDto CreatedBy);
+    AuthorDto? CreatedBy);
 
 public sealed record OrderItemDto(
     Guid Id,
@@ -106,7 +142,7 @@ public sealed record OrderItemDto(
     string? Notes,
     IReadOnlyList<OrderAddonDto> Addons,
     DateTimeOffset CreatedAt,
-    AuthorDto CreatedBy);
+    AuthorDto? CreatedBy);
 
 public sealed record WeighingDto(Guid Id, int WeightGrams, Money PricePerKg, Money Amount, DateTimeOffset CreatedAt, AuthorDto CreatedBy);
 
@@ -116,10 +152,13 @@ public sealed record OrderPaymentDto(
 
 public sealed record CancellationDto(DateTimeOffset CanceledAt, AuthorDto CanceledBy, string Reason);
 
+/// Recusa (ADR-0046 item 12): `rejectedBy` nulo na recusa do sistema (`BUSINESS_DAY_CLOSED`).
+public sealed record RejectionDto(RejectionReason ReasonCode, string? Message, DateTimeOffset RejectedAt, AuthorDto? RejectedBy);
+
 public sealed record OrderDto(
     Guid Id,
     int Version,
-    int OrderNumber,
+    int? OrderNumber,
     Guid BusinessDayId,
     DateOnly BusinessDate,
     OrderType OrderType,
@@ -141,12 +180,26 @@ public sealed record OrderDto(
     DateTimeOffset? ProductionStatusChangedAt,
     CancellationStatus CancellationStatus,
     CancellationDto? Cancellation,
+    AcceptanceStatus AcceptanceStatus,
+    DateTimeOffset? AcceptanceDeadline,
+    DateTimeOffset? AcceptedAt,
+    AuthorDto? AcceptedBy,
+    int? EstimatedReadyMinutes,
+    RejectionDto? Rejection,
+    DateTimeOffset? ExpiredAt,
+    DateTimeOffset? WithdrawnAt,
+    FulfillmentStatus? FulfillmentStatus,
+    DateTimeOffset? FulfillmentStatusChangedAt,
+    DateTimeOffset? OutForDeliveryAt,
+    DateTimeOffset? DeliveredAt,
+    DateTimeOffset? PickedUpAt,
+    bool IsReadyForPickup,
     IReadOnlyList<OrderItemDto> Items,
     IReadOnlyList<WeighingDto> Weighings,
     IReadOnlyList<OrderPaymentDto> Payments,
     int PendingAlertCount,
     DateTimeOffset CreatedAt,
-    AuthorDto CreatedBy,
+    AuthorDto? CreatedBy,
     DateTimeOffset UpdatedAt) : IVersionedDto, IHasResourceId
 {
     Guid IHasResourceId.ResourceId => Id;
@@ -155,9 +208,10 @@ public sealed record OrderDto(
 public sealed record OrderSummaryDto(
     Guid Id,
     int Version,
-    int OrderNumber,
+    int? OrderNumber,
     DateOnly BusinessDate,
     OrderType OrderType,
+    OrderOrigin Origin,
     FulfillmentType FulfillmentType,
     string? CustomerName,
     string? TableLabel,
@@ -168,6 +222,10 @@ public sealed record OrderSummaryDto(
     bool IsPaid,
     ProductionStatus? ProductionStatus,
     CancellationStatus CancellationStatus,
+    AcceptanceStatus AcceptanceStatus,
+    DateTimeOffset? AcceptanceDeadline,
+    FulfillmentStatus? FulfillmentStatus,
+    bool IsReadyForPickup,
     int ItemCount,
     int PendingAlertCount,
     DateTimeOffset CreatedAt) : IVersionedDto;
@@ -244,9 +302,27 @@ public sealed record CancelOrderCommand(Guid OrderId, CancelOrderRequest Request
 
 public sealed record GetOrderQuery(Guid OrderId);
 
+// ---------- Aceite, recusa e atendimento (ADR-0046) ----------
+
+/// `estimatedReadyMinutes`: 15, 30, 45 ou 60, ou nulo.
+public sealed record AcceptOrderRequest(int? EstimatedReadyMinutes);
+
+public sealed record AcceptOrderCommand(Guid OrderId, AcceptOrderRequest Request);
+
+/// `message`: 5 a 200 caracteres; obrigatória em `OTHER`. O cliente vê a mensagem (exceto em `SUSPECTED_PRANK`).
+public sealed record RejectOrderRequest(RejectionReason ReasonCode, string? Message);
+
+public sealed record RejectOrderCommand(Guid OrderId, RejectOrderRequest Request);
+
+/// `completeProduction: true` conclui a produção na mesma operação ("Concluir e marcar"), e exige `production.update`.
+public sealed record ChangeFulfillmentRequest(FulfillmentStatus FulfillmentStatus, bool CompleteProduction);
+
+public sealed record ChangeFulfillmentCommand(Guid OrderId, ChangeFulfillmentRequest Request);
+
 public sealed record ListOrdersQuery(
     Guid? BusinessDayId,
     bool AllDays,
+    AcceptanceStatus AcceptanceStatus,
     OrderType? OrderType,
     bool? IsPaid,
     CancellationStatus? CancellationStatus,
@@ -284,11 +360,14 @@ public sealed record ProductionOrderDto(
     int Version,
     int OrderNumber,
     OrderType OrderType,
+    OrderOrigin Origin,
     FulfillmentType FulfillmentType,
+    FulfillmentStatus? FulfillmentStatus,
     string? Label,
     string? Notes,
     bool IsPaid,
     DateTimeOffset CreatedAt,
+    DateTimeOffset AcceptedAt,
     IReadOnlyList<ProductionItemDto> Items,
     int PendingAlertCount);
 
@@ -376,14 +455,14 @@ public interface IOrderPaymentsReader
 /// O `order` resumido das respostas de pagamento e estorno (06 §6.10).
 public sealed record OrderBalanceDto(Guid Id, int Version, Money TotalAmount, Money PaidAmount, Money Balance, bool IsPaid);
 
-/// Pedido como o Payments precisa para validar um pagamento.
+/// Pedido como o Payments precisa para validar um pagamento. Só pedido aceito recebe pagamento (ADR-0046 item 4).
 public sealed record OrderPaymentSnapshot(Guid Id, int Version, int OrderNumber, Money TotalAmount, Money PaidAmount, Money Balance, bool IsCanceled);
 
 /// Para o Payments (07 §7.8). Trabalha no mesmo AppDbContext e transação: o pedido carregado aqui é o mesmo
 /// agregado rastreado que `Apply`/`Undo` alteram, e o token de versão protege contra edição concorrente.
 public interface IOrderPaymentPort
 {
-    /// NotFound, `VersionConflict` (If-Match = versão do pedido) e `OrderCanceled`.
+    /// NotFound, `VersionConflict` (If-Match = versão do pedido), `OrderNotAccepted` e `OrderCanceled`.
     Task<OrderPaymentSnapshot> LoadForPaymentAsync(Guid orderId, int expectedVersion, CancellationToken cancellationToken);
 
     /// `PaymentExceedsBalance` (com `balance`).

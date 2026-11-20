@@ -249,7 +249,7 @@ internal sealed class GetCustomerPendingOrdersQueryHandler(AppDbContext db)
             .Select(o => new { o.Id, o.OrderNumber, o.BusinessDate, o.OrderType, o.TotalAmount, o.PaidAmount, o.Version })
             .ToListAsync(cancellationToken);
 
-        var items = orders.Select(o => new PendingOrderDto(o.Id, o.OrderNumber, o.BusinessDate, o.OrderType, o.TotalAmount, o.PaidAmount, o.TotalAmount - o.PaidAmount, o.Version)).ToList();
+        var items = orders.Select(o => new PendingOrderDto(o.Id, o.OrderNumber!.Value, o.BusinessDate, o.OrderType, o.TotalAmount, o.PaidAmount, o.TotalAmount - o.PaidAmount, o.Version)).ToList();
         return new CustomerPendingOrdersDto(customer, Money.Sum(items.Select(i => i.Balance)), items);
     }
 }
@@ -258,7 +258,9 @@ internal sealed class GetCustomerPendingOrdersQueryHandler(AppDbContext db)
 internal sealed class CustomerDtoBuilder(AppDbContext db)
 {
     public static IQueryable<Order> Pending(AppDbContext db) =>
-        db.Set<Order>().AsNoTracking().Where(o => !o.IsPaid && o.CancellationStatus == CancellationStatus.Active);
+        // Pedido do site não aceito nunca é fiado (ADR-0046 item 4, RN-206.9).
+        db.Set<Order>().AsNoTracking()
+            .Where(o => o.AcceptanceStatus == AcceptanceStatus.Accepted && !o.IsPaid && o.CancellationStatus == CancellationStatus.Active);
 
     public async Task<CustomerDto> BuildAsync(Customer customer, CancellationToken cancellationToken) =>
         (await BuildManyAsync([customer], cancellationToken))[0];

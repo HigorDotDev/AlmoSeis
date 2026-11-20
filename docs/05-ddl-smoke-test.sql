@@ -32,9 +32,11 @@ RETURNING last_order_number AS order_number_1;
 
 INSERT INTO orders (id, tenant_id, business_day_id, business_date, order_number, order_type, origin, fulfillment_type,
                     customer_name, items_total, weighings_total, total_amount, production_status,
+                    accepted_at, fulfillment_status, fulfillment_status_changed_at,
                     created_by_employee_id, created_at, updated_at)
 VALUES ('aaaaaaaa-0000-0000-0000-000000000c01', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-10-27', 1,
-        'MARMITA', 'APP', 'PICKUP', 'Joao', 25.00, 0, 25.00, 'OPEN', 'aaaaaaaa-0000-0000-0000-0000000000e1', now(), now());
+        'MARMITA', 'APP', 'PICKUP', 'Joao', 25.00, 0, 25.00, 'OPEN', now(), 'PENDING', now(),
+        'aaaaaaaa-0000-0000-0000-0000000000e1', now(), now());
 INSERT INTO order_items (id, tenant_id, order_id, item_kind, marmita_size_id, quantity, unit_price, line_total, name_snapshot,
                          requires_preparation, status, created_by_employee_id, created_at)
 VALUES ('aaaaaaaa-0000-0000-0000-000000000101', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c01', 'MARMITA',
@@ -52,9 +54,9 @@ UPDATE orders SET paid_amount = 25.00, is_paid = true, version = version + 1 WHE
 
 -- Pedido de quilo com pesagens (arredondamento AwayFromZero)
 INSERT INTO orders (id, tenant_id, business_day_id, business_date, order_number, order_type, origin, fulfillment_type,
-                    items_total, weighings_total, total_amount, created_by_employee_id, created_at, updated_at)
+                    items_total, weighings_total, total_amount, accepted_at, created_by_employee_id, created_at, updated_at)
 VALUES ('aaaaaaaa-0000-0000-0000-000000000c02', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-10-27', 2,
-        'KILO', 'APP', 'DINE_IN', 0, 27.07, 27.07, 'aaaaaaaa-0000-0000-0000-0000000000e1', now(), now());
+        'KILO', 'APP', 'DINE_IN', 0, 27.07, 27.07, now(), 'aaaaaaaa-0000-0000-0000-0000000000e1', now(), now());
 INSERT INTO weighing_entries (id, tenant_id, order_id, weight_grams, price_per_kg, amount, status, created_by_employee_id, created_at)
 VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c02', 452, 59.90, 27.07, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
 -- 250 g x 1,42 = 0,355 -> 0,36 (metade para longe do zero)
@@ -180,6 +182,85 @@ DO $$ BEGIN
   RAISE EXCEPTION 'FALHOU: auditoria alterada';
 EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'ok: auditoria append-only'; END $$;
 
+-- ===== Pedido da página: aceite e atendimento (ADR-0046, migration 0003) =====
+INSERT INTO orders (id, tenant_id, business_day_id, business_date, order_number, order_type, origin, fulfillment_type,
+                    customer_name, items_total, weighings_total, total_amount, acceptance_status, acceptance_deadline,
+                    created_by_employee_id, created_at, updated_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000c03', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-10-27', NULL,
+        'MARMITA', 'WEB', 'PICKUP', 'Carla', 20.00, 0, 20.00, 'AWAITING_ACCEPTANCE', now() + interval '10 minutes', NULL, now(), now()),
+       ('aaaaaaaa-0000-0000-0000-000000000c04', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-10-27', NULL,
+        'MARMITA', 'WEB', 'PICKUP', 'Davi', 20.00, 0, 20.00, 'AWAITING_ACCEPTANCE', now() + interval '10 minutes', NULL, now(), now());
+-- Item montado pelo cliente: sem funcionário autor
+INSERT INTO order_items (id, tenant_id, order_id, item_kind, marmita_size_id, quantity, unit_price, line_total, name_snapshot,
+                         requires_preparation, status, created_by_employee_id, created_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000103', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c03', 'MARMITA',
+        'aaaaaaaa-0000-0000-0000-0000000000f1', 1, 20.00, 20.00, 'Marmita M', true, 'ACTIVE', NULL, now());
+
+DO $$ BEGIN
+  IF (SELECT count(*) FROM orders WHERE business_date = '2026-10-27' AND order_number IS NULL) <> 2 THEN
+    RAISE EXCEPTION 'FALHOU: pedidos aguardando aceite nao gravados';
+  END IF;
+  RAISE NOTICE 'ok: pedidos do site aguardando aceite, sem numero e sem autor';
+END $$;
+
+DO $$ BEGIN
+  UPDATE orders SET order_number = NULL WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c01';
+  RAISE EXCEPTION 'FALHOU: pedido aceito sem numero aceito';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: pedido aceito exige numero'; END $$;
+
+DO $$ BEGIN
+  UPDATE orders SET order_number = 50, production_status = 'OPEN' WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c03';
+  RAISE EXCEPTION 'FALHOU: pedido nao aceito com numero e producao aceito';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: pedido nao aceito sem numero e fora da producao'; END $$;
+
+DO $$ BEGIN
+  UPDATE orders SET cancellation_status = 'CANCELED', canceled_at = now(), canceled_by_employee_id = 'aaaaaaaa-0000-0000-0000-0000000000e1',
+                    cancellation_reason = 'cliente desistiu' WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c03';
+  RAISE EXCEPTION 'FALHOU: pedido nao aceito cancelado';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: pedido nao aceito nao e cancelado'; END $$;
+
+DO $$ BEGIN
+  UPDATE orders SET acceptance_status = 'REJECTED', rejected_at = now(), rejection_reason_code = 'OTHER',
+                    rejected_by_employee_id = 'aaaaaaaa-0000-0000-0000-0000000000e1' WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c04';
+  RAISE EXCEPTION 'FALHOU: recusa OTHER sem mensagem aceita';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: recusa OTHER exige mensagem'; END $$;
+
+DO $$ BEGIN
+  UPDATE orders SET acceptance_status = 'REJECTED', rejected_at = now(), rejection_reason_code = 'BUSINESS_DAY_CLOSED',
+                    rejected_by_employee_id = 'aaaaaaaa-0000-0000-0000-0000000000e1' WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c04';
+  RAISE EXCEPTION 'FALHOU: recusa do fechamento com funcionario aceita';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: recusa do fechamento e do sistema'; END $$;
+
+DO $$ BEGIN
+  UPDATE orders SET fulfillment_status = 'OUT_FOR_DELIVERY', out_for_delivery_at = now()
+   WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c01';
+  RAISE EXCEPTION 'FALHOU: retirada marcada como saiu para entrega';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: saiu para entrega so em entrega'; END $$;
+
+DO $$ BEGIN
+  INSERT INTO orders (id, tenant_id, business_day_id, business_date, order_number, order_type, origin, fulfillment_type,
+                      items_total, weighings_total, total_amount, accepted_at, created_by_employee_id, created_at, updated_at)
+  VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-10-27', 98,
+          'KILO', 'APP', 'DINE_IN', 0, 0, 0, now(), NULL, now(), now());
+  RAISE EXCEPTION 'FALHOU: pedido do app sem autor aceito';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: pedido do app exige autor'; END $$;
+
+-- Aceite e recusa válidos: número no aceite (a sequência segue a data operacional), recusa com motivo
+UPDATE orders SET acceptance_status = 'ACCEPTED', order_number = 3, accepted_at = now(),
+                  accepted_by_employee_id = 'aaaaaaaa-0000-0000-0000-0000000000e1', estimated_ready_minutes = 30,
+                  production_status = 'OPEN', production_status_changed_at = now(),
+                  fulfillment_status = 'PENDING', fulfillment_status_changed_at = now(), version = version + 1
+ WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c03';
+UPDATE orders SET acceptance_status = 'REJECTED', rejected_at = now(), rejection_reason_code = 'ITEM_UNAVAILABLE',
+                  rejection_message = 'A costela acabou', rejected_by_employee_id = 'aaaaaaaa-0000-0000-0000-0000000000e1', version = version + 1
+ WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c04';
+DO $$ BEGIN
+  IF (SELECT count(*) FROM orders WHERE acceptance_status = 'ACCEPTED' AND order_number IS NOT NULL) <> 3 THEN
+    RAISE EXCEPTION 'FALHOU: aceite nao gravado';
+  END IF;
+  RAISE NOTICE 'ok: aceite e recusa coerentes';
+END $$;
+
 -- ===== Tenant B =====
 SELECT set_config('app.tenant_id', 'bbbbbbbb-0000-0000-0000-000000000002', false),
        set_config('app.user_id',   'bbbbbbbb-0000-0000-0000-0000000000b2', false);
@@ -208,9 +289,10 @@ END $$;
 
 DO $$ BEGIN
   INSERT INTO orders (id, tenant_id, business_day_id, business_date, order_number, order_type, origin, fulfillment_type,
-                      customer_name, items_total, weighings_total, total_amount, production_status, created_by_employee_id, created_at, updated_at)
+                      customer_name, items_total, weighings_total, total_amount, production_status,
+                      accepted_at, fulfillment_status, fulfillment_status_changed_at, created_by_employee_id, created_at, updated_at)
   VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-10-27', 99,
-          'MARMITA', 'APP', 'PICKUP', 'x', 1, 0, 1, 'OPEN', 'aaaaaaaa-0000-0000-0000-0000000000e1', now(), now());
+          'MARMITA', 'APP', 'PICKUP', 'x', 1, 0, 1, 'OPEN', now(), 'PENDING', now(), 'aaaaaaaa-0000-0000-0000-0000000000e1', now(), now());
   RAISE EXCEPTION 'FALHOU: tenant B gravou com tenant_id de A';
 EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'ok: WITH CHECK impede gravar em outro tenant'; END $$;
 
