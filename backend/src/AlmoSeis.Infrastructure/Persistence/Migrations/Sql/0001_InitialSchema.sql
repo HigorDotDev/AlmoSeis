@@ -1,4 +1,4 @@
--- GERADO por backend/tools/Sync-DdlMigration.ps1 a partir de docs/05-ddl.md. NÃƒO EDITE Ã€ MÃƒO.
+-- GERADO por backend/tools/Sync-DdlMigration.ps1 a partir de docs/05-ddl.md. NÃO EDITE À MÃO.
 CREATE OR REPLACE FUNCTION app_tenant_id() RETURNS uuid
   LANGUAGE sql STABLE
   AS $$ SELECT NULLIF(current_setting('app.tenant_id', true), '')::uuid $$;

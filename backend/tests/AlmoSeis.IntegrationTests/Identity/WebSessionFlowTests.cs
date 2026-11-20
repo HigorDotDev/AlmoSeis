@@ -196,6 +196,185 @@ public sealed class WebSessionFlowTests(PostgresFixture db) : IDisposable
     }
 
     [Fact]
+    public async Task Web_signup_invitation_accept_and_switch_tenant_put_the_refresh_in_the_cookie_and_switch_revokes_the_previous_one()
+    {
+        // Autocadastro pela web.
+        var signup = await Web(HttpMethod.Post, "/api/v1/auth/signup", ApiScenarios.SignUpBody());
+        var owner = await signup.ExpectAsync(HttpStatusCode.Created, _api);
+        owner.GetProperty("tokens").GetProperty("refreshToken").ValueKind.ShouldBe(JsonValueKind.Null);
+        CookieValue(signup, Refresh)!.ShouldStartWith("rt_");
+
+        // Carla já tem o próprio estabelecimento e aceita, pela web, o convite de outro.
+        var email = $"carla.{Guid.NewGuid():N}@example.com";
+        var carlaOwn = await _api.SignUpAsync(ApiScenarios.SignUpBody(email: email));
+        var invitation = await (await _api.Authenticated(owner.AccessToken()).PostAsJsonAsync("/api/v1/employees/invitations", new { roles = new[] { "CASHIER" } }, Ct))
+            .ExpectAsync(HttpStatusCode.Created, _api);
+        var installation = Guid.NewGuid().ToString();
+        var accept = await Web(HttpMethod.Post, $"/api/v1/invitations/{invitation.GetProperty("code").GetString()}/accept", new
+        {
+            newAccount = (object?)null,
+            existingAccount = new { login = email, password = Password },
+            displayName = "Carla",
+            installationId = installation,
+        });
+        var accepted = await accept.ExpectAsync(HttpStatusCode.Created, _api);
+        accepted.GetProperty("tokens").GetProperty("refreshToken").ValueKind.ShouldBe(JsonValueKind.Null);
+        var acceptCookie = CookieValue(accept, Refresh)!;
+        acceptCookie.ShouldStartWith("rt_");
+
+        // Troca para o estabelecimento dela: cookie novo, e o refresh do aceite (mesma instalação) deixa de valer.
+        var switched = await Web(HttpMethod.Post, "/api/v1/auth/switch-tenant", new { tenantId = carlaOwn.TenantId() }, bearer: accepted.AccessToken());
+        var session = await switched.ExpectAsync(HttpStatusCode.OK, _api);
+        session.GetProperty("me").GetProperty("tenant").GetProperty("id").GetString().ShouldBe(carlaOwn.TenantId());
+        session.GetProperty("tokens").GetProperty("refreshToken").ValueKind.ShouldBe(JsonValueKind.Null);
+        var switchCookie = CookieValue(switched, Refresh)!;
+        switchCookie.ShouldNotBe(acceptCookie);
+
+        (await (await Web(HttpMethod.Post, "/api/v1/auth/refresh", new { installationId = installation }, cookie: acceptCookie))
+            .ExpectAsync(HttpStatusCode.Unauthorized, _api)).GetProperty("errorCode").GetString().ShouldBe("InvalidRefreshToken");
+        await (await Web(HttpMethod.Post, "/api/v1/auth/refresh", new { installationId = installation }, cookie: switchCookie)).ExpectAsync(HttpStatusCode.OK, _api);
+    }
+
+    [Fact]
+    public async Task Mobile_switch_tenant_revokes_the_previous_refresh_of_the_installation_only()
+    {
+        var email = $"duda.{Guid.NewGuid():N}@example.com";
+        var own = await _api.SignUpAsync(ApiScenarios.SignUpBody(email: email));
+        var other = await _api.SignUpAsync();
+        var invitation = await (await _api.Authenticated(other.AccessToken()).PostAsJsonAsync("/api/v1/employees/invitations", new { roles = new[] { "ATTENDANT" } }, Ct))
+            .ExpectAsync(HttpStatusCode.Created, _api);
+        var accepted = await (await Send(HttpMethod.Post, $"/api/v1/invitations/{invitation.GetProperty("code").GetString()}/accept", new
+        {
+            newAccount = (object?)null,
+            existingAccount = new { login = email, password = Password },
+            displayName = "Duda",
+            installationId = "inst_duda_phone",
+        }, platform: "ANDROID")).ExpectAsync(HttpStatusCode.Created, _api);
+        var previous = accepted.GetProperty("tokens").GetProperty("refreshToken").GetString()!;
+
+        // Outra instalação da mesma pessoa (o tablet) não é afetada pela troca feita no celular.
+        var tablet = await (await Send(HttpMethod.Post, "/api/v1/auth/login", new { login = email, password = Password, installationId = "inst_duda_tablet" }, platform: "ANDROID"))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+
+        var switched = await (await Send(HttpMethod.Post, "/api/v1/auth/switch-tenant", new { tenantId = own.TenantId() }, platform: "ANDROID", bearer: accepted.AccessToken()))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+        var current = switched.GetProperty("tokens").GetProperty("refreshToken").GetString()!;
+
+        (await (await Send(HttpMethod.Post, "/api/v1/auth/refresh", new { refreshToken = previous, installationId = "inst_duda_phone" }, platform: "ANDROID"))
+            .ExpectAsync(HttpStatusCode.Unauthorized, _api)).GetProperty("errorCode").GetString().ShouldBe("InvalidRefreshToken");
+        var rotated = (await (await Send(HttpMethod.Post, "/api/v1/auth/refresh", new { refreshToken = current, installationId = "inst_duda_phone" }, platform: "ANDROID"))
+            .ExpectAsync(HttpStatusCode.OK, _api)).GetProperty("refreshToken").GetString()!;
+        await (await Send(HttpMethod.Post, "/api/v1/auth/refresh", new
+        {
+            refreshToken = tablet.GetProperty("tokens").GetProperty("refreshToken").GetString(),
+            installationId = "inst_duda_tablet",
+        }, platform: "ANDROID")).ExpectAsync(HttpStatusCode.OK, _api);
+
+        // Vínculo inexistente: 404 e nada é revogado.
+        (await Send(HttpMethod.Post, "/api/v1/auth/switch-tenant", new { tenantId = Guid.NewGuid() }, platform: "ANDROID", bearer: switched.AccessToken()))
+            .StatusCode.ShouldBe(HttpStatusCode.NotFound);
+        await (await Send(HttpMethod.Post, "/api/v1/auth/refresh", new { refreshToken = rotated, installationId = "inst_duda_phone" }, platform: "ANDROID"))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+    }
+
+    [Fact]
+    public async Task Web_shared_device_cookie_of_one_tenant_does_not_open_another_tenant()
+    {
+        var (_, installation, ownerA, secret) = await WebSharedDeviceAsync();
+
+        // Tenant B, com uma pessoa com PIN.
+        var ownerB = await _api.SignUpAsync();
+        (await _api.Authenticated(ownerB.AccessToken()).SendJsonAsync(HttpMethod.Put, "/api/v1/auth/me/pin", new { pin = "4821", currentPassword = Password }))
+            .StatusCode.ShouldBe(HttpStatusCode.NoContent);
+        var employeeB = (await (await _api.Authenticated(ownerB.AccessToken()).GetAsync("/api/v1/auth/me", Ct)).ExpectAsync(HttpStatusCode.OK, _api))
+            .GetProperty("employee").GetProperty("id").GetString()!;
+
+        var list = await Web(HttpMethod.Get, $"/api/v1/auth/shared-device/employees?installationId={installation}", null, deviceSecret: secret, tenantId: ownerB.TenantId());
+        var problem = await list.ExpectAsync(HttpStatusCode.Unauthorized, _api);
+        problem.GetProperty("errorCode").GetString().ShouldBe("InvalidDeviceSecret");
+        problem.TryGetProperty("employees", out _).ShouldBeFalse();
+        problem.TryGetProperty("tenant", out _).ShouldBeFalse();
+
+        var pin = await Web(HttpMethod.Post, "/api/v1/auth/pin-login", new { tenantId = ownerB.TenantId(), installationId = installation, employeeId = employeeB, pin = "4821" }, deviceSecret: secret);
+        (await pin.ExpectAsync(HttpStatusCode.Unauthorized, _api)).GetProperty("errorCode").GetString().ShouldBe("InvalidDeviceSecret");
+        SetCookie(pin, Refresh).ShouldBeNull();
+
+        // O mesmo cookie continua valendo no próprio tenant.
+        await (await Web(HttpMethod.Get, $"/api/v1/auth/shared-device/employees?installationId={installation}", null, deviceSecret: secret, tenantId: ownerA.TenantId()))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+    }
+
+    [Fact]
+    public async Task Web_ignores_the_device_secret_header_and_forgetting_without_web_sets_no_cookie()
+    {
+        var (_, installation, owner, secret) = await WebSharedDeviceAsync();
+        var url = $"/api/v1/auth/shared-device/employees?installationId={installation}";
+
+        // Na web o segredo vem só do cookie: o header sozinho não autentica, e um header errado não atrapalha o cookie.
+        var headerOnly = new HttpRequestMessage(HttpMethod.Get, url);
+        headerOnly.Headers.Add("X-Device-Secret", secret);
+        (await (await WebRequest(headerOnly, tenantId: owner.TenantId())).ExpectAsync(HttpStatusCode.Unauthorized, _api))
+            .GetProperty("errorCode").GetString().ShouldBe("InvalidDeviceSecret");
+        var wrongHeader = new HttpRequestMessage(HttpMethod.Get, url);
+        wrongHeader.Headers.Add("X-Device-Secret", "ds_errado");
+        await (await WebRequest(wrongHeader, tenantId: owner.TenantId(), deviceSecret: secret)).ExpectAsync(HttpStatusCode.OK, _api);
+
+        // O mobile continua pelo header na mesma rota.
+        var mobile = new HttpRequestMessage(HttpMethod.Get, url);
+        mobile.Headers.Add("X-Device-Secret", secret);
+        mobile.Headers.Add("X-Tenant-Id", owner.TenantId());
+        mobile.Headers.Add("X-App-Platform", "ANDROID");
+        (await _api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false }).SendAsync(mobile, Ct)).StatusCode.ShouldBe(HttpStatusCode.OK);
+
+        // DELETE /auth/shared-device sem WEB: 204 sem Set-Cookie.
+        foreach (var platform in new[] { null, "ANDROID" })
+        {
+            var forget = await Send(HttpMethod.Delete, "/api/v1/auth/shared-device", null, platform: platform);
+            forget.StatusCode.ShouldBe(HttpStatusCode.NoContent);
+            forget.Headers.Contains("Set-Cookie").ShouldBeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task Error_responses_of_auth_routes_carry_cors_for_the_app_origin()
+    {
+        var (_, installation, owner, _) = await WebSharedDeviceAsync();
+
+        var responses = new[]
+        {
+            (await Web(HttpMethod.Post, "/api/v1/auth/refresh", new { installationId = installation }), HttpStatusCode.Unauthorized, "InvalidRefreshToken"),
+            (await Web(HttpMethod.Post, "/api/v1/auth/refresh", new { refreshToken = "rt_x", installationId = installation }), HttpStatusCode.UnprocessableEntity, "ValidationFailed"),
+            (await Web(HttpMethod.Get, $"/api/v1/auth/shared-device/employees?installationId={installation}", null, deviceSecret: "ds_errado", tenantId: owner.TenantId()),
+                HttpStatusCode.Unauthorized, "InvalidDeviceSecret"),
+            (await Web(HttpMethod.Post, "/api/v1/auth/login", new { login = "ninguem@example.com", password = "Errada-123", installationId = installation }),
+                HttpStatusCode.Unauthorized, "InvalidCredentials"),
+        };
+
+        foreach (var (response, status, code) in responses)
+        {
+            (await response.ExpectAsync(status, _api)).GetProperty("errorCode").GetString().ShouldBe(code);
+            response.Headers.GetValues("Access-Control-Allow-Origin").Single().ShouldBe(ApiFactory.WebOrigin, code);
+            response.Headers.GetValues("Access-Control-Allow-Credentials").Single().ShouldBe("true", code);
+        }
+    }
+
+    [Fact]
+    public async Task Cors_preflight_does_not_allow_headers_outside_the_contract()
+    {
+        var request = new HttpRequestMessage(HttpMethod.Options, "/api/v1/auth/pin-login");
+        request.Headers.Add("Origin", ApiFactory.WebOrigin);
+        request.Headers.Add("Access-Control-Request-Method", "POST");
+        request.Headers.Add("Access-Control-Request-Headers", "content-type,x-app-platform,x-device-secret,x-requested-with,x-signalr-user-agent");
+        var response = await _api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false }).SendAsync(request, Ct);
+
+        var allowed = response.Headers.TryGetValues("Access-Control-Allow-Headers", out var values) ? string.Join(",", values) : string.Empty;
+        foreach (var header in new[] { "x-device-secret", "x-requested-with", "x-signalr-user-agent" })
+        {
+            allowed.ShouldNotContain(header, Case.Insensitive);
+        }
+    }
+
+    [Fact]
     public async Task Cors_preflight_answers_only_the_configured_origin()
     {
         var allowed = await Preflight(ApiFactory.WebOrigin, "/api/v1/auth/refresh");
@@ -267,6 +446,36 @@ public sealed class WebSessionFlowTests(PostgresFixture db) : IDisposable
         var login = await Web(HttpMethod.Post, "/api/v1/auth/login", new { login = email, password = Password, installationId = installation });
         await login.ExpectAsync(HttpStatusCode.OK, _api);
         return (CookieValue(login, Refresh)!, installation);
+    }
+
+    /// Aparelho compartilhado registrado pela web: devolve o segredo que o navegador guardou no cookie.
+    private async Task<(string Email, string Installation, JsonElement Owner, string Secret)> WebSharedDeviceAsync()
+    {
+        var (email, installation, owner) = await AccountAsync();
+        var bearer = (await (await Web(HttpMethod.Post, "/api/v1/auth/login", new { login = email, password = Password, installationId = installation }))
+            .ExpectAsync(HttpStatusCode.OK, _api)).AccessToken();
+        var register = await Web(HttpMethod.Post, "/api/v1/devices/shared", new { installationId = installation, name = "Balcão", platform = "WEB" }, bearer: bearer);
+        await register.ExpectAsync(HttpStatusCode.Created, _api);
+        return (email, installation, owner, CookieValue(register, DeviceSecret)!);
+    }
+
+    /// Requisição web montada pelo teste (headers extras), com Origin, plataforma e cookie do segredo opcional.
+    private Task<HttpResponseMessage> WebRequest(HttpRequestMessage request, string? tenantId = null, string? deviceSecret = null)
+    {
+        request.Headers.Add("X-App-Version", "1.4.0");
+        request.Headers.Add("X-App-Platform", "WEB");
+        request.Headers.Add("Origin", ApiFactory.WebOrigin);
+        if (tenantId is not null)
+        {
+            request.Headers.Add("X-Tenant-Id", tenantId);
+        }
+
+        if (deviceSecret is not null)
+        {
+            request.Headers.Add("Cookie", $"{DeviceSecret}={deviceSecret}");
+        }
+
+        return _api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false }).SendAsync(request, Ct);
     }
 
     private Task<HttpResponseMessage> Web(

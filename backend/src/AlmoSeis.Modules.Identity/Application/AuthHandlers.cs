@@ -197,12 +197,15 @@ internal sealed class LogoutHandler(AppDbContext db, ISecretHasher hasher, TimeP
     }
 }
 
-/// POST /auth/switch-tenant: novos tokens para outro vínculo ativo do usuário.
+/// POST /auth/switch-tenant: novos tokens para outro vínculo ativo do usuário. A sessão anterior desta instalação sai:
+/// os refresh tokens do usuário nesta instalação são revogados antes de emitir o novo (o app guarda uma sessão por
+/// instalação, e o refresh antigo ficaria válido 30 dias sem dono).
 internal sealed class SwitchTenantHandler(
     AppDbContext db,
     ITenantContext tenant,
     ITenantSession session,
-    AuthSessionIssuer sessions) : ICommandHandler<SwitchTenantCommand, AuthResultDto>
+    AuthSessionIssuer sessions,
+    TimeProvider time) : ICommandHandler<SwitchTenantCommand, AuthResultDto>
 {
     public async Task<AuthResultDto> HandleAsync(SwitchTenantCommand command, CancellationToken cancellationToken)
     {
@@ -211,6 +214,11 @@ internal sealed class SwitchTenantHandler(
 
         var employee = await sessions.FindActiveEmployeeAsync(userId, command.TenantId, cancellationToken)
             ?? throw new NotFoundException("Estabelecimento", command.TenantId);
+
+        var now = time.GetUtcNow();
+        await db.Set<RefreshToken>()
+            .Where(t => t.UserId == userId && t.InstallationId == installationId && t.RevokedAt == null)
+            .ExecuteUpdateAsync(u => u.SetProperty(t => t.RevokedAt, now), cancellationToken);
 
         tenant.SwitchTenant(command.TenantId, employee.Id);
         await session.ApplyAsync(cancellationToken);

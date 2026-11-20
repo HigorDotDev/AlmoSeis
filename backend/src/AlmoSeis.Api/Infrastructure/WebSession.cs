@@ -33,21 +33,41 @@ public static class WebSession
                 : fromBody;
         }
 
+        EnsureAllowedOrigin(request);
         return fromBody is not null
             ? throw BusinessException.Validation("refreshToken", "Na web, o refresh token vem do cookie.")
-            : request.Cookies[RefreshCookie];
+            : ReadCookie(request, RefreshCookie);
     }
 
-    /// Segredo do aparelho: `X-Device-Secret`, ou o cookie na web. `FromCookie` decide se a resposta renova ou apaga o cookie.
+    /// Segredo do aparelho: fora da web, `X-Device-Secret`; na web, **só** o cookie (ADR-0053 §3.8: o segredo fica fora
+    /// do JavaScript), e o header é ignorado. `FromCookie` decide se a resposta renova ou apaga o cookie.
     public static (string? Secret, bool FromCookie) DeviceSecret(HttpRequest request, string? fromHeader)
     {
-        if (!string.IsNullOrEmpty(fromHeader) || !IsWeb(request))
+        if (!IsWeb(request))
         {
             return (fromHeader, false);
         }
 
-        var cookie = request.Cookies[DeviceSecretCookie];
+        var cookie = ReadCookie(request, DeviceSecretCookie);
         return (cookie, !string.IsNullOrEmpty(cookie));
+    }
+
+    /// Anti-CSRF (ADR-0053 §3.4): `X-App-Platform: WEB` sem `Origin` ou com `Origin` fora de `Cors:RestaurantAppOrigins`
+    /// → 403 OriginNotAllowed. Sem `WEB` os cookies não são lidos, então não há o que conferir.
+    public static void EnsureAllowedOrigin(HttpRequest request)
+    {
+        if (IsWeb(request)
+            && !request.HttpContext.RequestServices.GetRequiredService<IOptions<RestaurantAppCorsOptions>>().Value.IsAllowed(request.Headers.Origin.FirstOrDefault()))
+        {
+            throw new BusinessException(ErrorCodes.OriginNotAllowed);
+        }
+    }
+
+    /// Único ponto da API que lê cookie da requisição (regra de arquitetura 8, 07 §7.12): confere o `Origin` antes.
+    private static string? ReadCookie(HttpRequest request, string name)
+    {
+        EnsureAllowedOrigin(request);
+        return request.Cookies[name];
     }
 
     public static void SetRefreshCookie(HttpResponse response, string token, TimeSpan maxAge) =>
@@ -97,22 +117,23 @@ public sealed class RestaurantAppCorsOptions
 
 public static class RestaurantAppCors
 {
-    /// Headers que o app (e o cliente SignalR) enviam; tudo o que não está aqui falha no preflight.
+    /// Headers que o app web envia (ADR-0053 §4.3); tudo o que não está aqui falha no preflight. Sem `X-Device-Secret`:
+    /// na web o segredo vem só do cookie. Sem os headers do cliente SignalR (`X-Requested-With`, `X-SignalR-User-Agent`):
+    /// o app conecta direto por WebSocket (`skipNegotiation`), que não passa por preflight.
     public static readonly string[] AllowedHeaders =
     [
-        "Authorization", "Content-Type", "Idempotency-Key", "If-Match", "X-App-Version", "X-App-Platform", "X-Tenant-Id", "X-Device-Secret",
-        "X-Requested-With", "X-SignalR-User-Agent",
+        "Authorization", "Content-Type", "Idempotency-Key", "If-Match", "X-App-Version", "X-App-Platform", "X-Tenant-Id",
     ];
 
-    /// Sem `ETag` o JavaScript não lê a versão do If-Match (ADR-0034).
+    /// Sem `ETag` o JavaScript não lê a versão do If-Match (ADR-0034); `Idempotent-Replayed` é lido pelo app (ADR-0033).
     public static readonly string[] ExposedHeaders = ["ETag", "Location", "Retry-After", "Idempotent-Replayed"];
 
     public static IServiceCollection AddRestaurantAppCors(this IServiceCollection services)
     {
         services.AddOptions<RestaurantAppCorsOptions>()
             .BindConfiguration(RestaurantAppCorsOptions.Section)
-            .Validate(o => o.NormalizedOrigins.All(x => x != "*" && Uri.TryCreate(x, UriKind.Absolute, out var u) && u.AbsolutePath == "/"),
-                "Cors:RestaurantAppOrigins aceita só origens completas (https://app.exemplo), sem curinga.")
+            .Validate(o => o.NormalizedOrigins.All(IsValidOrigin),
+                "Cors:RestaurantAppOrigins aceita só origens completas em https:// (http:// só para localhost e 127.0.0.1), sem curinga nem caminho.")
             .ValidateOnStart();
 
         services.AddCors();
@@ -129,23 +150,24 @@ public static class RestaurantAppCors
             }));
         return services;
     }
+
+    /// Origem completa (esquema + host + porta opcional, sem caminho, query nem credenciais): `https://`, ou `http://` só
+    /// em `localhost`/`127.0.0.1` (desenvolvimento, qualquer porta).
+    public static bool IsValidOrigin(string origin) =>
+        Uri.TryCreate(origin, UriKind.Absolute, out var uri)
+        && uri.AbsolutePath == "/" && uri.Query.Length == 0 && uri.Fragment.Length == 0 && uri.UserInfo.Length == 0
+        && !origin.EndsWith('/') && !uri.Host.Contains('*', StringComparison.Ordinal)
+        && (uri.Scheme == Uri.UriSchemeHttps
+            || (uri.Scheme == Uri.UriSchemeHttp && (uri.Host == "localhost" || uri.Host == "127.0.0.1")));
 }
 
-/// [WebOriginCheck] nas rotas que leem cookie (anti-CSRF, ADR-0053 §3.4): `X-App-Platform: WEB` sem `Origin` ou com
-/// `Origin` fora da lista → 403 OriginNotAllowed, antes do model binding e de qualquer leitura de cookie. Sem `WEB`
-/// os cookies não são lidos, então não há o que conferir.
+/// [WebOriginCheck] nas rotas que leem ou apagam cookie (anti-CSRF, ADR-0053 §3.4): a mesma checagem de
+/// `WebSession.EnsureAllowedOrigin`, mas antes do model binding e da validação (o 403 vem antes de um 422). A leitura do
+/// cookie confere de novo, então esquecer o atributo não abre a rota.
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class WebOriginCheckAttribute : Attribute, IResourceFilter
 {
-    public void OnResourceExecuting(ResourceExecutingContext context)
-    {
-        var request = context.HttpContext.Request;
-        if (WebSession.IsWeb(request)
-            && !context.HttpContext.RequestServices.GetRequiredService<IOptions<RestaurantAppCorsOptions>>().Value.IsAllowed(request.Headers.Origin.FirstOrDefault()))
-        {
-            throw new BusinessException(ErrorCodes.OriginNotAllowed);
-        }
-    }
+    public void OnResourceExecuting(ResourceExecutingContext context) => WebSession.EnsureAllowedOrigin(context.HttpContext.Request);
 
     public void OnResourceExecuted(ResourceExecutedContext context)
     {

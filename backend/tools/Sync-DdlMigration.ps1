@@ -31,7 +31,7 @@ if ($Target -like '0001_*') {
 } else {
   $name = [IO.Path]::GetFileNameWithoutExtension($Target)
   $match = [regex]::Match($md.Substring($alterationsAt), "(?s)\n### $([regex]::Escape($name))\b(.*?)(?=\n### |\n## |\z)")
-  if (-not $match.Success) { throw "Subseção '### $name' não encontrada em 05 §5.17." }
+  if (-not $match.Success) { throw "Subsecao '### $name' nao encontrada em 05, secao 5.17." }
   $source = $match.Groups[1].Value
 }
 
@@ -39,6 +39,8 @@ $blocks = [regex]::Matches($source, '(?s)```sql\n(.*?)```') |
   ForEach-Object { $_.Groups[1].Value } |
   Where-Object { $_ -notmatch 'CREATE ROLE' }
 
-$header = "-- GERADO por backend/tools/Sync-DdlMigration.ps1 a partir de docs/05-ddl.md. NÃO EDITE À MÃO.`n"
+# Strings fora do ASCII so por escape: o Windows PowerShell 5.1 le este .ps1 (sem BOM) como ANSI e gravava o cabecalho com mojibake.
+$a = [char]0x00C3; $aGrave = [char]0x00C0
+$header = "-- GERADO por backend/tools/Sync-DdlMigration.ps1 a partir de docs/05-ddl.md. N${a}O EDITE ${aGrave} M${a}O.`n"
 [IO.File]::WriteAllText($out, $header + ($blocks -join "`n"), (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "Gerado $out ($($blocks.Count) blocos)"

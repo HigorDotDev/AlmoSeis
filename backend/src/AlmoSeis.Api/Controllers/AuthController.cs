@@ -122,7 +122,7 @@ public sealed class AuthController : ControllerBase
         CancellationToken cancellationToken) =>
         Unwrap(await handler.HandleAsync(command, cancellationToken));
 
-    /// Na web, sem `X-Device-Secret`, o segredo vem do cookie: o sucesso o reemite (renova a validade) e o
+    /// Na web, o segredo vem só do cookie (`X-Device-Secret` é ignorado): o sucesso o reemite (renova a validade) e o
     /// `InvalidDeviceSecret` o apaga.
     [HttpPost("pin-login")]
     [AllowAnonymous]
@@ -185,12 +185,17 @@ public sealed class AuthController : ControllerBase
     }
 
     /// "Deixar de usar como compartilhado" no navegador: só apaga o cookie do segredo. Revogar é `POST /devices/shared/{id}/revoke`.
+    /// Sem `X-App-Platform: WEB` não há cookie a apagar: `204` sem `Set-Cookie` (06 §6.3).
     [HttpDelete("shared-device")]
     [AllowAnonymous]
     [WebOriginCheck]
     public IActionResult ForgetSharedDevice()
     {
-        WebSession.ClearCookie(Response, WebSession.DeviceSecretCookie);
+        if (WebSession.IsWeb(Request))
+        {
+            WebSession.ClearCookie(Response, WebSession.DeviceSecretCookie);
+        }
+
         return NoContent();
     }
 

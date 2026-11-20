@@ -34,6 +34,7 @@ builder.Services.AddScoped<ValidationFilter>();
 builder.Services.AddScoped<SubscriptionWriteGuardFilter>();
 builder.Services.AddSingleton<WebSessionCookieFilter>();
 builder.Services.AddRestaurantAppCors();
+builder.Services.AddAlmoSeisForwardedHeaders();
 builder.Services
     .AddControllers(o =>
     {
@@ -56,6 +57,8 @@ builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tag
 
 var app = builder.Build();
 
+// Primeiro: o IP e o esquema reais (proxy confiável de ForwardedHeaders) valem para o log de erro, o HSTS e o rate limit.
+app.UseForwardedHeaders();
 app.UseExceptionHandler();
 if (!app.Environment.IsDevelopment())
 {

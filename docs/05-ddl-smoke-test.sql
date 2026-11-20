@@ -63,8 +63,17 @@ VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-000
 
 INSERT INTO shared_devices (id, tenant_id, installation_id, name, platform, secret_hash, registered_by_employee_id, registered_at)
 VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'inst_tablet', 'Tablet cozinha', 'ANDROID', repeat('a', 64), 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+-- App no navegador (ADR-0053, migration 0002)
+INSERT INTO shared_devices (id, tenant_id, installation_id, name, platform, secret_hash, registered_by_employee_id, registered_at)
+VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', '3f0c9a6e-1b2d-4c5e-8f7a-9b0c1d2e3f4a', 'Balcao', 'WEB', repeat('b', 64), 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
 
 -- ===== Falhas esperadas (tenant A) =====
+DO $$ BEGIN
+  INSERT INTO shared_devices (id, tenant_id, installation_id, name, platform, secret_hash, registered_by_employee_id, registered_at)
+  VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'inst_desktop', 'PC', 'WINDOWS', repeat('c', 64), 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+  RAISE EXCEPTION 'FALHOU: plataforma de aparelho desconhecida aceita';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: plataforma do aparelho em ANDROID, IOS ou WEB'; END $$;
+
 DO $$ BEGIN
   INSERT INTO weighing_entries (id, tenant_id, order_id, weight_grams, price_per_kg, amount, status, created_by_employee_id, created_at)
   VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c02', 250, 1.42, 0.35, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());

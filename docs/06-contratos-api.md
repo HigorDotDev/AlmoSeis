@@ -278,6 +278,8 @@ Erros: `409 EmailAlreadyRegistered`, `409 PhoneAlreadyRegistered`, `409 TrialAlr
 
 → `200` `{ "tokens": {...}, "me": {...} }`. Um tenant em que o usuário não tem vínculo ativo responde `404 NotFound`.
 
+- A sessão anterior **desta instalação** sai: os refresh tokens do usuário com o `installationId` do access token são revogados antes de emitir os novos (o app guarda uma sessão por instalação). Outras instalações do mesmo usuário não mudam. O access token antigo vale até expirar (15 min). No `404`, nada é revogado.
+
 ### `GET /auth/me` → `200` `Me`
 
 ### `PUT /auth/me/pin` — define ou troca o próprio PIN
@@ -402,7 +404,7 @@ Lista quem pode entrar por PIN (funcionários ativos com PIN definido):
 }
 ```
 
-→ `200` `{ "tokens": {...}, "me": {...} }` (com `me.sharedDevice` preenchido). Erros: `401 InvalidDeviceSecret`, `401 InvalidCredentials` (extensão `attemptsLeft`), `423 PinLocked` (extensão `lockedUntil`). Na web, o segredo vem do cookie quando não há `X-Device-Secret` ("App no navegador").
+→ `200` `{ "tokens": {...}, "me": {...} }` (com `me.sharedDevice` preenchido). Erros: `401 InvalidDeviceSecret`, `401 InvalidCredentials` (extensão `attemptsLeft`), `423 PinLocked` (extensão `lockedUntil`). Na web, o segredo vem **só** do cookie, e `X-Device-Secret` é ignorado ("App no navegador").
 
 ### App no navegador — `X-App-Platform: WEB` (ADR-0053)
 
@@ -451,7 +453,7 @@ Content-Type: application/json
 
 O `installationId` da web é um UUID gerado pelo navegador e guardado em `localStorage` (não é segredo, ADR-0053 §3.7). O app chama a API com `credentials: 'include'`.
 
-**Anti-CSRF.** Nas rotas que leem cookie (`POST /auth/refresh`, `POST /auth/logout`, `POST /auth/pin-login`, `GET /auth/shared-device/employees`, `DELETE /auth/shared-device`), uma requisição `X-App-Platform: WEB` sem `Origin`, ou com `Origin` fora de `Cors:RestaurantAppOrigins`, recebe `403 OriginNotAllowed` antes de qualquer leitura do cookie. Sem `X-App-Platform: WEB`, o cookie não é lido (a requisição segue o fluxo do mobile e precisa do refresh no corpo ou do `X-Device-Secret`), então o header é, na prática, obrigatório para usar o cookie. Como é um header customizado, ele força o *preflight* do CORS, que falha para qualquer origem fora da lista.
+**Anti-CSRF.** Nas rotas que leem cookie (`POST /auth/refresh`, `POST /auth/logout`, `POST /auth/pin-login`, `GET /auth/shared-device/employees`, `DELETE /auth/shared-device`), uma requisição `X-App-Platform: WEB` sem `Origin`, ou com `Origin` fora de `Cors:RestaurantAppOrigins`, recebe `403 OriginNotAllowed` antes de qualquer leitura do cookie (a conferência acontece antes do corpo ser validado e, de novo, no ponto único em que a API lê cookie). Sem `X-App-Platform: WEB`, o cookie não é lido (a requisição segue o fluxo do mobile e precisa do refresh no corpo ou do `X-Device-Secret`), então o header é, na prática, obrigatório para usar o cookie. Como é um header customizado, ele força o *preflight* do CORS, que falha para qualquer origem fora da lista.
 
 ```json
 {
@@ -494,9 +496,9 @@ Corpo `{}` ou vazio. → `204` + `Set-Cookie: __Secure-almoseis-rt=; expires=Thu
 #### Aparelho compartilhado na web
 
 1. `POST /devices/shared` (`devices.manage`) com `X-App-Platform: WEB` e `"platform": "WEB"` → `201` com `"deviceSecret": null` e `Set-Cookie: __Secure-almoseis-ds=ds_Hk29sLq0Pz7mVx3Nc8Bt1Rw6Yf4Ju5Ea; max-age=34560000; path=/api/v1/auth; secure; samesite=strict; httponly`.
-2. `GET /auth/shared-device/employees?installationId={installationId}` — público + `X-Tenant-Id` + `X-App-Platform: WEB` + cookie `__Secure-almoseis-ds`. Mesma resposta, mesmos erros e mesmo limite (ADR-0041, 30/min por instalação) de `GET /devices/shared/{installationId}/employees`. O `installationId` vai na query (não é segredo); o segredo vem do `X-Device-Secret`, se enviado, ou do cookie. Sem `installationId` → `422` com `errors.installationId`.
-3. `POST /auth/pin-login`: mesmo corpo. Na web, sem `X-Device-Secret`, o segredo vem do cookie. Sucesso pelo cookie reemite o cookie com o mesmo valor (renova os 400 dias).
-4. `DELETE /auth/shared-device` — público + `X-App-Platform: WEB` → `204` + `Set-Cookie: __Secure-almoseis-ds=; expires=Thu, 01 Jan 1970 00:00:00 GMT; max-age=0; path=/api/v1/auth; secure; samesite=strict; httponly`. É o "Deixar de usar como compartilhado" do navegador: só apaga o cookie. A revogação no servidor continua sendo `POST /devices/shared/{id}/revoke`.
+2. `GET /auth/shared-device/employees?installationId={installationId}` — público + `X-Tenant-Id` + `X-App-Platform: WEB` + cookie `__Secure-almoseis-ds`. Mesma resposta, mesmos erros e mesmo limite (ADR-0041, 30/min por instalação) de `GET /devices/shared/{installationId}/employees`. O `installationId` vai na query (não é segredo); na web o segredo vem só do cookie (`X-Device-Secret` é ignorado, e o CORS nem o permite). Sem `X-App-Platform: WEB`, a rota aceita o `X-Device-Secret` como a do mobile. O `X-Tenant-Id` de outro estabelecimento responde `401 InvalidDeviceSecret`, sem listar ninguém. Sem `installationId` → `422` com `errors.installationId`.
+3. `POST /auth/pin-login`: mesmo corpo. Na web, o segredo vem só do cookie (`X-Device-Secret` é ignorado). Sucesso pelo cookie reemite o cookie com o mesmo valor (renova os 400 dias).
+4. `DELETE /auth/shared-device` — público + `X-App-Platform: WEB` → `204` + `Set-Cookie: __Secure-almoseis-ds=; expires=Thu, 01 Jan 1970 00:00:00 GMT; max-age=0; path=/api/v1/auth; secure; samesite=strict; httponly`. É o "Deixar de usar como compartilhado" do navegador: só apaga o cookie. A revogação no servidor continua sendo `POST /devices/shared/{id}/revoke`. Sem `X-App-Platform: WEB` não há cookie a apagar: `204` sem `Set-Cookie`.
 
 `401 InvalidDeviceSecret` numa rota que leu o segredo do cookie (aparelho revogado ou registrado de novo) também apaga o cookie.
 
@@ -504,10 +506,10 @@ Corpo `{}` ou vazio. → `204` + `Set-Cookie: __Secure-almoseis-rt=; expires=Thu
 
 | Item | Valor |
 |---|---|
-| Origens | `Cors:RestaurantAppOrigins` (lista por ambiente, sem curinga; a barra final é ignorada). Development: `http://localhost:8082`; homolog: `https://app-homolog.almoseis.app`; produção: `https://app.almoseis.app`. Lista vazia ou ausente → nenhuma origem recebe CORS. `*` na lista impede a API de subir |
+| Origens | `Cors:RestaurantAppOrigins` (lista por ambiente, sem curinga; a barra final é ignorada). Development: `http://localhost:8082`; homolog: `https://app-homolog.almoseis.app`; produção: `https://app.almoseis.app`. Lista vazia ou ausente → nenhuma origem recebe CORS. Cada origem é `https://host[:porta]`; `http://` só para `localhost` e `127.0.0.1` (qualquer porta). `*`, caminho, query ou `http://` em outro host impedem a API de subir |
 | Credenciais | `Access-Control-Allow-Credentials: true` |
 | Métodos | `GET`, `POST`, `PUT`, `PATCH`, `DELETE` |
-| Headers permitidos | `Authorization`, `Content-Type`, `Idempotency-Key`, `If-Match`, `X-App-Version`, `X-App-Platform`, `X-Tenant-Id`, `X-Device-Secret`, e os do cliente SignalR (`X-Requested-With`, `X-SignalR-User-Agent`) |
+| Headers permitidos | `Authorization`, `Content-Type`, `Idempotency-Key`, `If-Match`, `X-App-Version`, `X-App-Platform`, `X-Tenant-Id`. Sem `X-Device-Secret` (na web o segredo vem só do cookie) e sem os headers do *negotiate* do SignalR (`X-Requested-With`, `X-SignalR-User-Agent`): o app web conecta direto por WebSocket (`skipNegotiation`), que não tem *preflight* |
 | Headers expostos | `ETag`, `Location`, `Retry-After`, `Idempotent-Replayed` |
 | `Access-Control-Max-Age` | `600` |
 | Rotas | todas (`/api/v1/*` e `/hubs/realtime`, inclusive o `negotiate`). Erros (`401`, `403`, `426`…) também levam os headers de CORS, para o app ler o `ProblemDetails` |

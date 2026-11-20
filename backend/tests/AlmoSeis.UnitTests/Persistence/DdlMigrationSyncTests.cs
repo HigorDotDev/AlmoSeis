@@ -36,6 +36,19 @@ public sealed partial class DdlMigrationSyncTests
         }
     }
 
+    /// O cabeçalho sai em UTF-8 correto (o Windows PowerShell 5.1 lia o script sem BOM como ANSI: "NÃƒO EDITE").
+    [Fact]
+    public void Every_script_starts_with_the_generated_header()
+    {
+        var names = AlterationHeading().Matches(Doc[AlterationsAt..]).Select(m => m.Groups["name"].Value + ".sql").Prepend("0001_InitialSchema.sql");
+
+        foreach (var name in names)
+        {
+            var firstLine = EmbeddedSql.Read(name).ReplaceLineEndings("\n").Split('\n')[0];
+            firstLine.ShouldBe("-- GERADO por backend/tools/Sync-DdlMigration.ps1 a partir de docs/05-ddl.md. NÃO EDITE À MÃO.", name);
+        }
+    }
+
     private static IEnumerable<string> SqlBlocks(string markdown) =>
         Regex.Matches(markdown, "(?s)```sql\n(.*?)```").Select(m => m.Groups[1].Value);
 

@@ -113,17 +113,68 @@ public sealed class ArchitectureRulesTests
         offenders.ShouldBeEmpty();
     }
 
+    /// ADR-0053 §3.4: cookie de sessão só é lido depois da checagem de `Origin`. A API inteira lê cookie da requisição
+    /// num único lugar, `WebSession.ReadCookie`, que chama `EnsureAllowedOrigin` antes; qualquer outra leitura
+    /// (`Request.Cookies`, header `Cookie`) numa ação, filtro ou middleware falha aqui. Escrever cookie
+    /// (`Response.Cookies.Append/Delete`) é livre.
+    [Fact]
+    public void Rule8_request_cookies_are_read_only_through_the_origin_checked_helper()
+    {
+        var src = FindRepoDirectory("backend", "src");
+        var read = new Regex(@"\.Cookies\b(?!\s*\.\s*(Append|Delete)\b)|\bHeaders\s*\.\s*Cookie\b|\bHeaderNames\s*\.\s*Cookie\b|\[\s*""Cookie""\s*\]|\bIRequestCookieCollection\b|\bRequestCookieCollection\b");
+        var helperFile = Path.Combine("AlmoSeis.Api", "Infrastructure", "WebSession.cs");
+
+        var offenders = new List<string>();
+        foreach (var file in Directory.GetFiles(src, "*.cs", SearchOption.AllDirectories)
+                     .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                         && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)))
+        {
+            var text = File.ReadAllText(file).ReplaceLineEndings("\n");
+            var matches = read.Matches(text);
+            if (matches.Count == 0)
+            {
+                continue;
+            }
+
+            if (!file.EndsWith(helperFile, StringComparison.Ordinal))
+            {
+                offenders.Add($"{Path.GetRelativePath(src, file)}: {string.Join(", ", matches.Select(m => m.Value))}");
+                continue;
+            }
+
+            // No WebSession, toda leitura fica dentro do ReadCookie, e o ReadCookie confere o Origin.
+            var start = text.IndexOf("static string? ReadCookie(", StringComparison.Ordinal);
+            var end = start < 0 ? -1 : text.IndexOf("\n    }\n", start, StringComparison.Ordinal);
+            if (start < 0 || end < 0 || !text[start..end].Contains("EnsureAllowedOrigin(request);", StringComparison.Ordinal))
+            {
+                offenders.Add($"{helperFile}: ReadCookie ausente ou sem EnsureAllowedOrigin");
+                continue;
+            }
+
+            offenders.AddRange(matches.Where(m => m.Index < start || m.Index > end).Select(m => $"{helperFile}: '{m.Value}' fora do ReadCookie"));
+        }
+
+        offenders.ShouldBeEmpty("Leia cookie só por WebSession.RefreshToken/DeviceSecret (ADR-0053 §3.4, 07 §7.12).");
+    }
+
     private static string Failing(NetArchTest.Rules.TestResult result) =>
         result.IsSuccessful ? string.Empty : "Violações: " + string.Join(", ", result.FailingTypeNames ?? []);
 
-    private static string FindRepoDirectory(params string[] parts)
+    /// Sobe a partir da saída do build e, se ela estiver fora do repositório (`--artifacts-path`), a partir deste arquivo-fonte.
+    private static string FindRepoDirectory(params string[] parts) =>
+        FindUp(AppContext.BaseDirectory, parts) ?? FindUp(Path.GetDirectoryName(SourceFile())!, parts)
+        ?? throw new DirectoryNotFoundException(string.Join('/', parts));
+
+    private static string? FindUp(string start, string[] parts)
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        var dir = new DirectoryInfo(start);
         while (dir is not null && !Directory.Exists(Path.Combine([dir.FullName, .. parts])))
         {
             dir = dir.Parent;
         }
 
-        return dir is null ? throw new DirectoryNotFoundException(string.Join('/', parts)) : Path.Combine([dir.FullName, .. parts]);
+        return dir is null ? null : Path.Combine([dir.FullName, .. parts]);
     }
+
+    private static string SourceFile([System.Runtime.CompilerServices.CallerFilePath] string path = "") => path;
 }
