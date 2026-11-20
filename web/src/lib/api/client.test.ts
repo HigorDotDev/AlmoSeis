@@ -123,6 +123,32 @@ describe('cliente da API pública', () => {
     expect(result).toMatchObject({ ok: false, kind: 'problem', status: 410 });
   });
 
+  it('cotação da entrega: POST com o endereço e um token do Turnstile', async () => {
+    const f = fakeFetch(() =>
+      json(201, { quoteId: 'q1', formattedAddress: 'R. das Palmeiras, 45', distanceKm: '4.5', deliveryFee: '3.60', expiresAt: '2026-10-27T12:15:00Z' }),
+    );
+    const address = { street: 'Rua das Palmeiras', number: '45', complement: null, neighborhood: 'Centro', city: null, zipCode: null, reference: null };
+    const result = await createPublicApi({ baseUrl: 'http://api', fetch: f.fn }).quoteDelivery('ana', address, { turnstileToken: 'ts-1' });
+    expect(result).toMatchObject({ ok: true, status: 201, data: { quoteId: 'q1', deliveryFee: '3.60' } });
+    const call = f.calls[0]!;
+    expect(call.url).toBe('http://api/api/v1/public/stores/ana/delivery-quotes');
+    expect(call.init.method).toBe('POST');
+    expect(header(call, 'X-Turnstile-Token')).toBe('ts-1');
+    expect(JSON.parse(call.init.body as string)).toEqual({ address });
+  });
+
+  it('cotação fora da área: Problem Details com distanceKm e maxDistanceKm', async () => {
+    const f = fakeFetch(() => json(422, { errorCode: 'OutOfDeliveryArea', distanceKm: '6.1', maxDistanceKm: '6.0' }));
+    const result = await createPublicApi({ baseUrl: 'http://api', fetch: f.fn }).quoteDelivery(
+      'ana',
+      { street: 'x', number: '1', complement: null, neighborhood: 'y', city: null, zipCode: null, reference: null },
+      { turnstileToken: null },
+    );
+    if (result.ok || result.kind !== 'problem') throw new Error('esperava problem');
+    expect(result.problem).toMatchObject({ errorCode: 'OutOfDeliveryArea', distanceKm: '6.1', maxDistanceKm: '6.0' });
+    expect(header(f.calls[0]!, 'X-Turnstile-Token')).toBeUndefined();
+  });
+
   it('desistência é POST em /withdraw', async () => {
     const f = fakeFetch(() => json(200, { status: 'WITHDRAWN' }));
     await createPublicApi({ baseUrl: 'http://api', fetch: f.fn }).withdraw('tok');

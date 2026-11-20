@@ -57,10 +57,15 @@ export interface PublicPrivacy {
   thirdParties: ThirdParty[];
 }
 
+export type DeliveryFeeMode = 'DISTANCE' | 'FIXED';
+
+/** Regra da taxa (§6.19). DISTANCE: pricePerKm, minimumFee e maxDistanceKm (opcional); FIXED: só fixedFee. */
 export interface PublicDeliveryRule {
-  pricePerKm: Money;
-  minimumFee: Money;
+  feeMode: DeliveryFeeMode;
+  pricePerKm: Money | null;
+  minimumFee: Money | null;
   maxDistanceKm: string | null;
+  fixedFee: Money | null;
 }
 
 export interface PublicStore {
@@ -82,12 +87,13 @@ export interface PublicStore {
 export type FulfillmentType = 'PICKUP' | 'DELIVERY';
 export type ExpectedPaymentMethod = 'CASH' | 'PIX' | 'CARD';
 
+/** Endereço de entrega (cotação e pedido). city nula = a do restaurante; a UF é sempre a do restaurante. */
 export interface DeliveryAddressInput {
   street: string;
   number: string;
   complement: string | null;
   neighborhood: string;
-  city: string;
+  city: string | null;
   zipCode: string | null;
   reference: string | null;
 }
@@ -133,7 +139,8 @@ export interface PlacedWebOrder {
 export interface DeliveryQuote {
   quoteId: string;
   formattedAddress: string;
-  distanceKm: string;
+  /** Nulo no modo FIXED. */
+  distanceKm: string | null;
   deliveryFee: Money;
   expiresAt: string;
 }
@@ -240,4 +247,9 @@ export interface ProblemDetails {
   storeStatus?: StoreStatus;
   acceptanceStatus?: AcceptanceStatus;
   cart?: RecalculatedCart;
+  /** 409 DeliveryQuoteChanged: a cotação nova. */
+  quote?: DeliveryQuote;
+  /** 422 OutOfDeliveryArea (no raio). */
+  distanceKm?: string;
+  maxDistanceKm?: string;
 }

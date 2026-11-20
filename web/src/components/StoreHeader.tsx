@@ -1,10 +1,12 @@
 import type { PublicStore } from '@/lib/api/types';
+import { describeDeliveryRule } from '@/lib/delivery';
 import { formatE164, whatsappLink } from '@/lib/phone';
 import { formatAddress, STORE_STATUS_TEXT } from '@/lib/texts';
 
 export function StoreHeader({ store }: { store: PublicStore }) {
   const address = formatAddress(store.address);
   const phone = formatE164(store.contactPhone);
+  const deliveryRule = describeDeliveryRule(store.deliveryRule);
   return (
     <header className="store-header">
       <h1>{store.name}</h1>
@@ -20,10 +22,8 @@ export function StoreHeader({ store }: { store: PublicStore }) {
       )}
       {store.status === 'OPEN' && (
         <p className="small">
-          {[store.pickupAvailable && 'Retirada no local', store.deliveryAvailable ? 'Entrega' : null]
-            .filter(Boolean)
-            .join(' · ')}
-          {!store.deliveryAvailable && store.pickupAvailable && <span className="muted"> · Entrega em breve</span>}
+          {[store.pickupAvailable && 'Retirada no local', store.deliveryAvailable && 'Entrega'].filter(Boolean).join(' · ')}
+          {store.deliveryAvailable && deliveryRule && <span className="muted"> ({deliveryRule})</span>}
         </p>
       )}
     </header>

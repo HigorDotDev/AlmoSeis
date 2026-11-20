@@ -1,10 +1,24 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
+
+/** Todo o JavaScript do navegador gerado pelo build. */
+function clientJs(): string {
+  const dir = join(root, '.next', 'static', 'chunks');
+  const out: string[] = [];
+  const walk = (d: string) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (e.isDirectory()) walk(join(d, e.name));
+      else if (e.name.endsWith('.js')) out.push(readFileSync(join(d, e.name), 'utf8'));
+    }
+  };
+  walk(dir);
+  return out.join('\n');
+}
 
 describe('next build', () => {
   it('compila a página sem erros e gera as rotas dinâmicas', () => {
@@ -23,5 +37,13 @@ describe('next build', () => {
     expect(manifest).toContain('/[slug]');
     expect(manifest).toContain('/[slug]/carrinho');
     expect(manifest).toContain('/[slug]/pedido/[token]');
+
+    // O navegador fala direto com as rotas públicas (ADR-0051 item 2): envio, cotação da entrega e acompanhamento.
+    const js = clientJs();
+    expect(js).toContain('/delivery-quotes');
+    expect(js).toContain('/orders');
+    expect(js).toContain('/withdraw');
+    // A chave do servidor da página nunca vai para o navegador.
+    expect(js).not.toContain('X-Web-Renderer-Key');
   });
 });

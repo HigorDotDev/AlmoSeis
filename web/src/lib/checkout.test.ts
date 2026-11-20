@@ -157,8 +157,8 @@ describe('interpretação dos erros do envio', () => {
     const outcome = problem(422, { errorCode: 'ValidationFailed', errors: { CustomerPhone: ['Telefone inválido.'], 'items[0].quantity': ['1 a 20.'] } });
     expect(outcome).toMatchObject({ kind: 'fieldErrors', errors: { customerPhone: 'Telefone inválido.', 'items[0].quantity': '1 a 20.' } });
   });
-  it('DeliveryUnavailable e PaymentMethodDisabled caem no campo certo', () => {
-    expect(problem(422, { errorCode: 'DeliveryUnavailable' })).toMatchObject({ errors: { fulfillmentType: expect.any(String) } });
+  it('DeliveryUnavailable e PaymentMethodDisabled caem no lugar certo', () => {
+    expect(problem(422, { errorCode: 'DeliveryUnavailable' })).toMatchObject({ kind: 'deliveryFailed', errors: { deliveryQuoteId: expect.any(String) } });
     expect(problem(422, { errorCode: 'PaymentMethodDisabled' })).toMatchObject({ errors: { expectedPaymentMethod: expect.any(String) } });
   });
   it('rede: pede para reenviar (sem duplicar)', () => {

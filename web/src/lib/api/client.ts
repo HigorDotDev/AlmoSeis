@@ -130,10 +130,17 @@ export function createPublicApi(options: PublicApiOptions) {
       return json<PlacedWebOrder>(`/stores/${enc(slug)}/orders`, { method: 'POST', headers, body: JSON.stringify(body) });
     },
 
-    quoteDelivery(slug: string, address: DeliveryAddressInput): Promise<ApiResult<DeliveryQuote>> {
+    /** Cotação da entrega (ADR-0048). Um token do Turnstile novo por chamada (ADR-0045 item 12). */
+    quoteDelivery(
+      slug: string,
+      address: DeliveryAddressInput,
+      opts: { turnstileToken: string | null },
+    ): Promise<ApiResult<DeliveryQuote>> {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (opts.turnstileToken) headers['X-Turnstile-Token'] = opts.turnstileToken;
       return json<DeliveryQuote>(`/stores/${enc(slug)}/delivery-quotes`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ address }),
       });
     },

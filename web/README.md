@@ -9,7 +9,7 @@ TypeScript, renderizada no servidor para a prévia do link no WhatsApp (ADR-0051
 | Rota | O que faz |
 |---|---|
 | `/{slug}` | Perfil, estado (`OPEN`/`CLOSED`/`PAUSED`/`UNAVAILABLE`) e cardápio do dia; monta marmitas e bebidas. Renderizada no servidor com Open Graph ("Peça na {nome}", cardápio do dia, imagem quando houver). Slug antigo → redireciona para o atual |
-| `/{slug}/carrinho` | Carrinho, dados do cliente, retirada/entrega, forma de pagamento, aviso de privacidade, Turnstile e envio |
+| `/{slug}/carrinho` | Carrinho, dados do cliente, retirada ou entrega (endereço + cotação da taxa por distância), forma de pagamento, aviso de privacidade, Turnstile e envio |
 | `/{slug}/pedido/{token}` | Acompanhamento (ADR-0047): status, linha do tempo, itens, totais; consulta a cada 20 s com `If-None-Match`; "Desistir do pedido". `noindex`, `no-store`, `no-referrer` |
 
 Leituras na renderização: servidor da página → API, com `X-Web-Renderer-Key`. Envio, desistência e acompanhamento:
@@ -37,8 +37,8 @@ expediente aberto e cardápio do dia de marmita publicado.
 | `npm run dev` | servidor de desenvolvimento na porta 3000 |
 | `npm run build` / `npm start` | build de produção / servidor de produção na porta 3000 |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | testes unitários (Vitest): dinheiro, prévia do carrinho, corpo do pedido, erros do envio, cliente da API, máscara do telefone, Open Graph |
-| `npm run test:smoke` | teste de fumaça: roda `next build` e confere as rotas geradas (~1 min) |
+| `npm test` | testes unitários (Vitest): dinheiro, prévia do carrinho, corpo do pedido, erros do envio, entrega (regra, cotação, validade, erros), cliente da API, máscara do telefone, Open Graph |
+| `npm run test:smoke` | teste de fumaça: roda `next build`, confere as rotas geradas, que o JS do navegador chama `/orders`, `/delivery-quotes` e `/withdraw` e que não leva o `X-Web-Renderer-Key` (~1 min) |
 
 ## Variáveis de ambiente
 
@@ -69,6 +69,7 @@ src/
     money.ts        dinheiro em centavos (ADR-0030)
     cart.ts         carrinho, prévia (ADR-0020), validação, CartChanged
     checkout.ts     corpo do POST /orders e interpretação dos erros
+    delivery.ts     entrega: regra da taxa, endereço, validade da cotação, erros da cotação (ADR-0048)
     storage.ts      localStorage/sessionStorage (ADR-0052)
     idempotency.ts  Idempotency-Key por tentativa
 tests/build.smoke.test.ts
@@ -78,12 +79,21 @@ tests/build.smoke.test.ts
 
 - **Idempotência:** a `Idempotency-Key` nasce no primeiro toque em "Enviar pedido" e é reaproveitada enquanto o corpo
   for o mesmo (guardada no `sessionStorage`, sobrevive a recarregar). Corpo mudou (cliente editou, aceitou o
-  `CartChanged`) → chave nova. O token do Turnstile é renovado depois de qualquer erro.
+  `CartChanged` ou a taxa nova do `DeliveryQuoteChanged`) → chave nova. O token do Turnstile é de uso único: cada
+  cotação e cada envio consome um e a página já pede o próximo.
 - **Erros:** `409 CartChanged` mostra o carrinho recalculado e pede "Aceitar as mudanças"; `409 StoreUnavailable`
   recarrega o estado; `403 CaptchaFailed`; `429 TooManyPendingOrders`; `429` com `Retry-After` desabilita o botão
   com contagem; `422 ValidationFailed` aparece no campo (inclusive `items[i].*` na linha do carrinho).
-- **Entrega:** fluxo e endereço implementados atrás de `deliveryAvailable` (hoje sempre `false` até a fatia 4:
-  aparece "Entrega · Em breve" desabilitado). Com entrega ligada, o cliente calcula a cotação antes de enviar.
+- **Entrega (fatia 4, ADR-0048):** aparece quando o perfil traz `deliveryAvailable: true`, com a regra
+  ("R$ 0,80 por km, mínimo R$ 3,00, até 6 km" ou "Taxa fixa de R$ 5,00"). O cliente preenche rua, número,
+  complemento, bairro, cidade (opcional; vazia = a do restaurante), CEP (opcional) e referência e toca em "Calcular
+  taxa de entrega" (`POST /delivery-quotes`, com token novo do Turnstile). A página mostra "Encontramos: …" e
+  "4,5 km · Entrega R$ 3,60", e o total passa a incluir a taxa. Mudar rua, número, bairro, cidade ou CEP, ou
+  passar dos 15 min da cotação (com 30 s de margem), pede uma cotação nova antes de enviar; complemento e referência
+  não. Erros: 422 em `address.*` vai para o campo; `OutOfDeliveryArea` ("Fora da área de entrega", com
+  distância e raio) e `DeliveryUnavailable` oferecem "Retirar no local"; 429 desabilita o botão com contagem.
+  No envio, `409 DeliveryQuoteChanged` mostra a taxa nova e o novo total; "Confirmar e enviar" reenvia com
+  `quote.quoteId` e chave nova assim que houver token. O acompanhamento mostra a taxa e a distância.
 - **Metas (RNF-201):** JavaScript inicial de `/{slug}` medido no build de produção: ~143 KB gzip para navegadores
   modernos (+39 KB do polyfill `nomodule`, que eles não baixam). Sem fontes externas; o único terceiro é o
   Turnstile, carregado só em `/{slug}/carrinho` e só quando o perfil declara `ANTI_BOT`.

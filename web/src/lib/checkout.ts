@@ -4,11 +4,20 @@ import type {
   ExpectedPaymentMethod,
   FulfillmentType,
   PlaceWebOrderRequest,
+  DeliveryQuote,
   RecalculatedCart,
   StoreStatus,
 } from './api/types';
 import { expectedTotal, toOrderItems, type Cart, type CartPreview } from './cart';
-import { parseUserMoney, toApiMoney } from './money';
+import {
+  DELIVERY_UNAVAILABLE_TEXT,
+  normalizeAddressInput,
+  outOfAreaText,
+  toAddressFieldKey,
+  validateAddress,
+  type QuoteState,
+} from './delivery';
+import { formatApiMoney, parseUserMoney, toApiMoney } from './money';
 import { isValidBrazilianPhone } from './phone';
 
 export interface CheckoutForm {
@@ -30,7 +39,7 @@ export const EMPTY_ADDRESS: DeliveryAddressInput = {
   number: '',
   complement: null,
   neighborhood: '',
-  city: '',
+  city: null,
   zipCode: null,
   reference: null,
 };
@@ -38,7 +47,12 @@ export const EMPTY_ADDRESS: DeliveryAddressInput = {
 export type FieldErrors = Partial<Record<string, string>>;
 
 /** Checagem local antes do envio; a API confere de novo (§6.19 checagem 1). */
-export function validateCheckout(form: CheckoutForm, preview: CartPreview, notesMax = 200): FieldErrors {
+export function validateCheckout(
+  form: CheckoutForm,
+  preview: CartPreview,
+  notesMax = 200,
+  quote: QuoteState = form.deliveryQuoteId ? 'valid' : 'none',
+): FieldErrors {
   const errors: FieldErrors = {};
   const name = form.name.trim();
   if (name.length < 2 || name.length > 80) errors.customerName = 'Informe seu nome (2 a 80 letras).';
@@ -51,11 +65,10 @@ export function validateCheckout(form: CheckoutForm, preview: CartPreview, notes
     else if (change < preview.totalCents) errors.changeFor = 'O troco precisa ser para um valor maior ou igual ao total.';
   }
   if (form.fulfillmentType === 'DELIVERY') {
-    if (!form.address.street.trim()) errors['deliveryAddress.street'] = 'Informe a rua.';
-    if (!form.address.number.trim()) errors['deliveryAddress.number'] = 'Informe o número.';
-    if (!form.address.neighborhood.trim()) errors['deliveryAddress.neighborhood'] = 'Informe o bairro.';
-    if (!form.address.city.trim()) errors['deliveryAddress.city'] = 'Informe a cidade.';
-    if (!form.deliveryQuoteId) errors.deliveryQuoteId = 'Calcule a taxa de entrega antes de enviar.';
+    Object.assign(errors, validateAddress(form.address));
+    if (!form.deliveryQuoteId || quote === 'none') errors.deliveryQuoteId = 'Calcule a taxa de entrega antes de enviar.';
+    else if (quote === 'stale') errors.deliveryQuoteId = 'Você mudou o endereço. Calcule a entrega de novo.';
+    else if (quote === 'expired') errors.deliveryQuoteId = 'A cotação da entrega venceu. Calcule de novo.';
   }
   return errors;
 }
@@ -69,17 +82,7 @@ export function buildOrderRequest(form: CheckoutForm, cart: Cart, preview: CartP
     fulfillmentType: form.fulfillmentType,
     customerName: form.name.trim(),
     customerPhone: form.phone.trim(),
-    deliveryAddress: isDelivery
-      ? {
-          street: form.address.street.trim(),
-          number: form.address.number.trim(),
-          complement: blankToNull(form.address.complement),
-          neighborhood: form.address.neighborhood.trim(),
-          city: form.address.city.trim(),
-          zipCode: blankToNull(form.address.zipCode),
-          reference: blankToNull(form.address.reference),
-        }
-      : null,
+    deliveryAddress: isDelivery ? normalizeAddressInput(form.address) : null,
     deliveryQuoteId: isDelivery ? form.deliveryQuoteId : null,
     expectedPaymentMethod: form.paymentMethod ?? 'CASH',
     changeFor: change != null ? toApiMoney(change) : null,
@@ -93,6 +96,10 @@ export function buildOrderRequest(form: CheckoutForm, cart: Cart, preview: CartP
 /** O que a tela faz com cada falha do `POST /orders` (§6.19, tabela de erros). */
 export type SubmitOutcome =
   | { kind: 'cartChanged'; cart: RecalculatedCart; message: string }
+  /** 409 DeliveryQuoteChanged: taxa nova, o cliente confirma e reenvia com `quote.quoteId`. */
+  | { kind: 'quoteChanged'; quote: DeliveryQuote; message: string }
+  /** Entrega impossível agora (fora da área ou provedor fora do ar): oferecer retirada. */
+  | { kind: 'deliveryFailed'; errors: FieldErrors; message: string }
   | { kind: 'fieldErrors'; errors: FieldErrors; message: string }
   | { kind: 'storeUnavailable'; storeStatus: StoreStatus | null; message: string }
   | { kind: 'captcha'; message: string }
@@ -121,6 +128,17 @@ export function interpretSubmitFailure(failure: ApiFailure): SubmitOutcome {
   if (code === 'CartChanged' && problem.cart) {
     return { kind: 'cartChanged', cart: problem.cart, message: problem.title ?? 'Seu pedido mudou. Confira os itens e os valores.' };
   }
+  if (code === 'DeliveryQuoteChanged' && problem.quote) {
+    return {
+      kind: 'quoteChanged',
+      quote: problem.quote,
+      message: problem.detail ?? `A taxa de entrega agora é ${formatApiMoney(problem.quote.deliveryFee)}. Confira e envie de novo.`,
+    };
+  }
+  if (code === 'OutOfDeliveryArea') {
+    const message = outOfAreaText(problem.distanceKm, problem.maxDistanceKm);
+    return { kind: 'deliveryFailed', errors: { deliveryQuoteId: message }, message };
+  }
   if (code === 'StoreUnavailable') {
     const s = problem.storeStatus ?? null;
     const message =
@@ -147,12 +165,12 @@ export function interpretSubmitFailure(failure: ApiFailure): SubmitOutcome {
   if (code === 'ValidationFailed' && problem.errors) {
     const errors: FieldErrors = {};
     for (const [field, messages] of Object.entries(problem.errors)) {
-      errors[normalizeFieldKey(field)] = messages.join(' ');
+      errors[toAddressFieldKey(field) ?? normalizeFieldKey(field)] = messages.join(' ');
     }
     return { kind: 'fieldErrors', errors, message: 'Confira os campos destacados.' };
   }
   if (code === 'DeliveryUnavailable') {
-    return { kind: 'fieldErrors', errors: { fulfillmentType: 'A entrega não está disponível agora. Escolha retirada.' }, message: 'A entrega não está disponível agora.' };
+    return { kind: 'deliveryFailed', errors: { deliveryQuoteId: DELIVERY_UNAVAILABLE_TEXT }, message: DELIVERY_UNAVAILABLE_TEXT };
   }
   if (code === 'PaymentMethodDisabled') {
     return {

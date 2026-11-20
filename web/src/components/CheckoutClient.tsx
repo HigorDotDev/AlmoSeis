@@ -23,6 +23,17 @@ import {
   type FieldErrors,
 } from '@/lib/checkout';
 import { useCart, useLiveStore } from '@/lib/hooks';
+import {
+  addressFingerprint,
+  describeDeliveryRule,
+  describeQuote,
+  interpretQuoteFailure,
+  normalizeAddressInput,
+  quoteState,
+  validateAddress,
+  type QuotedAddress,
+  type QuoteState,
+} from '@/lib/delivery';
 import { keyForAttempt } from '@/lib/idempotency';
 import { formatApiMoney, formatBRL, parseMoney } from '@/lib/money';
 import { maskPhone } from '@/lib/phone';
@@ -79,11 +90,17 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
   const [message, setMessage] = useState<{ tone: 'danger' | 'warning' | 'success'; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [cartChanged, setCartChanged] = useState<RecalculatedCart | null>(null);
+  const [quoteChanged, setQuoteChanged] = useState<DeliveryQuote | null>(null);
   const [retryUntil, setRetryUntil] = useState<number | null>(null);
+  const [quoteRetryUntil, setQuoteRetryUntil] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
-  const [quote, setQuote] = useState<DeliveryQuote | null>(null);
+  const [quoted, setQuoted] = useState<QuotedAddress | null>(null);
   const [quoting, setQuoting] = useState(false);
+  /** Entrega impossível agora (fora da área, provedor fora do ar): mostra o atalho "Retirar no local". */
+  const [offerPickup, setOfferPickup] = useState(false);
+  /** O cliente confirmou a taxa nova: reenvia assim que houver um token novo do Turnstile. */
+  const [resubmit, setResubmit] = useState(false);
   const turnstile = useRef<TurnstileHandle>(null);
   const messageRef = useRef<HTMLDivElement>(null);
 
@@ -97,29 +114,31 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
         ...f,
         name: saved.name,
         phone: maskPhone(saved.phone),
-        address: saved.address ?? EMPTY_ADDRESS,
+        address: saved.address ? { ...EMPTY_ADDRESS, ...saved.address } : EMPTY_ADDRESS,
         paymentMethod: saved.paymentMethod,
       }));
     }
   }, [slug]);
 
-  // Contagem regressiva do 429.
+  // Relógio: contagem regressiva dos 429 (1 s) e validade da cotação (15 min, conferida a cada 15 s).
+  const ticking = Boolean(retryUntil || quoteRetryUntil);
   useEffect(() => {
-    if (!retryUntil) return;
-    const t = setInterval(() => {
-      const n = Date.now();
-      setNow(n);
-      if (n >= retryUntil) setRetryUntil(null);
-    }, 1000);
+    const t = setInterval(() => setNow(Date.now()), ticking ? 1000 : 15_000);
     return () => clearInterval(t);
-  }, [retryUntil]);
+  }, [ticking]);
+  useEffect(() => {
+    if (retryUntil && now >= retryUntil) setRetryUntil(null);
+    if (quoteRetryUntil && now >= quoteRetryUntil) setQuoteRetryUntil(null);
+  }, [now, retryUntil, quoteRetryUntil]);
 
   useEffect(() => {
     if (message) messageRef.current?.focus();
   }, [message]);
 
   const menu = store.menu;
-  const deliveryFeeCents = form.fulfillmentType === 'DELIVERY' && quote ? parseMoney(quote.deliveryFee) : 0;
+  const isDelivery = form.fulfillmentType === 'DELIVERY';
+  const qState: QuoteState = quoteState(quoted, form.address, now);
+  const deliveryFeeCents = isDelivery && quoted && qState === 'valid' ? parseMoney(quoted.quote.deliveryFee) : 0;
   const preview = menu ? previewCart(cart, menu, deliveryFeeCents) : null;
   const cartIssues: CartIssue[] = menu ? validateCart(cart, menu, store.limits) : [];
   const globalIssues = cartIssues.filter((i) => !('lineId' in i));
@@ -128,51 +147,102 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
     if ('lineId' in issue) issuesByLine.set(issue.lineId, [...(issuesByLine.get(issue.lineId) ?? []), issue]);
   }
   const secondsLeft = retryUntil ? Math.max(0, Math.ceil((retryUntil - now) / 1000)) : 0;
+  const quoteSecondsLeft = quoteRetryUntil ? Math.max(0, Math.ceil((quoteRetryUntil - now) / 1000)) : 0;
   const isOpen = store.status === 'OPEN' && Boolean(menu);
   const waitingCaptcha = captchaEnabled && !turnstileToken;
+  const deliveryRuleText = describeDeliveryRule(store.deliveryRule);
+
+  // A entrega saiu do ar enquanto o cliente montava o pedido: volta para retirada.
+  useEffect(() => {
+    if (!store.deliveryAvailable && form.fulfillmentType === 'DELIVERY' && store.pickupAvailable) {
+      setForm((f) => ({ ...f, fulfillmentType: 'PICKUP' }));
+    }
+  }, [store.deliveryAvailable, store.pickupAvailable, form.fulfillmentType]);
+
+  /** O token do Turnstile é de uso único (ADR-0045 item 12): entrega o atual e já pede outro. */
+  function takeToken(): string | null {
+    if (!captchaEnabled) return null;
+    const token = turnstileToken;
+    turnstile.current?.reset();
+    return token;
+  }
 
   function setField<K extends keyof CheckoutForm>(key: K, value: CheckoutForm[K]) {
     setForm((f) => ({ ...f, [key]: value }));
     setErrors((e) => ({ ...e, [key === 'name' ? 'customerName' : key === 'phone' ? 'customerPhone' : key]: undefined }));
+    if (key === 'fulfillmentType') setOfferPickup(false);
   }
 
   function setAddress<K extends keyof DeliveryAddressInput>(key: K, value: string) {
-    setForm((f) => ({ ...f, address: { ...f.address, [key]: value }, deliveryQuoteId: null }));
-    setQuote(null);
-    setErrors((e) => ({ ...e, [`deliveryAddress.${key}`]: undefined }));
+    // Mudar rua, número, bairro, cidade ou CEP invalida a cotação (quoteState → 'stale'); complemento e referência não.
+    setForm((f) => ({ ...f, address: { ...f.address, [key]: value } }));
+    setErrors((e) => ({ ...e, [`deliveryAddress.${key}`]: undefined, deliveryQuoteId: undefined }));
+    setOfferPickup(false);
   }
 
   async function handleQuote() {
-    const addr = form.address;
-    if (!addr.street.trim() || !addr.number.trim() || !addr.neighborhood.trim() || !addr.city.trim()) {
-      setErrors((e) => ({ ...e, deliveryQuoteId: 'Preencha rua, número, bairro e cidade para calcular a taxa.' }));
+    const addressErrors = validateAddress(form.address);
+    if (Object.keys(addressErrors).length > 0) {
+      setErrors((e) => ({ ...e, ...addressErrors, deliveryQuoteId: 'Revise o endereço para calcular a entrega.' }));
+      return;
+    }
+    if (waitingCaptcha) {
+      setErrors((e) => ({ ...e, deliveryQuoteId: 'Aguarde a verificação anti-robô terminar.' }));
       return;
     }
     setQuoting(true);
-    const result = await browserApi().quoteDelivery(slug, addr);
+    setOfferPickup(false);
+    const address = normalizeAddressInput(form.address);
+    const result = await browserApi().quoteDelivery(slug, address, { turnstileToken: takeToken() });
     setQuoting(false);
     if (result.ok) {
-      setQuote(result.data);
+      setQuoted({ quote: result.data, fingerprint: addressFingerprint(address) });
       setForm((f) => ({ ...f, deliveryQuoteId: result.data.quoteId }));
       setErrors((e) => ({ ...e, deliveryQuoteId: undefined }));
       return;
     }
-    const msg =
-      result.kind === 'problem' && result.problem.errorCode === 'OutOfDeliveryArea'
-        ? 'Não entregamos nesse endereço. Você pode retirar no restaurante.'
-        : 'Não foi possível calcular a entrega agora. Você pode retirar no restaurante.';
-    setErrors((e) => ({ ...e, deliveryQuoteId: msg }));
+    setQuoted(null);
+    setForm((f) => ({ ...f, deliveryQuoteId: null }));
+    const outcome = interpretQuoteFailure(result);
+    switch (outcome.kind) {
+      case 'address':
+        setErrors((e) => ({ ...e, ...outcome.errors, deliveryQuoteId: outcome.message }));
+        break;
+      case 'outOfArea':
+      case 'unavailable':
+        setErrors((e) => ({ ...e, deliveryQuoteId: outcome.message }));
+        setOfferPickup(store.pickupAvailable);
+        break;
+      case 'rateLimited':
+        setQuoteRetryUntil(Date.now() + outcome.retryAfterSeconds * 1000);
+        setNow(Date.now());
+        setErrors((e) => ({ ...e, deliveryQuoteId: outcome.message }));
+        break;
+      case 'storeUnavailable':
+        setErrors((e) => ({ ...e, deliveryQuoteId: outcome.message }));
+        void refresh();
+        break;
+      case 'captcha':
+      case 'message':
+        setErrors((e) => ({ ...e, deliveryQuoteId: outcome.message }));
+        break;
+    }
   }
 
-  async function handleSubmit(e: React.FormEvent) {
+  function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    void submit();
+  }
+
+  async function submit() {
     if (submitting || !menu || !preview) return;
     setMessage(null);
     setLineErrors({});
-    const localErrors = validateCheckout(form, preview, store.limits.notesMaxLength);
+    const localErrors = validateCheckout(form, preview, store.limits.notesMaxLength, isDelivery ? qState : 'none');
     setErrors(localErrors);
     if (Object.keys(localErrors).length > 0 || cartIssues.length > 0) {
-      setMessage({ tone: 'danger', text: 'Confira os campos destacados.' });
+      const onlyQuote = Boolean(localErrors.deliveryQuoteId) && Object.keys(localErrors).length === 1;
+      setMessage({ tone: 'danger', text: onlyQuote ? localErrors.deliveryQuoteId! : 'Confira os campos destacados.' });
       return;
     }
     if (waitingCaptcha) {
@@ -182,14 +252,15 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
 
     const body = buildOrderRequest(form, cart, preview);
     const bodyJson = JSON.stringify(body);
-    // Mesma chave em todo reenvio do mesmo corpo, inclusive depois de recarregar a página (§6.19).
+    // Mesma chave em todo reenvio do mesmo corpo, inclusive depois de recarregar a página (§6.19). Corpo diferente
+    // (taxa nova, carrinho recalculado, cliente editou) → chave nova.
     const attempt = keyForAttempt(bodyJson, loadPendingSubmission(slug));
     savePendingSubmission(slug, attempt);
 
     setSubmitting(true);
     const result = await browserApi().placeOrder(slug, body, {
       idempotencyKey: attempt.idempotencyKey,
-      turnstileToken: captchaEnabled ? turnstileToken : null,
+      turnstileToken: takeToken(),
     });
 
     if (result.ok) {
@@ -205,7 +276,7 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
         saveCustomer(slug, {
           name: form.name.trim(),
           phone: form.phone,
-          address: form.fulfillmentType === 'DELIVERY' ? form.address : (loadCustomer(slug)?.address ?? null),
+          address: isDelivery ? normalizeAddressInput(form.address) : (loadCustomer(slug)?.address ?? null),
           paymentMethod: form.paymentMethod,
         });
       } else {
@@ -218,14 +289,23 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
     }
 
     setSubmitting(false);
-    // O token do Turnstile é de uso único: depois de qualquer erro, pede outro e reenvia com a mesma chave.
-    turnstile.current?.reset();
     const outcome = interpretSubmitFailure(result);
     switch (outcome.kind) {
       case 'cartChanged':
         setCartChanged(outcome.cart);
         setMessage({ tone: 'warning', text: outcome.message });
         void refresh();
+        break;
+      case 'quoteChanged':
+        setQuoteChanged(outcome.quote);
+        setMessage({ tone: 'warning', text: outcome.message });
+        break;
+      case 'deliveryFailed':
+        setQuoted(null);
+        setForm((f) => ({ ...f, deliveryQuoteId: null }));
+        setErrors(outcome.errors);
+        setOfferPickup(store.pickupAvailable);
+        setMessage({ tone: 'warning', text: outcome.message });
         break;
       case 'fieldErrors': {
         const items: Record<number, string> = {};
@@ -234,6 +314,12 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
           const m = /^items\[(\d+)\]/.exec(k);
           if (m) items[Number(m[1])] = [items[Number(m[1])], v].filter(Boolean).join(' ');
           else fields[k] = v;
+        }
+        if (fields.deliveryQuoteId || Object.keys(fields).some((k) => k.startsWith('deliveryAddress.'))) {
+          // Cotação inexistente (9a) ou endereço não localizado no recálculo (9b): cotar de novo.
+          setQuoted(null);
+          setForm((f) => ({ ...f, deliveryQuoteId: null }));
+          fields.deliveryQuoteId ??= 'Calcule a entrega de novo.';
         }
         setErrors(fields);
         setLineErrors(items);
@@ -257,6 +343,33 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
         setMessage({ tone: outcome.kind === 'network' ? 'warning' : 'danger', text: outcome.message });
         break;
     }
+  }
+
+  // Reenvio depois de confirmar a taxa nova: espera o token novo do Turnstile.
+  const submitRef = useRef(submit);
+  submitRef.current = submit;
+  useEffect(() => {
+    if (resubmit && !submitting && (!captchaEnabled || turnstileToken)) {
+      setResubmit(false);
+      void submitRef.current();
+    }
+  }, [resubmit, submitting, captchaEnabled, turnstileToken]);
+
+  function confirmQuoteChanged() {
+    if (!quoteChanged) return;
+    // O endereço não mudou (a API recalculou para o mesmo): a cotação nova vale para ele.
+    setQuoted({ quote: quoteChanged, fingerprint: addressFingerprint(form.address) });
+    setForm((f) => ({ ...f, deliveryQuoteId: quoteChanged.quoteId }));
+    setQuoteChanged(null);
+    setMessage(null);
+    setResubmit(true);
+  }
+
+  function switchToPickup() {
+    setField('fulfillmentType', 'PICKUP');
+    setQuoteChanged(null);
+    setErrors((e) => ({ ...e, deliveryQuoteId: undefined }));
+    setMessage(null);
   }
 
   async function confirmCartChanged() {
@@ -472,37 +585,35 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
               <span className="option-body">
                 Entrega
                 <span className="option-desc">
-                  {store.deliveryAvailable && store.deliveryRule
-                    ? `${formatApiMoney(store.deliveryRule.pricePerKm)}/km, mínimo ${formatApiMoney(store.deliveryRule.minimumFee)}${
-                        store.deliveryRule.maxDistanceKm ? `, até ${store.deliveryRule.maxDistanceKm.replace('.', ',')} km` : ''
-                      }`
-                    : 'Em breve'}
+                  {store.deliveryAvailable ? (deliveryRuleText ?? 'Taxa calculada pelo endereço') : 'Indisponível agora'}
                 </span>
               </span>
             </label>
             <FieldError id={errId('fulfillmentType')} message={errors.fulfillmentType} />
           </fieldset>
 
-          {form.fulfillmentType === 'DELIVERY' && store.deliveryAvailable && (
+          {isDelivery && store.deliveryAvailable && (
             <fieldset>
               <legend>Endereço de entrega</legend>
               {(
                 [
-                  ['street', 'Rua', 'address-line1'],
-                  ['number', 'Número', 'off'],
-                  ['complement', 'Complemento (opcional)', 'address-line2'],
-                  ['neighborhood', 'Bairro', 'address-level3'],
-                  ['city', 'Cidade', 'address-level2'],
-                  ['zipCode', 'CEP (opcional)', 'postal-code'],
-                  ['reference', 'Ponto de referência (opcional)', 'off'],
+                  ['street', 'Rua', 'address-line1', undefined],
+                  ['number', 'Número', 'off', 'Ex.: 45 ou S/N'],
+                  ['complement', 'Complemento (opcional)', 'address-line2', 'Ex.: casa 2, apto 101'],
+                  ['neighborhood', 'Bairro', 'address-level3', undefined],
+                  ['city', 'Cidade (opcional)', 'address-level2', store.address?.city ?? undefined],
+                  ['zipCode', 'CEP (opcional)', 'postal-code', '00000-000'],
+                  ['reference', 'Ponto de referência (opcional)', 'off', 'Ex.: em frente à padaria'],
                 ] as const
-              ).map(([k, label, ac]) => (
+              ).map(([k, label, ac, placeholder]) => (
                 <label className="field" key={k}>
                   <span className="field-label">{label}</span>
                   <input
                     className="input"
                     autoComplete={ac}
                     inputMode={k === 'zipCode' ? 'numeric' : undefined}
+                    placeholder={placeholder}
+                    maxLength={k === 'street' || k === 'reference' ? 120 : k === 'number' ? 10 : k === 'city' ? 80 : k === 'zipCode' ? 9 : 60}
                     value={form.address[k] ?? ''}
                     onChange={(e) => setAddress(k, e.target.value)}
                     {...invalid(`deliveryAddress.${k}`)}
@@ -510,24 +621,71 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
                   <FieldError id={errId(`deliveryAddress.${k}`)} message={errors[`deliveryAddress.${k}`]} />
                 </label>
               ))}
-              {quote ? (
-                <div className="notice notice-success">
-                  <p>
-                    Entendemos: <strong>{quote.formattedAddress}</strong>
-                  </p>
-                  <p>
-                    {quote.distanceKm.replace('.', ',')} km · taxa <span className="price">{formatApiMoney(quote.deliveryFee)}</span>
-                  </p>
-                </div>
-              ) : (
-                <button type="button" className="btn btn-block" onClick={handleQuote} disabled={quoting}>
-                  {quoting ? 'Calculando…' : 'Calcular taxa de entrega'}
+
+              <div aria-live="polite">
+                {quoted && qState === 'valid' ? (
+                  <div className="notice notice-success">
+                    <p>
+                      Encontramos: <strong>{quoted.quote.formattedAddress}</strong>
+                    </p>
+                    <p>
+                      <strong>{describeQuote(quoted.quote)}</strong>
+                    </p>
+                    <p className="small">Confira o endereço. Se não for esse, corrija e calcule de novo.</p>
+                  </div>
+                ) : (
+                  <>
+                    {quoted && qState === 'stale' && (
+                      <p className="notice notice-warning">Você mudou o endereço. Calcule a entrega de novo.</p>
+                    )}
+                    {quoted && qState === 'expired' && (
+                      <p className="notice notice-warning">A cotação da entrega venceu. Calcule de novo.</p>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-block"
+                      onClick={handleQuote}
+                      disabled={quoting || quoteSecondsLeft > 0 || !isOpen}
+                    >
+                      {quoting ? 'Calculando…' : quoteSecondsLeft > 0 ? `Aguarde ${quoteSecondsLeft} s` : 'Calcular taxa de entrega'}
+                    </button>
+                  </>
+                )}
+              </div>
+              <FieldError id={errId('deliveryQuoteId')} message={errors.deliveryQuoteId} />
+              {offerPickup && store.pickupAvailable && (
+                <button type="button" className="btn btn-primary btn-block" style={{ marginTop: '0.5rem' }} onClick={switchToPickup}>
+                  Retirar no local
                 </button>
               )}
-              <FieldError id={errId('deliveryQuoteId')} message={errors.deliveryQuoteId} />
             </fieldset>
           )}
         </section>
+
+        {quoteChanged && (
+          <section className="card" aria-labelledby="quote-changed-title">
+            <h2 id="quote-changed-title">A taxa de entrega mudou</h2>
+            <p>
+              {describeQuote(quoteChanged)} para <strong>{quoteChanged.formattedAddress}</strong>.
+            </p>
+            {preview && (
+              <p className="row-between">
+                <strong>Novo total</strong>
+                <span className="price">{formatBRL(preview.itemsCents + parseMoney(quoteChanged.deliveryFee))}</span>
+              </p>
+            )}
+            <div className="stack">
+              <button type="button" className="btn btn-primary btn-block" onClick={confirmQuoteChanged} disabled={submitting}>
+                Confirmar e enviar
+              </button>
+              {store.pickupAvailable && (
+                <button type="button" className="btn btn-block" onClick={switchToPickup}>
+                  Prefiro retirar no local
+                </button>
+              )}
+            </div>
+          </section>
+        )}
 
         <section className="card" aria-labelledby="pagamento-title">
           <fieldset aria-describedby={errors.expectedPaymentMethod ? errId('expectedPaymentMethod') : undefined}>
@@ -610,7 +768,11 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
             {form.fulfillmentType === 'DELIVERY' && (
               <p className="row-between">
                 <span>Taxa de entrega</span>
-                <span className="price">{quote ? formatBRL(preview.deliveryFeeCents) : 'a calcular'}</span>
+                <span className="price">
+                  {quoted && qState === 'valid'
+                    ? `${formatBRL(preview.deliveryFeeCents)}${quoted.quote.distanceKm ? ` (${quoted.quote.distanceKm.replace('.', ',')} km)` : ''}`
+                    : 'a calcular'}
+                </span>
               </p>
             )}
             <p className="row-between">
@@ -637,7 +799,7 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
         <button
           type="submit"
           className="btn btn-primary btn-block"
-          disabled={!isOpen || submitting || secondsLeft > 0 || Boolean(cartChanged)}
+          disabled={!isOpen || submitting || resubmit || secondsLeft > 0 || Boolean(cartChanged) || Boolean(quoteChanged)}
           aria-describedby={waitingCaptcha ? 'captcha-hint' : undefined}
         >
           {submitting ? 'Enviando…' : secondsLeft > 0 ? `Aguarde ${secondsLeft} s` : 'Enviar pedido'}
