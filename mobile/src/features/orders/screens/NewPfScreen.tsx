@@ -58,7 +58,7 @@ export default function NewPfScreen() {
   const submit = async () => {
     await draft.flush(v);
     const outcome = await create.run(buildPfBody(v));
-    if (outcome.kind !== 'unknown') setConfirming(false);
+    if (outcome.kind !== 'unknown' && outcome.kind !== 'ignored') setConfirming(false);
   };
 
   const name = (productId: string) => book.products.get(productId)?.name ?? '?';

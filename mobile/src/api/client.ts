@@ -31,6 +31,8 @@ export interface ApiResult<T> {
 
 export interface ApiClientHooks {
   getAccessToken(): string | null;
+  /** `accessTokenExpiresAt` do token atual (ISO), para não renovar à toa no sync. */
+  getAccessTokenExpiresAt?(): string | null;
   /** Renova os tokens. Devolve false quando não há sessão a renovar ou o refresh foi recusado. */
   refresh(): Promise<boolean>;
   onSessionExpired(): void;
@@ -61,6 +63,21 @@ export function refreshSingleFlight(): Promise<boolean> {
     });
   }
   return refreshing;
+}
+
+/**
+ * Renovação oportunista (passo 1 do sync, 08 §8.6): só renova se o access token vence em menos de
+ * `SYNC_REFRESH_MARGIN_MS`. Com o token válido, as próprias chamadas do sync revalidam a sessão: um token
+ * revogado (troca de `security_stamp`, ADR-0027) volta `401` e cai no refresh do 401 logo na primeira.
+ * Sem isso, cada volta da aba para a frente na web gastaria um refresh do limite de 10/min por IP (ADR-0041).
+ */
+export const SYNC_REFRESH_MARGIN_MS = 5 * 60_000;
+
+export function refreshIfExpiring(marginMs = SYNC_REFRESH_MARGIN_MS, now = Date.now()): Promise<boolean> {
+  const expiresAt = hooks.getAccessToken() ? hooks.getAccessTokenExpiresAt?.() : null;
+  const expiresAtMs = expiresAt ? new Date(expiresAt).getTime() : NaN;
+  if (Number.isFinite(expiresAtMs) && expiresAtMs - now > marginMs) return Promise.resolve(true);
+  return refreshSingleFlight();
 }
 
 export function apiUrl(path: string): string {

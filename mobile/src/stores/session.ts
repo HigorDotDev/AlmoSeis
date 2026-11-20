@@ -26,8 +26,12 @@ interface SessionState {
   readOnly: boolean;
   upgradeRequired: { minVersion?: string; storeUrl?: string } | null;
   signOutReason: SignOutReason | null;
+  /** Web: abrindo a página sem resposta do servidor (rede, 5xx, 429); tentando de novo, sem ir ao login. */
+  reconnecting: boolean;
 
-  hydrate(): Promise<void>;
+  hydrate(options?: HydrateOptions): Promise<void>;
+  /** Antes de pedir login/cadastro/convite/PIN. Web: espera um logout ainda no ar (ele apagaria o cookie novo). */
+  prepareSignIn(): Promise<void>;
   signIn(session: Session): Promise<void>;
   setMe(me: Me): void;
   refresh(): Promise<boolean>;
@@ -40,6 +44,16 @@ interface SessionState {
   setUpgradeRequired(info: { minVersion?: string; storeUrl?: string }): void;
   setSharedDevice(device: SharedDeviceCredentials | null): Promise<void>;
 }
+
+export interface HydrateOptions {
+  /** Testes. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** Espera entre tentativas de restaurar quando o servidor não manda `Retry-After`. */
+export const RESTORE_RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 15_000, 30_000];
+
+const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** Limpa caches do tenant (registrado pelo _layout raiz, que conhece o QueryClient). */
 let onTenantDataCleared: () => void = () => {};
@@ -58,11 +72,20 @@ export const useSession = create<SessionState>((set, get) => ({
   readOnly: false,
   upgradeRequired: null,
   signOutReason: null,
+  reconnecting: false,
 
-  async hydrate() {
+  async hydrate(options = {}) {
+    const sleep = options.sleep ?? defaultSleep;
     const [installationId, sharedDevice, meJson] = await Promise.all([secure.installationId(), secure.sharedDevice(), metaRepo.get(ME_KEY)]);
     const cachedMe = meJson ? (JSON.parse(meJson) as Me) : null;
-    const restored = await sessionTransport.restore(installationId, cachedMe);
+    let result = await sessionTransport.restore(installationId, cachedMe);
+    // Web: 429/5xx/rede ao recarregar não é "sem sessão" (ADR-0041). Fica em "Reconectando…" até o servidor responder.
+    for (let attempt = 0; result.kind === 'retry'; attempt++) {
+      set({ reconnecting: true });
+      await sleep(result.retryAfterMs ?? RESTORE_RETRY_DELAYS_MS[Math.min(attempt, RESTORE_RETRY_DELAYS_MS.length - 1)]!);
+      result = await sessionTransport.restore(installationId, cachedMe);
+    }
+    const restored = result.kind === 'restored' ? result : null;
     if (restored) {
       await secure.setTokens(restored.tokens);
       if (restored.me !== cachedMe) await metaRepo.set(ME_KEY, JSON.stringify(restored.me));
@@ -74,8 +97,11 @@ export const useSession = create<SessionState>((set, get) => ({
       me: restored?.me ?? null,
       readOnly: restored ? !restored.me.subscription.canWrite : false,
       status: restored ? 'signedIn' : 'signedOut',
+      reconnecting: false,
     });
   },
+
+  prepareSignIn: () => sessionTransport.beforeSignIn(),
 
   async signIn(session) {
     const previousTenant = get().me?.tenant.id ?? (await secure.lastTenantId());
@@ -92,7 +118,7 @@ export const useSession = create<SessionState>((set, get) => ({
       readOnly: !session.me.subscription.canWrite,
       signOutReason: null,
     });
-    sessionTransport.announceSignedIn(session.me.tenant.id);
+    sessionTransport.afterSignIn(session.me.tenant.id);
   },
 
   setMe(me) {
@@ -113,16 +139,9 @@ export const useSession = create<SessionState>((set, get) => ({
 
   async signOut(reason) {
     const { tokens } = get();
-    if (tokens) {
-      try {
-        await sessionTransport.logout(tokens, reason);
-      } catch {
-        // Sem rede: o refresh expira sozinho no servidor.
-      }
-    }
-    // Web: as outras abas saem também (ADR-0053 §3.5). No celular não faz nada.
-    if (reason !== 'expired') sessionTransport.announceSignedOut();
-    await clearLocalSession(reason);
+    // A ordem entre limpar a tela e chamar a API é da plataforma: na web a marca de logout pendente vem
+    // primeiro e a tela limpa antes da rede (ADR-0053 §3.5); no celular, como sempre foi.
+    await sessionTransport.endSession(tokens, reason, () => clearLocalSession(reason));
   },
 
   async applyRemoteSignOut() {

@@ -4,12 +4,9 @@
  */
 import type { Uuid } from '../types';
 import { authApi } from './auth';
+import type { SharedDeviceRef } from './sharedDeviceAuth.types';
 
-export interface SharedDeviceRef {
-  tenantId: Uuid;
-  installationId: string;
-  deviceSecret: string | null;
-}
+export type { SharedDeviceRef } from './sharedDeviceAuth.types';
 
 export const sharedDeviceAuth = {
   employees: (device: SharedDeviceRef) => authApi.deviceEmployees(device.installationId, device.tenantId, device.deviceSecret ?? ''),

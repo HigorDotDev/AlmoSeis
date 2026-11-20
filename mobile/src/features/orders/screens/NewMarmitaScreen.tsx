@@ -104,7 +104,7 @@ export default function NewMarmitaScreen() {
     const body = buildMarmitaBody(v, v.customer.phone ? toE164(v.customer.phone) : null);
     await draft.flush(v);
     const outcome = await create.run(body);
-    if (outcome.kind !== 'unknown') setConfirming(false);
+    if (outcome.kind !== 'unknown' && outcome.kind !== 'ignored') setConfirming(false);
   };
 
   const errors = form.formState.errors;

@@ -8,20 +8,16 @@ import type { Me, Tokens } from '@/api/types';
 
 import type { SignOutReason } from './session';
 import { secure } from './secure';
+import type { RemoteSessionHandlers, RestoreResult } from './sessionTransport.types';
 
-export interface RemoteSessionHandlers {
-  /** Outra aba renovou: use o access token novo. */
-  onTokens(tokens: Tokens): void;
-  /** Outra aba saiu da conta. */
-  onSignedOut(): void;
-}
+export type { RemoteSessionHandlers, RestoreResult } from './sessionTransport.types';
 
 export const sessionTransport = {
-  /** Na abertura do app: a sessão guardada, ou `null` para ir ao login. */
-  async restore(_installationId: string, cachedMe: Me | null): Promise<{ tokens: Tokens; me: Me } | null> {
+  /** Na abertura do app: a sessão guardada, ou `signedOut` para ir ao login. No celular nunca é `retry`. */
+  async restore(_installationId: string, cachedMe: Me | null): Promise<RestoreResult> {
     const tokens = await secure.tokens();
     const valid = tokens !== null && new Date(tokens.refreshTokenExpiresAt).getTime() > Date.now() && cachedMe !== null;
-    return valid ? { tokens, me: cachedMe } : null;
+    return valid ? { kind: 'restored', tokens, me: cachedMe } : { kind: 'signedOut' };
   },
 
   /** `null` quando não há o que renovar ou o servidor recusou (401). Erro de rede propaga. */
@@ -36,16 +32,26 @@ export const sessionTransport = {
   },
 
   /**
-   * Ao sair. No celular só "Sair" revoga o refresh no servidor; nos outros motivos basta apagar o SecureStore
-   * (é o que já acontecia antes da web).
+   * Sair. No celular só "Sair" revoga o refresh no servidor (antes de limpar, como sempre foi); nos outros
+   * motivos basta apagar o SecureStore. Sem rede, o refresh expira sozinho no servidor.
    */
-  async logout(current: Tokens | null, reason: SignOutReason): Promise<void> {
-    if (reason === 'user' && current?.refreshToken) await authApi.logout(current.refreshToken);
+  async endSession(current: Tokens | null, reason: SignOutReason, clearLocal: () => Promise<void>): Promise<void> {
+    if (reason === 'user' && current?.refreshToken) {
+      try {
+        await authApi.logout(current.refreshToken);
+      } catch {
+        // Sem rede: o refresh expira sozinho no servidor.
+      }
+    }
+    await clearLocal();
   },
 
-  /** Avisos para outras abas. No celular não há. */
-  announceSignedIn(_tenantId: string): void {},
-  announceSignedOut(): void {},
+  /** Antes de login, cadastro, convite ou PIN. No celular não há o que esperar. */
+  async beforeSignIn(): Promise<void> {},
+
+  /** Depois de entrar. Web: limpa o logout pendente e avisa as outras abas. No celular não faz nada. */
+  afterSignIn(_tenantId: string): void {},
+
   subscribe(_handlers: RemoteSessionHandlers): () => void {
     return () => {};
   },

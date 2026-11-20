@@ -8,9 +8,9 @@
 import type { Tokens } from '@/api/types';
 import { metaRepo } from '@/db/metaRepo';
 
-import type { SharedDeviceCredentials } from './secure';
+import type { SharedDeviceCredentials } from './secure.types';
 
-export type { SharedDeviceCredentials } from './secure';
+export type { SharedDeviceCredentials } from './secure.types';
 
 const KEYS = {
   installationId: 'almoseis.installationId',

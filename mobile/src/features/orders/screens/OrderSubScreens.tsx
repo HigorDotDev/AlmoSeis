@@ -206,7 +206,7 @@ function AddItems({ order: o }: { order: Order }) {
           await draft.flush(form);
           const outcome = await add.run({ items, version: o.version });
           if (outcome.kind === 'conflict') setConflict(outcome.current as Order);
-          if (outcome.kind !== 'unknown') setConfirm(false);
+          if (outcome.kind !== 'unknown' && outcome.kind !== 'ignored') setConfirm(false);
         }}
       />
       <ConflictSheet visible={conflict !== null} summary={conflict ? summarizeOrder(conflict) : []} onClose={() => setConflict(null)} onRedo={() => setConflict(null)} />

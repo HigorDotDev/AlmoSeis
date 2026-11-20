@@ -64,3 +64,5 @@ export const errorMessages: Record<string, string> = {
 
 export const GENERIC_ERROR = 'Algo deu errado.';
 export const NETWORK_ERROR = 'Sem conexão com o servidor.';
+/** Abrindo o app no navegador sem resposta do servidor (429/5xx/rede, ADR-0053 §3, ADR-0041): não vai ao login. */
+export const RECONNECTING_MESSAGE = 'Sem resposta do servidor. Reconectando…';

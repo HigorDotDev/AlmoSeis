@@ -11,8 +11,9 @@ export const authApi = {
       body: refreshToken === null ? { installationId } : { refreshToken, installationId },
       anonymous: true,
     }),
-  logout: (refreshToken: string | null) =>
-    apiRequest<void>('POST', '/auth/logout', refreshToken === null ? {} : { body: { refreshToken } }),
+  /** `anonymous`: web, depois de limpar a sessão local (a rota é anônima; sem token não há refresh no 401). */
+  logout: (refreshToken: string | null, options: { anonymous?: boolean } = {}) =>
+    apiRequest<void>('POST', '/auth/logout', refreshToken === null ? { ...options } : { body: { refreshToken }, ...options }),
   switchTenant: (tenantId: Uuid) => apiRequest<Session>('POST', '/auth/switch-tenant', { body: { tenantId } }),
   /** `headers`: na restauração da sessão web, o token recém-obtido antes de ir para o store. */
   me: (headers?: Record<string, string>) =>

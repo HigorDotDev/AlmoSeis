@@ -1,6 +1,8 @@
 /** Web (ADR-0053 §5.1 e §5.3): preferências no `localStorage`; cache de consultas no IndexedDB (`kv`). */
-import type { AsyncKv } from './kvStorage';
+import type { AsyncKv } from './kvStorage.types';
 import { deleteOne, getOne, putOne, STORE } from './web/idb';
+
+export type { AsyncKv } from './kvStorage.types';
 
 export const preferencesStorage: AsyncKv = {
   getItem: (key) => localStorage.getItem(key),

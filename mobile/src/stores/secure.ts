@@ -1,8 +1,12 @@
 /** Segredos só no SecureStore (ADR-0027, docs/02-padroes.md §2.3): tokens, installationId e deviceSecret. */
 import * as SecureStore from 'expo-secure-store';
 
-import type { Tokens, Uuid } from '@/api/types';
+import type { Tokens } from '@/api/types';
 import { newKey } from '@/lib/ids';
+
+import type { SharedDeviceCredentials } from './secure.types';
+
+export type { SharedDeviceCredentials } from './secure.types';
 
 const KEYS = {
   tokens: 'almoseis.tokens',
@@ -11,15 +15,6 @@ const KEYS = {
   lastTenantId: 'almoseis.lastTenantId',
 } as const;
 
-export interface SharedDeviceCredentials {
-  id: Uuid;
-  tenantId: Uuid;
-  tenantName: string;
-  name: string;
-  installationId: string;
-  /** Web: `null` (cookie `HttpOnly`, ADR-0053 §3.8). */
-  deviceSecret: string | null;
-}
 
 async function readJson<T>(key: string): Promise<T | null> {
   const raw = await SecureStore.getItemAsync(key);

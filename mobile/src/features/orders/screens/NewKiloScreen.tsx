@@ -61,7 +61,7 @@ export default function NewKiloScreen() {
   const submit = async () => {
     await draft.flush(v);
     const outcome = await create.run(buildKiloBody(v));
-    if (outcome.kind !== 'unknown') setConfirming(false);
+    if (outcome.kind !== 'unknown' && outcome.kind !== 'ignored') setConfirming(false);
   };
 
   return (

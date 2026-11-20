@@ -6,7 +6,9 @@
 import { Asset } from 'expo-asset';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { OrderSound } from './orderSound';
+import type { OrderSound } from './orderSound.types';
+
+export type { OrderSound } from './orderSound.types';
 
 const SOUND = require('../../../assets/sounds/new-order.wav');
 

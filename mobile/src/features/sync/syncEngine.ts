@@ -2,12 +2,12 @@
  * Sincronização (08 §8.6): ao voltar online, ao voltar para o primeiro plano, a cada reconexão do SignalR e em
  * salto de `seq`, com no mínimo 10 s entre execuções.
  *
- *   1. renova a sessão → 2. resolve pendências UNKNOWN → 3. GET /sync/changes até hasMore=false
+ *   1. renova a sessão se o token vence em menos de 5 min (`refreshIfExpiring`) → 2. resolve pendências UNKNOWN → 3. GET /sync/changes até hasMore=false
  *   (410 → descarta o cache e segue de currentSeq) → 4. garante o SignalR → 5. libera os rascunhos
  */
 import type { QueryClient } from '@tanstack/react-query';
 
-import { refreshSingleFlight } from '@/api/client';
+import { refreshIfExpiring } from '@/api/client';
 import { isApiError } from '@/api/errors';
 import { syncApi } from '@/api/endpoints/sync';
 import { invalidateEntity } from '@/api/queryKeys';
@@ -52,7 +52,7 @@ async function doSync(ctx: SyncContext): Promise<void> {
   connectivity.setSyncState('syncing');
   try {
     try {
-      await refreshSingleFlight();
+      await refreshIfExpiring();
     } catch {
       // Rede caiu de novo: o restante falharia também.
       connectivity.setSyncState('error');

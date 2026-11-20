@@ -2,7 +2,9 @@
  * Web (ADR-0053 §7.1): o SignalR fica conectado com a aba oculta ou minimizada; `onBackground` nunca é
  * chamado. Ao voltar a aba para a frente, ao voltar a rede e ao acordar o computador, reconecta e sincroniza.
  */
-import type { AppLifecycleHandlers } from './appLifecycle';
+import type { AppLifecycleHandlers } from './appLifecycle.types';
+
+export type { AppLifecycleHandlers } from './appLifecycle.types';
 
 /** Um intervalo que atrasa muito mais que isso = o computador dormiu (ou a aba foi congelada). */
 const WAKE_CHECK_MS = 30_000;

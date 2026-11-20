@@ -181,7 +181,7 @@ function ItemsBlock({ order: o }: { order: Order }) {
               ? await removeItem.run({ itemId: removing!.id, version: o.version })
               : await removeWeighing.run({ weighingId: removing!.id, version: o.version });
           onOutcome(outcome as never);
-          if (outcome.kind !== 'rejected') setRemoving(null);
+          if (outcome.kind !== 'rejected' && outcome.kind !== 'ignored') setRemoving(null);
         }}
       />
       <ConflictSheet visible={conflict !== null} summary={conflict ? summarizeOrder(conflict) : []} onClose={() => setConflict(null)} onRedo={() => setConflict(null)} />

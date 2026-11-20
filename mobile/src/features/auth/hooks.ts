@@ -13,6 +13,7 @@ export function useLogin() {
   const signIn = useSession((s) => s.signIn);
   return useMutation({
     mutationFn: async ({ login, password }: { login: string; password: string }) => {
+      await useSession.getState().prepareSignIn();
       const installationId = await secure.installationId();
       const preferredTenantId = await secure.lastTenantId();
       return (await authApi.login({ login, password, installationId, preferredTenantId })).data;
@@ -25,6 +26,7 @@ export function useSignup() {
   const signIn = useSession((s) => s.signIn);
   return useMutation({
     mutationFn: async (body: Omit<SignupBody, 'installationId'>) => {
+      await useSession.getState().prepareSignIn();
       const installationId = await secure.installationId();
       return (await authApi.signup({ ...body, installationId })).data;
     },
@@ -45,6 +47,7 @@ export function useAcceptInvitation(code: string) {
   const signIn = useSession((s) => s.signIn);
   return useMutation({
     mutationFn: async (body: { newAccount: NewAccount | null; existingAccount: ExistingAccount | null; displayName: string }) => {
+      await useSession.getState().prepareSignIn();
       const installationId = await secure.installationId();
       return (await invitationsApi.accept(code, { ...body, installationId })).data;
     },
@@ -102,7 +105,10 @@ export function usePinLogin() {
   const device = useSession((s) => s.sharedDevice);
   const signIn = useSession((s) => s.signIn);
   return useMutation({
-    mutationFn: async ({ employeeId, pin }: { employeeId: string; pin: string }) => (await sharedDeviceAuth.pinLogin(device!, employeeId, pin)).data,
+    mutationFn: async ({ employeeId, pin }: { employeeId: string; pin: string }) => {
+      await useSession.getState().prepareSignIn();
+      return (await sharedDeviceAuth.pinLogin(device!, employeeId, pin)).data;
+    },
     onSuccess: (s: Session) => signIn(s),
   });
 }

@@ -2,7 +2,7 @@
 import * as Application from 'expo-application';
 import { router, Stack } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Switch, View } from 'react-native';
+import { Switch, View } from 'react-native';
 
 import { errorMessage } from '@/api/errors';
 import type { PaymentMethod, Tenant, TenantSettings } from '@/api/types';
@@ -30,6 +30,7 @@ import { useSetPin, useSettings, useSubscription, useSwitchTenant, useTenant, us
 import { confirmSignOut } from '@/features/shell/AppShell';
 import { ChangePasswordSection } from '@/features/settings/ChangePasswordSection';
 import { discardPending, isExpired, resendPending, resolveUnknown } from '@/features/sync/operations';
+import { confirmAction } from '@/lib/confirm';
 import { formatDateTime } from '@/lib/dates';
 import { formatBRL, toCents } from '@/lib/money';
 import { paymentMethodNames, roleNames } from '@/lib/strings';
@@ -330,10 +331,12 @@ export function DraftsScreen() {
   };
 
   const discard = (op: PendingOperation) =>
-    Alert.alert('Descartar pendência?', 'Se ela tiver sido registrada, continuará no servidor.', [
-      { text: 'Voltar', style: 'cancel' },
-      { text: 'Descartar', style: 'destructive', onPress: () => void discardPending(op).then(load) },
-    ]);
+    confirmAction({
+      title: 'Descartar pendência?',
+      message: 'Se ela tiver sido registrada, continuará no servidor.',
+      confirmText: 'Descartar',
+      onConfirm: () => void discardPending(op).then(load),
+    });
 
   return (
     <Screen>

@@ -48,40 +48,28 @@ export async function runCritical<T>(input: RunCriticalInput): Promise<CriticalO
   const store = usePendingOps.getState();
   let key: string | null = null;
 
-  if (idempotent && !input.existingKey) {
-    const blocking = await findBlocking(input);
-    if (blocking) {
-      store.put(blocking);
-      return { kind: 'blocked', op: blocking };
-    }
-  }
-
-  if (idempotent) {
-    if (input.existingKey) {
-      key = input.existingKey;
-      await pendingOpsRepo.setStatus(key, 'SENDING');
-      const op = await pendingOpsRepo.get(key);
-      if (op) store.put(op);
-    } else {
-      key = newKey();
-      const op: PendingOperation = {
-        idempotencyKey: key,
-        tenantId: input.tenantId,
-        employeeId: input.employeeId,
-        draftId: input.draftId ?? null,
-        method: input.request.method,
-        path: input.request.path,
-        bodyJson: input.request.body === undefined ? null : JSON.stringify(input.request.body),
-        ifMatch: input.request.ifMatch ?? null,
-        status: 'SENDING',
-        description: input.description,
-        createdAt: new Date().toISOString(),
-        lastError: null,
-      };
+  if (idempotent && input.existingKey) {
+    key = input.existingKey;
+    await pendingOpsRepo.setStatus(key, 'SENDING');
+    const op = await pendingOpsRepo.get(key);
+    if (op) store.put(op);
+  } else if (idempotent) {
+    // Procurar a pendência igual e gravar a nova numa seção exclusiva: duas chamadas concorrentes (duas telas,
+    // toque duplo que escapou da trava do hook) não passam juntas pelo `findBlocking` antes do `insert`.
+    const claimed = await exclusive(async (): Promise<{ blocking: PendingOperation } | { op: PendingOperation }> => {
+      const blocking = await findBlocking(input);
+      if (blocking) return { blocking };
+      const op = newPendingOp(input);
       // Antes de enviar: se o app morrer no meio, a pendência continua lá para ser verificada.
       await pendingOpsRepo.insert(op);
-      store.put(op);
+      return { op };
+    });
+    if ('blocking' in claimed) {
+      store.put(claimed.blocking);
+      return { kind: 'blocked', op: claimed.blocking };
     }
+    key = claimed.op.idempotencyKey;
+    store.put(claimed.op);
   }
 
   try {
@@ -107,6 +95,32 @@ export async function runCritical<T>(input: RunCriticalInput): Promise<CriticalO
     }
     return { kind: 'unknown', key, error };
   }
+}
+
+let gate: Promise<unknown> = Promise.resolve();
+
+/** Uma seção por vez neste processo (aba). */
+function exclusive<T>(fn: () => Promise<T>): Promise<T> {
+  const result = gate.then(fn);
+  gate = result.catch(() => {});
+  return result;
+}
+
+function newPendingOp(input: RunCriticalInput): PendingOperation {
+  return {
+    idempotencyKey: newKey(),
+    tenantId: input.tenantId,
+    employeeId: input.employeeId,
+    draftId: input.draftId ?? null,
+    method: input.request.method,
+    path: input.request.path,
+    bodyJson: input.request.body === undefined ? null : JSON.stringify(input.request.body),
+    ifMatch: input.request.ifMatch ?? null,
+    status: 'SENDING',
+    description: input.description,
+    createdAt: new Date().toISOString(),
+    lastError: null,
+  };
 }
 
 /**

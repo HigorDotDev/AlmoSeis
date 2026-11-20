@@ -3,6 +3,8 @@ import Constants from 'expo-constants';
 
 import type { Platform as ApiPlatform } from '@/api/types';
 
+export { REQUEST_TIMEOUT_MS, TERMS_VERSION } from './configShared';
+
 /**
  * A API precisa ser do mesmo *site* do app web para o cookie `SameSite=Strict` seguir (ADR-0053 §2). No
  * desenvolvimento o celular usa o IP da máquina (`EXPO_PUBLIC_API_BASE_URL`), mas o navegador em
@@ -13,7 +15,3 @@ export const API_BASE_URL = (process.env.EXPO_PUBLIC_WEB_API_BASE_URL ?? process
 export const APP_VERSION = Constants.expoConfig?.version ?? '1.0.0';
 
 export const APP_PLATFORM: ApiPlatform = 'WEB';
-
-export const TERMS_VERSION = '2026-10';
-
-export const REQUEST_TIMEOUT_MS = 15_000;

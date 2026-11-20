@@ -4,12 +4,9 @@
  */
 import { AppState } from 'react-native';
 
-export interface AppLifecycleHandlers {
-  /** Voltou para a frente (ou a rede voltou, na web): reconecta e sincroniza. */
-  onForeground(): void;
-  /** Foi para segundo plano: desconecta o tempo real. */
-  onBackground(): void;
-}
+import type { AppLifecycleHandlers } from './appLifecycle.types';
+
+export type { AppLifecycleHandlers } from './appLifecycle.types';
 
 export function subscribeAppLifecycle({ onForeground, onBackground }: AppLifecycleHandlers): () => void {
   const sub = AppState.addEventListener('change', (s) => {

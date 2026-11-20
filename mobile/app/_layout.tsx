@@ -5,7 +5,7 @@ import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client
 import { router, Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { configureApiClient } from '@/api/client';
@@ -15,6 +15,7 @@ import { draftsRepo } from '@/db/draftsRepo';
 import { queryCacheStorage } from '@/db/kvStorage';
 import { openLocalDb } from '@/db/migrations';
 import { handleUpgradeRequired } from '@/features/update/upgradeHandler';
+import { RECONNECTING_MESSAGE } from '@/lib/strings';
 import { useConnectivity } from '@/stores/connectivity';
 import { registerTenantDataClearer, useSession } from '@/stores/session';
 
@@ -42,6 +43,7 @@ const persister = createAsyncStoragePersister({ storage: queryCacheStorage, key:
 
 configureApiClient({
   getAccessToken: () => useSession.getState().tokens?.accessToken ?? null,
+  getAccessTokenExpiresAt: () => useSession.getState().tokens?.accessTokenExpiresAt ?? null,
   refresh: () => useSession.getState().refresh(),
   onSessionExpired: () => void useSession.getState().signOut('expired'),
   onUpgradeRequired: (info) => handleUpgradeRequired(info, (i) => useSession.getState().setUpgradeRequired(i)),
@@ -59,6 +61,7 @@ export default function RootLayout() {
   const [ready, setReady] = useState(false);
   const tenantId = useSession((s) => s.me?.tenant.id ?? 'none');
   const upgradeRequired = useSession((s) => s.upgradeRequired);
+  const reconnecting = useSession((s) => s.reconnecting);
   const c = useColors();
 
   useEffect(() => {
@@ -78,6 +81,11 @@ export default function RootLayout() {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: c.bg }}>
         <ActivityIndicator size="large" color={c.primary} />
+        {reconnecting ? (
+          <Text accessibilityLiveRegion="polite" style={{ marginTop: 16, color: c.textMuted, fontSize: 16, textAlign: 'center', paddingHorizontal: 24 }}>
+            {RECONNECTING_MESSAGE}
+          </Text>
+        ) : null}
       </View>
     );
   }

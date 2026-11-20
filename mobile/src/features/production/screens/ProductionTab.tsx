@@ -195,7 +195,7 @@ function ProductionCard({ order: o, status, flash, onFlashed }: { order: Product
         onCancel={() => setTarget(null)}
         onConfirm={async () => {
           const outcome = await setStatus.run({ status: target!, version: o.version });
-          if (outcome.kind !== 'rejected') setTarget(null);
+          if (outcome.kind !== 'rejected' && outcome.kind !== 'ignored') setTarget(null);
         }}
       />
     </Animated.View>

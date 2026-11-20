@@ -6,9 +6,9 @@
  */
 import { flushAllDrafts } from '@/features/drafts/useDraft';
 
-import type { UpgradeInfo } from './upgradeHandler';
+import type { UpgradeInfo } from './upgradeHandler.types';
 
-export type { UpgradeInfo } from './upgradeHandler';
+export type { UpgradeInfo } from './upgradeHandler.types';
 
 export const RELOAD_MARK_KEY = 'almoseis.reloadedFor426';
 /** Uma marca mais velha que isso é de outro deploy: pode recarregar de novo. */

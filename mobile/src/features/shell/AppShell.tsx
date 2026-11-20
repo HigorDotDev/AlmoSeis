@@ -3,7 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackHeaderProps } from 'expo-router/native-stack';
 import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 
 import type { Permission } from '@/api/types';
 import { Banner, BottomSheet, IconButton, Row, Text, TOUCH, radius, space, useColors, type IconName } from '@/components/ui';
@@ -11,6 +11,7 @@ import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { useSettings } from '@/features/session/hooks';
 import { draftsRepo } from '@/db/draftsRepo';
 import { pendingOpsRepo } from '@/db/pendingOpsRepo';
+import { confirmAction } from '@/lib/confirm';
 import { formatBusinessDate } from '@/lib/dates';
 import { usePendingOps } from '@/stores/pendingOps';
 import { hasPermission, useSession } from '@/stores/session';
@@ -197,20 +198,15 @@ export async function confirmSignOut(): Promise<void> {
     router.replace('/');
   };
   if (drafts === 0 && ops.length === 0) {
-    Alert.alert('Encerrar sessão?', undefined, [
-      { text: 'Voltar', style: 'cancel' },
-      { text: 'Encerrar', style: 'destructive', onPress: () => void doSignOut(false) },
-    ]);
+    confirmAction({ title: 'Encerrar sessão?', confirmText: 'Encerrar', onConfirm: () => void doSignOut(false) });
     return;
   }
-  Alert.alert(
-    'Há itens não enviados',
-    `${drafts} rascunho(s) e ${ops.length} operação(ões) pendente(s) serão apagados deste aparelho. Confira em "Rascunhos e pendências" antes de sair.`,
-    [
-      { text: 'Voltar', style: 'cancel' },
-      { text: 'Sair e apagar', style: 'destructive', onPress: () => void doSignOut(true) },
-    ],
-  );
+  confirmAction({
+    title: 'Há itens não enviados',
+    message: `${drafts} rascunho(s) e ${ops.length} operação(ões) pendente(s) serão apagados deste aparelho. Confira em "Rascunhos e pendências" antes de sair.`,
+    confirmText: 'Sair e apagar',
+    onConfirm: () => void doSignOut(true),
+  });
 }
 
 /** Aparelho compartilhado: sem toque por `sharedDeviceIdleSeconds`, volta para a seleção de funcionário. */

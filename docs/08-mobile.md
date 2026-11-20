@@ -199,6 +199,8 @@ Fluxo (RF-012, RN-014.4/14.11/14.12):
    `409 OperationInProgress` é tratado como resultado desconhecido (resolve pelo passo 4).
 ```
 
+**Toque duplo / Enter repetido:** `run` tem uma trava síncrona (ref): enquanto uma execução do mesmo hook não terminou, uma segunda chamada devolve `{ kind: 'ignored' }` sem enviar nada, e a tela não reage a ela (a primeira ainda vai devolver o desfecho). O `state` do React sozinho não basta, porque só muda no próximo render. Entre hooks diferentes (duas telas, "Reenviar"), procurar a pendência da mesma ação e gravar a nova é uma seção exclusiva em `runCritical`: a segunda chamada concorrente recebe `blocked` com a pendência da primeira.
+
 **Enquanto uma operação estiver `UNKNOWN`/`FAILED`:**
 - o pedido afetado mostra o selo "Pendente de confirmação";
 - o botão da mesma ação fica bloqueado, o que impede pagamento em dobro (RN-009.9);
@@ -222,7 +224,8 @@ A `ConnectivityBar` (topo, sempre visível) mostra:
 Disparado ao voltar online, ao trazer o app para primeiro plano, a cada reconexão do SignalR e por evento com salto de `seq` (com intervalo mínimo de 10 s entre execuções):
 
 ```text
-1. refreshSingleFlight()                                  // revalida a sessão (RN-014 "quando a conexão retornar")
+1. refreshIfExpiring()                                    // renova só se o access token vence em < 5 min (SYNC_REFRESH_MARGIN_MS);
+                                                          // com ele válido, as chamadas abaixo revalidam a sessão (token revogado → 401 → refresh)
 2. para cada pending UNKNOWN → resolveUnknown()           // §8.5 passo 4
 3. loop GET /sync/changes?since={lastSeq}&limit=500 até hasMore=false
      → invalida as chaves de cada change (mapa §8.3) → grava lastSeq em meta
@@ -235,7 +238,7 @@ Os conflitos (RN-014.9/14.10) aparecem no envio, via `409 VersionConflict` (§8.
 
 ### `features/realtime/useRealtime.ts`
 
-- `HubConnectionBuilder().withUrl('/hubs/realtime?appVersion=…', { accessTokenFactory })`, com reconexão automática (0, 2, 5, 10, 30 s) e reconexão manual depois disso, quando voltar online.
+- `HubConnectionBuilder().withUrl('/hubs/realtime?appVersion=…', { accessTokenFactory })`, com reconexão automática (0, 2, 5, 10, 30 s). O `accessTokenFactory` é assíncrono e renova o token antes se ele vence em menos de 1 min (`refreshIfExpiring`, mesmo caminho único de renovação). Depois que a automática desiste, a própria conexão agenda novo `start` em 5, 15, 30 e 60 s (depois a cada 60 s), além de reconectar ao voltar online ou ao primeiro plano (§8.15, "Token do hub").
 - O evento `event`:
   1. ignora `eventId` repetido (memória com as últimas 500 entradas);
   2. invalida pelo mapa de §8.3;
@@ -602,14 +605,14 @@ Critério de pronto do mobile (`docs/02-padroes.md` §2.6): fluxos E2E 1 e 2 pas
 
 O mesmo `mobile/` roda no navegador do computador do balcão (Chrome e Edge no Windows, RF-216, RNF-207), instalável como PWA. **Mesmas telas, permissões e regras.** As diferenças de plataforma ficam em arquivos `.web.ts(x)` ao lado do nativo, com a mesma interface; o Metro escolhe o `.web` no build web, e o Jest (preset nativo) e o `tsc` enxergam o arquivo nativo. As telas não testam `Platform.OS`; ele só aparece em estilo (largura máxima no desktop).
 
-> **Armadilha:** dentro de `foo.web.ts`, `import … from './foo'` resolve para **ele mesmo** no bundle web (laço infinito). Só `import type` é seguro; código compartilhado vai para um terceiro arquivo sem sufixo de plataforma (ex.: `tabTitleFormat.ts`, `db/web/idb.ts`).
+> **Armadilha:** dentro de `foo.web.ts`, `import … from './foo'` (ou `@/…/foo`) resolve para **ele mesmo** no bundle web (laço infinito). Nem `import type` é usado: os tipos da interface ficam em `foo.types.ts` e o código compartilhado num terceiro arquivo, ambos sem sufixo de plataforma (ex.: `secure.types.ts`, `sessionTransport.types.ts`, `tabTitleFormat.ts`, `configShared.ts`, `db/web/idb.ts`). O teste `webSelfImport.test.ts` falha se algum `.web.ts(x)` importar o próprio nome, por caminho relativo ou alias.
 
 ### Build e configuração
 
 | Item | Como ficou |
 |---|---|
 | Dependências | `react-native-web`; `fake-indexeddb` (só testes) |
-| `metro.config.js` | `assetExts.push('wasm')` (sobrou do spike; o `expo-sqlite` não entra no bundle web) |
+| `metro.config.js` | não existe (padrão do Expo). O `assetExts.push('wasm')` do spike saiu: o `expo-sqlite` não entra no bundle web |
 | `app.json` → `web` | `output: "single"` (SPA), `bundler: "metro"`, `name`, `shortName`, `lang: pt-BR`, `themeColor` `#B23C0B`, `backgroundColor` `#F6F5F2`, `display: standalone` |
 | `public/` | `index.html` (modelo do Expo + `<link rel="manifest">`, `robots noindex`, `:focus-visible`), `manifest.json`, `icons/icon-192.png` e `icon-512.png`, `favicon.png`. **Os ícones são o placeholder do Expo** até existir a marca |
 | API | `config.web.ts`: `EXPO_PUBLIC_WEB_API_BASE_URL` antes de `EXPO_PUBLIC_API_BASE_URL`. O app web e a API precisam ser do mesmo *site* para o cookie `SameSite=Strict` (no desenvolvimento, `http://localhost:8082` → `http://localhost:5080`; o IP da máquina, usado pelo celular, não serve) |
@@ -619,10 +622,11 @@ O mesmo `mobile/` roda no navegador do computador do balcão (Chrome e Edge no W
 
 | Interface (nativo) | Web | O que muda |
 |---|---|---|
-| `config.ts` | `config.web.ts` | `APP_PLATFORM = 'WEB'` (`X-App-Platform` em toda requisição); `APP_VERSION` de `Constants.expoConfig.version` (o `version` do `app.json`, embutido no build) |
+| `config.ts` | `config.web.ts` | `APP_PLATFORM = 'WEB'` (`X-App-Platform` em toda requisição); `APP_VERSION` de `Constants.expoConfig.version` (o `version` do `app.json`, embutido no build). `TERMS_VERSION` e `REQUEST_TIMEOUT_MS` vêm de `configShared.ts` nos dois |
 | `api/transport.ts` | `transport.web.ts` | `credentials: 'include'` em `/auth/*`, `POST /devices/shared` e `/invitations/{code}/accept` (rotas que leem ou emitem os cookies, 06 §6.3 "App no navegador"); hub com `&appPlatform=WEB` na query (o navegador não manda header no WebSocket, 06 §6.14) |
 | `stores/secure.ts` | `secure.web.ts` | access token **só em memória**; o refresh nunca fica no cliente (é zerado mesmo se vier no corpo); `installationId` = `crypto.randomUUID()` no `localStorage`; aparelho compartilhado: só os dados não secretos no IndexedDB (`meta`), o `deviceSecret` fica no cookie `__Secure-almoseis-ds` |
-| `stores/sessionTransport.ts` | `sessionTransport.web.ts` | restaurar: celular lê o SecureStore; web chama `POST /auth/refresh` (cookie `__Secure-almoseis-rt`, corpo `{ installationId }`) e depois `GET /auth/me`; `401` → login. Sair: celular revoga só em "Sair"; web chama `POST /auth/logout` (sem corpo) em **todo** motivo exceto `expired`, senão um F5 restauraria a sessão pelo cookie (ex.: inatividade no aparelho compartilhado) |
+| `stores/sessionTransport.ts` | `sessionTransport.web.ts` | **restaurar** (`restored` / `signedOut` / `retry`): celular lê o SecureStore (nunca `retry`); web chama `POST /auth/refresh` (cookie `__Secure-almoseis-rt`, corpo `{ installationId }`) e depois `GET /auth/me`. `401` (ou outro 4xx) → login. **429, 5xx e falha de rede → `retry`**, nunca login: a raiz fica no indicador com "Sem resposta do servidor. Reconectando…" (`session.reconnecting`) e tenta de novo após o `Retry-After` (ADR-0041) ou 2, 4, 8, 15 e 30 s (depois a cada 30 s). `GET /auth/me` falhando sem `me` em cache também é `retry`, e a nova tentativa reaproveita o token já obtido (o coordenador o devolve sem outro refresh). **Sair** (`endSession`): celular revoga só em "Sair" e só então limpa, como antes; web, em **todo** motivo (inclusive `expired`), usa o logout pendente (abaixo) |
+| `features/auth/pendingLogout.ts` | (usado só pelo `sessionTransport.web.ts`) | **logout pendente.** Ordem ao sair: (1) marca `almoseis.pendingLogout` no `localStorage`, síncrona; (2) aviso `signedOut` às outras abas; (3) limpa a sessão local (a tela anterior some na hora, sem esperar a rede); (4) `POST /auth/logout` anônimo (sem token, sem corpo; o cookie vai sozinho), sob o mesmo Web Lock da renovação. Só `204` ou `401` apagam a marca; qualquer outra falha a mantém e agenda novas tentativas (2, 5, 15, 30, 60 s, depois a cada 60 s). **Com a marca presente, nenhuma aba restaura a sessão pelo cookie** (o `localStorage` é da origem): o `restore` vai direto para a entrada e tenta o logout em segundo plano. Antes de login, cadastro, convite ou PIN (`session.prepareSignIn`), o app espera um logout em andamento (nesta aba ou, pelo lock, em outra) e suspende as tentativas, porque a resposta do logout apagaria o cookie novo; entrar apaga a marca |
 | `features/auth/tabCoordinator.ts` | (usado só pelo `sessionTransport.web.ts`) | **várias abas:** renovação sob Web Lock `almoseis.auth.refresh` (uma por vez entre todas as abas, senão o servidor revoga a família, ADR-0027); `BroadcastChannel` `almoseis.session` repassa o access token novo (quem esperou o lock e recebeu um token válido não renova de novo), o logout (as outras abas saem) e a entrada/troca de estabelecimento (as outras abas recarregam). Sem Web Locks, só o single-flight da aba |
 | `api/endpoints/sharedDeviceAuth.ts` | `sharedDeviceAuth.web.ts` | lista: `GET /auth/shared-device/employees?installationId=` + `X-Tenant-Id`; `pin-login` sem `X-Device-Secret`; "deixar de usar como compartilhado" (`setSharedDevice(null)`) chama `DELETE /auth/shared-device` |
 | `db/migrations.ts`, `draftsRepo.ts`, `pendingOpsRepo.ts`, `metaRepo.ts` | `*.web.ts` + `db/web/idb.ts` | **IndexedDB** `almoseis` v1, um *object store* por tabela (`meta`, `drafts`, `pending_operations`, índice `tenantId`) e `kv`. Toda escrita resolve no `complete` da transação; `pendingOpsRepo.insert` usa `durability: 'strict'` e `add` (chave repetida falha como o `INSERT`). A pendência está gravada **antes** do envio: F5 no meio do "Receber" cai no `GET /operations/{key}`. `openLocalDb` pede `navigator.storage.persist()` uma vez |
@@ -632,7 +636,8 @@ O mesmo `mobile/` roda no navegador do computador do balcão (Chrome e Edge no W
 | `features/production/orderSound.ts` | `orderSound.web.ts` | `HTMLAudioElement`; `needsUnlock` enquanto a página não teve ativação do usuário (`navigator.userActivation`). A aba Pedidos mostra a faixa "Som desativado neste navegador — Ativar som"; o clique toca o aviso uma vez. No celular `needsUnlock` é sempre `false` |
 | `features/shell/tabTitle.ts` | `tabTitle.web.ts` | com a aba oculta, `document.title` = "(2) Pedidos novos · AlmoSeis", contando `OrderCreated` de outras pessoas; volta ao normal quando a aba vem para a frente. Quando os pedidos do site (ADR-0046) chegarem ao app, passa a contar "Novos do site" aguardando aceite (só este arquivo muda) |
 | `features/update/upgradeHandler.ts` + `UpdateRequiredScreen.tsx` | `*.web.ts(x)` | `426`: grava os rascunhos no debounce (`flushAllDrafts`) e recarrega a página **uma vez** (marca `almoseis.reloadedFor426` na `sessionStorage`, vale 10 min); se persistir, "Estamos atualizando o AlmoSeis. Tente de novo em alguns minutos." com "Recarregar", sem link de loja |
-| `lib/keyboard.ts` | `keyboard.web.ts` | `useKeyDown`: `Enter` confirma o `ConfirmDialog` (exceto com o foco num botão, que já trata a tecla); PIN aceita dígitos, `Backspace` e `Enter`. `Esc` fecha diálogos e *sheets* pelo `onRequestClose` do `Modal` do react-native-web. O peso do quilo já é um `TextInput` |
+| `lib/keyboard.ts` | `keyboard.web.ts` | `useKeyDown`: `Enter` confirma o `ConfirmDialog` (exceto com o foco num botão, que já trata a tecla); tecla segurada (`repeat`) é ignorada; PIN aceita dígitos, `Backspace` e `Enter`. `Esc` fecha diálogos e *sheets* pelo `onRequestClose` do `Modal` do react-native-web. O peso do quilo já é um `TextInput` |
+| `lib/confirm.ts` | `confirm.web.ts` | `confirmAction`: pergunta de sim/não antes de ação destrutiva (encerrar sessão, descartar pendência). No celular, `Alert.alert`; na web, `window.confirm`, porque o `Alert` do react-native-web não faz nada. Uma regra de lint proíbe importar `Alert` de `react-native` fora de `lib/confirm.ts` |
 
 ### Sem arquivo `.web`
 
@@ -641,8 +646,20 @@ O mesmo `mobile/` roda no navegador do computador do balcão (Chrome e Edge no W
 - **Layout:** janelas ≥ 720 px usam o layout de tablet existente (cozinha em 3 colunas). No desktop, `Screen`, listas das abas, detalhe do pedido, rodapé de envio, aba Fechamento, `ConfirmDialog` (520 px) e `BottomSheet` (640 px) têm largura máxima centralizada (`WEB_CONTENT_MAX`, 760 px, via `Platform.select`, vazio no celular).
 - **Assinatura:** ADR-0017 igual; nenhuma tela nova mostra preço ou compra.
 
+### Renovação e limite de taxa (ADR-0041)
+
+O `POST /auth/refresh` tem limite de 10/min por IP, e um balcão pode ter várias abas e computadores atrás do mesmo IP. Na web o sync roda a cada `visibilitychange`, então o passo 1 do sync (§8.6) **só renova se o access token vence em menos de 5 min** (`SYNC_REFRESH_MARGIN_MS`, pelo `accessTokenExpiresAt`). Vale para todas as plataformas: com o token válido, a sessão continua revalidada pelas próprias chamadas do sync (token revogado por troca de `security_stamp` dá `401` em até 30 s, ADR-0027, e cai no refresh do 401). O coordenador entre abas continua renovando de verdade quando recebe o próprio token como "velho": esse caminho é o do `401` e do `AccessRevoked`, que precisam de um token novo; a reutilização do token válido da própria aba fica no `refreshIfExpiring`, que sabe que a chamada é oportunista. Na restauração, `429`/`5xx`/rede nunca levam ao login (tabela acima).
+
+**Token do hub (todas as plataformas).** O servidor pode fechar a conexão quando o access token vence. O `accessTokenFactory` do SignalR é assíncrono: antes de cada conexão ou reconexão chama `refreshIfExpiring(REALTIME_REFRESH_MARGIN_MS)` (1 min), pelo mesmo caminho único de renovação (single-flight; coordenador entre abas na web), e só então devolve o token. Se a reconexão automática desistir (`onclose` depois das tentativas), `RealtimeConnection` agenda um novo `start` com espera crescente (5, 15, 30, 60 s, depois a cada 60 s) enquanto não for parada; `stop()` cancela.
+
 ### Testes
 
 - `webLocalDb.test.ts`: repositórios web contra `fake-indexeddb` (upsert do rascunho, `latest` com alvo nulo, `purgeOld`, pendência que sobrevive ao "F5", chave repetida, filtros e ordem).
 - `tabCoordinator.test.ts`: duas abas renovando juntas → uma renovação só e nunca simultâneas; sem canal, renovações em série; single-flight na aba; token vencendo não é reaproveitado; logout e entrada chegam às outras abas.
+- `pendingLogout.test.ts`: falha mantém a marca e tenta de novo até o `204`; `401` limpa, `403` não; a marca vale para outra aba; chamadas simultâneas viram um logout; o login espera o lock; entrar para as tentativas.
+- `webSession.test.ts` (store real + `sessionTransport.web`/`secure.web`, `localStorage` falso): a marca existe e a tela já está limpa quando o logout sai; logout com `503` → F5 não chama o refresh e vai à entrada; `204` libera a próxima restauração; `expired` também chama o logout; o login espera o logout em andamento; abrir com `429` (`Retry-After`), `503` e queda de rede → "reconectando" e depois entra, sem passar pelo login; `/auth/me` falhando reaproveita o token.
+- `refreshPolicy.test.ts`: o sync não renova com o token valendo mais de 5 min e renova quando vence antes, sem validade conhecida ou sem token.
+- `criticalMutationLock.test.tsx`: dois `run` no mesmo tick → um envio só e o segundo `ignored`; dois `runCritical` concorrentes da mesma ação → um envia e o outro fica `blocked`. `webKeyboard.test.tsx`: `Enter` com `repeat` é ignorado.
+- `webSelfImport.test.ts`: nenhum `.web.ts(x)` importa o próprio nome.
+- `realtimeToken.test.ts`: o hub pede o token por uma função assíncrona que renova antes de conectar quando ele vence em menos de 1 min; depois de desistir, a conexão agenda nova tentativa com espera.
 - Pendentes: E2E web (Playwright) dos critérios de aceite do RF-216.

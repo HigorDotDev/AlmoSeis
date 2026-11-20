@@ -16,6 +16,12 @@ import { pendingOpsRepo } from '@/db/pendingOpsRepo';
 
 export type CriticalState = 'idle' | 'sending' | 'unknown' | 'failed';
 
+/**
+ * `ignored`: já havia uma execução deste mesmo hook em andamento (Enter repetido, toque duplo); nada foi
+ * enviado e quem chamou não deve mudar a tela, porque a primeira execução ainda vai devolver o desfecho.
+ */
+export type RunOutcome<T> = CriticalOutcome<T> | { kind: 'ignored' };
+
 export interface CriticalMutationOptions<TVars, TResult> {
   request: (vars: TVars) => CriticalRequest;
   describe: (vars: TVars) => string;
@@ -41,6 +47,8 @@ export function useCriticalMutation<TVars, TResult>(options: CriticalMutationOpt
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const unknownKey = useRef<string | null>(null);
+  // Trava síncrona: o `state` do React só muda no próximo render, então dois `run` no mesmo tick passariam.
+  const running = useRef(false);
   const optionsRef = useRef(options);
   useEffect(() => {
     optionsRef.current = options;
@@ -82,7 +90,7 @@ export function useCriticalMutation<TVars, TResult>(options: CriticalMutationOpt
     }
   }, [online, state, resolve]);
 
-  const run = useCallback(
+  const execute = useCallback(
     async (vars: TVars): Promise<CriticalOutcome<TResult>> => {
       const o = optionsRef.current;
       if (!tenantId || !employeeId) throw new Error('Sem sessão.');
@@ -143,6 +151,19 @@ export function useCriticalMutation<TVars, TResult>(options: CriticalMutationOpt
       return outcome;
     },
     [tenantId, employeeId, queryClient],
+  );
+
+  const run = useCallback(
+    async (vars: TVars): Promise<RunOutcome<TResult>> => {
+      if (running.current) return { kind: 'ignored' };
+      running.current = true;
+      try {
+        return await execute(vars);
+      } finally {
+        running.current = false;
+      }
+    },
+    [execute],
   );
 
   const reset = useCallback(() => {

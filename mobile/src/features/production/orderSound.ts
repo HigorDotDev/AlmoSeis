@@ -5,13 +5,9 @@
 import { useAudioPlayer } from 'expo-audio';
 import { useCallback } from 'react';
 
-export interface OrderSound {
-  play(): void;
-  /** O navegador está bloqueando o som até um clique. No celular, sempre `false`. */
-  needsUnlock: boolean;
-  /** O clique em "Ativar som". */
-  unlock(): void;
-}
+import type { OrderSound } from './orderSound.types';
+
+export type { OrderSound } from './orderSound.types';
 
 export function useOrderSound(): OrderSound {
   const player = useAudioPlayer(require('../../../assets/sounds/new-order.wav'));

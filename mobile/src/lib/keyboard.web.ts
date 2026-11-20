@@ -4,9 +4,9 @@
  */
 import { useEffect, useRef } from 'react';
 
-import type { KeyHandler } from './keyboard';
+import type { KeyHandler } from './keyboard.types';
 
-export type { KeyHandler } from './keyboard';
+export type { KeyHandler } from './keyboard.types';
 
 function focusedOnButton(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -22,7 +22,8 @@ export function useKeyDown(handler: KeyHandler, enabled = true): void {
   useEffect(() => {
     if (!enabled) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
+      // `repeat`: tecla segurada. Um Enter segurado no diálogo de confirmação não pode confirmar duas vezes.
+      if (e.repeat || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
       if (e.key === 'Enter' && focusedOnButton(e.target)) return;
       if (ref.current(e.key)) e.preventDefault();
     };

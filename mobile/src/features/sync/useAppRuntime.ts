@@ -9,11 +9,11 @@ import { useQueryClient } from '@tanstack/react-query';
 import * as Network from 'expo-network';
 import { useEffect, useRef } from 'react';
 
-import { refreshSingleFlight } from '@/api/client';
+import { refreshIfExpiring, refreshSingleFlight } from '@/api/client';
 import { invalidateEntity, qk } from '@/api/queryKeys';
 import type { RealtimeEnvelope } from '@/api/types';
 import { metaRepo } from '@/db/metaRepo';
-import { decideSeq, EventDeduper, emitRealtimeEvent, RealtimeConnection } from '@/features/realtime/realtime';
+import { decideSeq, EventDeduper, emitRealtimeEvent, RealtimeConnection, realtimeAccessToken } from '@/features/realtime/realtime';
 import { useConnectivity } from '@/stores/connectivity';
 import { usePendingOps } from '@/stores/pendingOps';
 import { useSession } from '@/stores/session';
@@ -117,9 +117,10 @@ export function useAppRuntime(): void {
     };
 
     const conn = new RealtimeConnection({
-      getAccessToken: () => useSession.getState().tokens?.accessToken ?? null,
+      getAccessToken: () => realtimeAccessToken(refreshIfExpiring, () => useSession.getState().tokens?.accessToken ?? null),
       onEvent,
       onReconnected: () => void sync(),
+      // A própria conexão agenda a nova tentativa com espera (realtime.ts); aqui não há o que fazer.
       onGaveUp: () => {},
     });
     connection.current = conn;

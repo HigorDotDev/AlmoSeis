@@ -6,7 +6,9 @@
  */
 import { apiRequest, qs } from '../client';
 import type { DeviceEmployees, Session, Uuid } from '../types';
-import type { SharedDeviceRef } from './sharedDeviceAuth';
+import type { SharedDeviceRef } from './sharedDeviceAuth.types';
+
+export type { SharedDeviceRef } from './sharedDeviceAuth.types';
 
 export const sharedDeviceAuth = {
   employees: (device: SharedDeviceRef) =>
