@@ -5,7 +5,7 @@ import { RefreshControl, View } from 'react-native';
 
 import { errorMessage } from '@/api/errors';
 import type { OrderSummary } from '@/api/types';
-import { EmptyState, ErrorState, Fab, SegmentedControl, Skeleton, TextField, space, useColors } from '@/components/ui';
+import { EmptyState, ErrorState, Fab, SegmentedControl, Skeleton, TextField, space, useColors, WEB_CONTENT_MAX } from '@/components/ui';
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { useCurrentMenu } from '@/features/menu/hooks';
 import { useCanWrite } from '@/stores/session';
@@ -43,34 +43,36 @@ export default function MarmitasTab() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      <FlashList<OrderSummary>
-        data={items}
-        keyExtractor={(o) => o.id}
-        contentContainerStyle={{ padding: space.lg, paddingBottom: 96 }}
-        ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
-        refreshControl={<RefreshControl refreshing={orders.isRefetching} onRefresh={() => void orders.refetch()} />}
-        onEndReached={() => orders.hasNextPage && !orders.isFetchingNextPage && void orders.fetchNextPage()}
-        ListHeaderComponent={
-          <View style={{ gap: space.md, marginBottom: space.md }}>
-            {menu.data?.missing ? <MenuMissingCard menuType="MARMITA" sources={menu.data.missing.sources} businessDate={menu.data.missing.businessDate} /> : null}
-            <SegmentedControl
-              value={filter}
-              onChange={setFilter}
-              options={[
-                { value: 'ALL', label: 'Todos' },
-                { value: 'UNPAID', label: 'A pagar' },
-                { value: 'DELIVERY', label: 'Entrega' },
-                { value: 'PICKUP', label: 'Retirada' },
-              ]}
-            />
-            <TextField label="Buscar por nome" value={search} onChangeText={setSearch} placeholder="Nome do cliente" />
-          </View>
-        }
-        ListEmptyComponent={
-          orders.isLoading ? <Skeleton /> : orders.isError ? <ErrorState message={errorMessage(orders.error)} onRetry={() => void orders.refetch()} /> : <EmptyState title="Nenhuma marmita ainda" />
-        }
-        renderItem={({ item }) => <OrderCard order={item} />}
-      />
+      <View style={[{ flex: 1 }, WEB_CONTENT_MAX]}>
+        <FlashList<OrderSummary>
+          data={items}
+          keyExtractor={(o) => o.id}
+          contentContainerStyle={{ padding: space.lg, paddingBottom: 96 }}
+          ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
+          refreshControl={<RefreshControl refreshing={orders.isRefetching} onRefresh={() => void orders.refetch()} />}
+          onEndReached={() => orders.hasNextPage && !orders.isFetchingNextPage && void orders.fetchNextPage()}
+          ListHeaderComponent={
+            <View style={{ gap: space.md, marginBottom: space.md }}>
+              {menu.data?.missing ? <MenuMissingCard menuType="MARMITA" sources={menu.data.missing.sources} businessDate={menu.data.missing.businessDate} /> : null}
+              <SegmentedControl
+                value={filter}
+                onChange={setFilter}
+                options={[
+                  { value: 'ALL', label: 'Todos' },
+                  { value: 'UNPAID', label: 'A pagar' },
+                  { value: 'DELIVERY', label: 'Entrega' },
+                  { value: 'PICKUP', label: 'Retirada' },
+                ]}
+              />
+              <TextField label="Buscar por nome" value={search} onChangeText={setSearch} placeholder="Nome do cliente" />
+            </View>
+          }
+          ListEmptyComponent={
+            orders.isLoading ? <Skeleton /> : orders.isError ? <ErrorState message={errorMessage(orders.error)} onRetry={() => void orders.refetch()} /> : <EmptyState title="Nenhuma marmita ainda" />
+          }
+          renderItem={({ item }) => <OrderCard order={item} />}
+        />
+      </View>
       {canCreate ? <Fab label="Nova marmita" icon="add" onPress={() => router.push('/orders/new/marmita')} /> : null}
     </View>
   );

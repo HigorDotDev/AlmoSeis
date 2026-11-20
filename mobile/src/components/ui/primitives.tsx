@@ -4,6 +4,7 @@ import type { ComponentProps, ReactNode } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -35,6 +36,12 @@ export function Text({
   return <RNText {...props} style={[{ color: muted ? c.textMuted : c.text, fontSize: size, fontWeight: weight }, numeric && { fontVariant: ['tabular-nums'] }, style]} />;
 }
 
+/**
+ * Web desktop (ADR-0053 §1.4): formulários e listas não esticam na janela larga; a coluna fica centralizada.
+ * No celular e no tablet nativo, nada muda.
+ */
+export const WEB_CONTENT_MAX = Platform.select<ViewStyle>({ web: { width: '100%', maxWidth: 760, alignSelf: 'center' }, default: {} });
+
 export function Screen({ children, scroll = true, style }: { children: ReactNode; scroll?: boolean; style?: StyleProp<ViewStyle> }) {
   const c = useColors();
   const insets = useSafeAreaInsets();
@@ -42,7 +49,7 @@ export function Screen({ children, scroll = true, style }: { children: ReactNode
     return <View style={[{ flex: 1, backgroundColor: c.bg }, style]}>{children}</View>;
   }
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: c.bg }} contentContainerStyle={[{ padding: space.lg, gap: space.md, paddingBottom: 96 + insets.bottom }, style]} keyboardShouldPersistTaps="handled">
+    <ScrollView style={{ flex: 1, backgroundColor: c.bg }} contentContainerStyle={[{ padding: space.lg, gap: space.md, paddingBottom: 96 + insets.bottom }, WEB_CONTENT_MAX, style]} keyboardShouldPersistTaps="handled">
       {children}
     </ScrollView>
   );

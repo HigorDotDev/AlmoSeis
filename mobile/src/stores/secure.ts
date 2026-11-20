@@ -17,7 +17,8 @@ export interface SharedDeviceCredentials {
   tenantName: string;
   name: string;
   installationId: string;
-  deviceSecret: string;
+  /** Web: `null` (cookie `HttpOnly`, ADR-0053 §3.8). */
+  deviceSecret: string | null;
 }
 
 async function readJson<T>(key: string): Promise<T | null> {

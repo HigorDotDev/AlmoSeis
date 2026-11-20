@@ -1,13 +1,13 @@
 /**
  * Orquestra conectividade, sync e SignalR enquanto há sessão (08 §8.6):
  * - online/offline pelo expo-network; ao voltar online → sync;
- * - primeiro plano → conecta o SignalR e sincroniza; segundo plano → desconecta (ADR-0036);
+ * - primeiro plano → conecta o SignalR e sincroniza; segundo plano → desconecta (ADR-0036). Na web a aba
+ *   oculta continua conectada (ADR-0053 §7.1; `appLifecycle.web.ts`);
  * - evento → invalida; salto de `seq` → sync; AccessRevoked → renova ou sai.
  */
 import { useQueryClient } from '@tanstack/react-query';
 import * as Network from 'expo-network';
 import { useEffect, useRef } from 'react';
-import { AppState } from 'react-native';
 
 import { refreshSingleFlight } from '@/api/client';
 import { invalidateEntity, qk } from '@/api/queryKeys';
@@ -18,6 +18,7 @@ import { useConnectivity } from '@/stores/connectivity';
 import { usePendingOps } from '@/stores/pendingOps';
 import { useSession } from '@/stores/session';
 
+import { subscribeAppLifecycle } from './appLifecycle';
 import { runSync } from './syncEngine';
 
 export function useAppRuntime(): void {
@@ -130,13 +131,10 @@ export function useAppRuntime(): void {
     };
     activate();
 
-    const appState = AppState.addEventListener('change', (s) => {
-      if (s === 'active') activate();
-      else if (s === 'background') void conn.stop();
-    });
+    const unsubscribeLifecycle = subscribeAppLifecycle({ onForeground: activate, onBackground: () => void conn.stop() });
 
     return () => {
-      appState.remove();
+      unsubscribeLifecycle();
       void conn.stop();
       connection.current = null;
     };

@@ -1,12 +1,17 @@
 /** Diálogos e folhas (08 §8.11): ConfirmDialog, BottomSheet, ConflictSheet, Toaster. */
 import type { ReactNode } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, View, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useKeyDown } from '@/lib/keyboard';
 import { useToast } from '@/stores/toast';
 
 import { Button, Text } from './primitives';
 import { radius, space, useColors } from './theme';
+
+/** Web desktop: diálogo e folha não esticam até a borda da janela (ADR-0053 §1.4). No celular, nada muda. */
+const WIDE_DIALOG = Platform.select<ViewStyle>({ web: { width: '100%', maxWidth: 520, alignSelf: 'center' }, default: {} });
+const WIDE_SHEET = Platform.select<ViewStyle>({ web: { width: '100%', maxWidth: 640, alignSelf: 'center' }, default: {} });
 
 export interface ConfirmLine {
   label: string;
@@ -43,10 +48,16 @@ export function ConfirmDialog({
   children?: ReactNode;
 }) {
   const c = useColors();
+  // Web: `Enter` confirma (o `Esc` já chega como `onRequestClose` pelo Modal do react-native-web).
+  useKeyDown((key) => {
+    if (key !== 'Enter' || loading) return false;
+    onConfirm();
+    return true;
+  }, visible);
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
       <View style={{ flex: 1, backgroundColor: c.overlay, justifyContent: 'center', padding: space.lg }}>
-        <View accessibilityViewIsModal style={{ backgroundColor: c.surface, borderRadius: radius.lg, padding: space.lg, gap: space.md, maxHeight: '85%' }}>
+        <View accessibilityViewIsModal style={[{ backgroundColor: c.surface, borderRadius: radius.lg, padding: space.lg, gap: space.md, maxHeight: '85%' }, WIDE_DIALOG]}>
           <Text variant="title">{title}</Text>
           <ScrollView contentContainerStyle={{ gap: space.sm }}>
             {description ? <Text>{description}</Text> : null}
@@ -78,7 +89,7 @@ export function BottomSheet({ visible, title, onClose, children, footer }: { vis
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, backgroundColor: c.overlay, justifyContent: 'flex-end' }}>
         <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityLabel="Fechar" />
-        <View style={{ backgroundColor: c.bg, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, maxHeight: '90%', paddingBottom: insets.bottom }}>
+        <View style={[{ backgroundColor: c.bg, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, maxHeight: '90%', paddingBottom: insets.bottom }, WIDE_SHEET]}>
           <View style={{ padding: space.lg, paddingBottom: space.sm, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <Text variant="title">{title}</Text>
             <Button title="Fechar" variant="ghost" onPress={onClose} />

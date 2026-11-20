@@ -2,7 +2,7 @@ import { router } from 'expo-router';
 import { RefreshControl, ScrollView, View } from 'react-native';
 
 import { errorMessage } from '@/api/errors';
-import { Button, Card, ErrorState, Row, Skeleton, Text, space, useColors } from '@/components/ui';
+import { Button, Card, ErrorState, Row, Skeleton, Text, space, useColors, WEB_CONTENT_MAX } from '@/components/ui';
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { formatBusinessDate } from '@/lib/dates';
 import { formatBRL } from '@/lib/money';
@@ -25,7 +25,7 @@ export default function ClosingTab() {
 
   if (!day.data) {
     return (
-      <ScrollView style={{ backgroundColor: c.bg }} contentContainerStyle={{ padding: space.lg, gap: space.md }}>
+      <ScrollView style={{ backgroundColor: c.bg }} contentContainerStyle={[{ padding: space.lg, gap: space.md }, WEB_CONTENT_MAX]}>
         <Card>
           <Text variant="subtitle">Nenhum expediente aberto</Text>
           {canOpen ? <Button title="Abrir expediente" icon="lock-open-outline" onPress={() => router.push('/business-day/open')} /> : null}
@@ -38,7 +38,7 @@ export default function ClosingTab() {
   return (
     <ScrollView
       style={{ backgroundColor: c.bg }}
-      contentContainerStyle={{ padding: space.lg, gap: space.md, paddingBottom: 48 }}
+      contentContainerStyle={[{ padding: space.lg, gap: space.md, paddingBottom: 48 }, WEB_CONTENT_MAX]}
       refreshControl={<RefreshControl refreshing={summary.isRefetching} onRefresh={() => void summary.refetch()} />}
     >
       <Text variant="title">Parcial de {formatBusinessDate(day.data.businessDate)}</Text>

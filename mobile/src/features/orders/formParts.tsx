@@ -3,7 +3,7 @@ import { Pressable, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { MarmitaSize, Product } from '@/api/types';
-import { Banner, Button, Card, QuantityStepper, Row, SyncStatePill, Text, radius, space, useColors } from '@/components/ui';
+import { Banner, Button, Card, QuantityStepper, Row, SyncStatePill, Text, radius, space, useColors, WEB_CONTENT_MAX } from '@/components/ui';
 import type { Draft } from '@/db/schema';
 import { formatBRL } from '@/lib/money';
 import { formatTime } from '@/lib/dates';
@@ -86,22 +86,24 @@ export function SubmitFooter({
   const c = useColors();
   const insets = useSafeAreaInsets();
   return (
-    <View style={{ backgroundColor: c.surface, borderTopWidth: 1, borderTopColor: c.border, padding: space.md, paddingBottom: space.md + insets.bottom, gap: space.sm }}>
-      {error ? <Banner tone="danger" text={error} /> : null}
-      {unknown ? <Banner tone="warning" text="Não sabemos se o pedido foi registrado. Verificando…" /> : null}
-      <Row style={{ justifyContent: 'space-between' }}>
-        <Text muted>Prévia</Text>
-        <Text variant="title">{formatBRL(previewCents)}</Text>
-      </Row>
-      {!online ? (
-        <Row>
-          <SyncStatePill state="draft" />
-          <Text variant="small" muted style={{ flex: 1 }}>
-            Sem internet: o pedido fica salvo como rascunho e pode ser enviado quando a conexão voltar.
-          </Text>
+    <View style={{ backgroundColor: c.surface, borderTopWidth: 1, borderTopColor: c.border, padding: space.md, paddingBottom: space.md + insets.bottom }}>
+      <View style={[{ gap: space.sm }, WEB_CONTENT_MAX]}>
+        {error ? <Banner tone="danger" text={error} /> : null}
+        {unknown ? <Banner tone="warning" text="Não sabemos se o pedido foi registrado. Verificando…" /> : null}
+        <Row style={{ justifyContent: 'space-between' }}>
+          <Text muted>Prévia</Text>
+          <Text variant="title">{formatBRL(previewCents)}</Text>
         </Row>
-      ) : null}
-      <Button title={label} size="large" onPress={onPress} disabled={disabled || !online || unknown} loading={loading} />
+        {!online ? (
+          <Row>
+            <SyncStatePill state="draft" />
+            <Text variant="small" muted style={{ flex: 1 }}>
+              Sem internet: o pedido fica salvo como rascunho e pode ser enviado quando a conexão voltar.
+            </Text>
+          </Row>
+        ) : null}
+        <Button title={label} size="large" onPress={onPress} disabled={disabled || !online || unknown} loading={loading} />
+      </View>
     </View>
   );
 }

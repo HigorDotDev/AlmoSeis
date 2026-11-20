@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="%LANG_ISO_CODE%">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <!-- App autenticado do restaurante: fora dos buscadores (ADR-0053 §2). -->
+    <meta name="robots" content="noindex, nofollow" />
+    <title>%WEB_TITLE%</title>
+    <!-- PWA instalável no Chrome e no Edge (ADR-0053 §1.3). Sem service worker: não há cache offline (§7). -->
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <!-- Reset recomendado pelo react-native-web. -->
+    <style id="expo-reset">
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        overflow: hidden;
+      }
+      #root {
+        display: flex;
+        height: 100%;
+        flex: 1;
+      }
+      /* Foco visível para quem navega com Tab (RNF-207). */
+      :focus-visible {
+        outline: 2px solid #b23c0b;
+        outline-offset: 2px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <noscript>Ative o JavaScript para usar o AlmoSeis.</noscript>
+    <div id="root"></div>
+  </body>
+</html>

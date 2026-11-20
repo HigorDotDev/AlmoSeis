@@ -3,7 +3,6 @@ import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persi
 import { MutationCache, QueryClient } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { router, Stack } from 'expo-router';
-import Storage from 'expo-sqlite/kv-store';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
@@ -13,7 +12,9 @@ import { configureApiClient } from '@/api/client';
 import { isApiError } from '@/api/errors';
 import { Toaster, useColors } from '@/components/ui';
 import { draftsRepo } from '@/db/draftsRepo';
+import { queryCacheStorage } from '@/db/kvStorage';
 import { openLocalDb } from '@/db/migrations';
+import { handleUpgradeRequired } from '@/features/update/upgradeHandler';
 import { useConnectivity } from '@/stores/connectivity';
 import { registerTenantDataClearer, useSession } from '@/stores/session';
 
@@ -37,13 +38,13 @@ const queryClient: QueryClient = new QueryClient({
   },
 });
 
-const persister = createAsyncStoragePersister({ storage: Storage, key: 'almoseis.queryCache', throttleTime: 2000 });
+const persister = createAsyncStoragePersister({ storage: queryCacheStorage, key: 'almoseis.queryCache', throttleTime: 2000 });
 
 configureApiClient({
   getAccessToken: () => useSession.getState().tokens?.accessToken ?? null,
   refresh: () => useSession.getState().refresh(),
   onSessionExpired: () => void useSession.getState().signOut('expired'),
-  onUpgradeRequired: (info) => useSession.getState().setUpgradeRequired(info),
+  onUpgradeRequired: (info) => handleUpgradeRequired(info, (i) => useSession.getState().setUpgradeRequired(i)),
   onSubscriptionInactive: () => useSession.getState().markReadOnly(),
   onNetworkFailure: () => useConnectivity.getState().markDegraded(),
 });

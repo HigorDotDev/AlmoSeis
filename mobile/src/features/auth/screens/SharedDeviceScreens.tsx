@@ -5,6 +5,7 @@ import { Pressable, View } from 'react-native';
 
 import { errorMessage, isApiError } from '@/api/errors';
 import { Banner, Button, EmptyState, ErrorState, Screen, Skeleton, Text, radius, space, useColors } from '@/components/ui';
+import { useKeyDown } from '@/lib/keyboard';
 import { roleNames } from '@/lib/strings';
 import { useSession } from '@/stores/session';
 
@@ -98,6 +99,23 @@ export function PinScreen() {
         onError: () => setPin(''),
       },
     );
+
+  // Web: dígitos, Backspace e Enter do teclado físico (ADR-0053 §9.3). No celular não faz nada.
+  useKeyDown((key) => {
+    if (/^[0-9]$/.test(key)) {
+      press(key);
+      return true;
+    }
+    if (key === 'Backspace') {
+      press('⌫');
+      return true;
+    }
+    if (key === 'Enter' && pin.length >= 4 && !login.isPending) {
+      submit();
+      return true;
+    }
+    return false;
+  });
 
   return (
     <Screen style={{ paddingTop: 48, alignItems: 'center' }}>

@@ -1,0 +1,16 @@
+{
+  "name": "AlmoSeis",
+  "short_name": "AlmoSeis",
+  "description": "Pedidos, cozinha e caixa do restaurante.",
+  "lang": "pt-BR",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F6F5F2",
+  "theme_color": "#B23C0B",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

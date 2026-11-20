@@ -11,6 +11,7 @@ import {
 } from '@microsoft/signalr';
 
 import type { RealtimeEnvelope } from '@/api/types';
+import { HUB_EXTRA_QUERY } from '@/api/transport';
 import { API_BASE_URL, APP_VERSION } from '@/config';
 
 export const RECONNECT_DELAYS_MS = [0, 2000, 5000, 10000, 30000];
@@ -80,7 +81,7 @@ export class RealtimeConnection {
   async start(): Promise<void> {
     if (this.connection && this.connection.state !== HubConnectionState.Disconnected) return;
     const connection = new HubConnectionBuilder()
-      .withUrl(`${API_BASE_URL}/hubs/realtime?appVersion=${encodeURIComponent(APP_VERSION)}`, {
+      .withUrl(`${API_BASE_URL}/hubs/realtime?appVersion=${encodeURIComponent(APP_VERSION)}${HUB_EXTRA_QUERY}`, {
         accessTokenFactory: () => this.handlers.getAccessToken() ?? '',
         transport: HttpTransportType.WebSockets,
         skipNegotiation: true,

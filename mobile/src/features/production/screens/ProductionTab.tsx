@@ -1,6 +1,4 @@
-import { useAudioPlayer } from 'expo-audio';
-import { useKeepAwake } from 'expo-keep-awake';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Animated, RefreshControl, ScrollView, View, useWindowDimensions } from 'react-native';
 
 import { errorMessage, isApiError } from '@/api/errors';
@@ -23,8 +21,10 @@ import {
 } from '@/components/ui';
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { useAcknowledgeAlerts, useOrderAlerts, useProduction, useSetProductionStatus } from '@/features/orders/hooks';
+import { useOrderSound } from '@/features/production/orderSound';
 import { onRealtimeEvent } from '@/features/realtime/realtime';
 import { relativeTime } from '@/lib/dates';
+import { useKeepAwake } from '@/lib/keepAwake';
 import { productionNames } from '@/lib/strings';
 import { useIsOnline } from '@/stores/connectivity';
 import { usePreferences } from '@/stores/preferences';
@@ -44,7 +44,7 @@ export default function ProductionTab() {
   const board = useProduction(day.data?.id, !!day.data);
   const ownId = useSession((s) => s.me?.employee.id);
   const sound = usePreferences((s) => s.orderSound);
-  const player = useAudioPlayer(require('../../../../assets/sounds/new-order.wav'));
+  const { play, needsUnlock, unlock } = useOrderSound();
   const [flash, setFlash] = useState<Set<string>>(new Set());
   // Celular: um grupo por vez (08 §8.9, docs/10-ux.md D7).
   const [tab, setTab] = useState<ProductionStatus>('OPEN');
@@ -57,21 +57,30 @@ export default function ProductionTab() {
         const affects = e.eventType === 'OrderCreated' || (e.eventType === 'OrderAlertCreated' && e.data?.affectsProduction === true);
         if (!affects) return;
         if (e.data?.orderType === 'KILO') return;
-        if (sound) {
-          player.seekTo(0);
-          player.play();
-        }
+        if (sound) play();
         if (e.entityId) setFlash((s) => new Set(s).add(e.entityId!));
       }),
-    [ownId, sound, player],
+    [ownId, sound, play],
   );
 
-  if (day.isLoading) return <View style={{ padding: space.lg }}><Skeleton /></View>;
-  if (!day.data) return <EmptyState icon="moon-outline" title="Nenhum expediente aberto" />;
-  if (board.isLoading) return <View style={{ padding: space.lg }}><Skeleton lines={4} /></View>;
+  // Web: o navegador bloqueia o som até um clique (ADR-0053 §7.2). No celular `needsUnlock` é sempre false.
+  const soundBanner = sound && needsUnlock ? <Banner tone="warning" text="Som desativado neste navegador" action={{ label: 'Ativar som', onPress: unlock }} /> : null;
+  const wrap = (node: ReactNode) =>
+    soundBanner ? (
+      <View style={{ flex: 1, backgroundColor: c.bg }}>
+        <View style={{ padding: space.lg, paddingBottom: 0 }}>{soundBanner}</View>
+        {node}
+      </View>
+    ) : (
+      node
+    );
+
+  if (day.isLoading) return wrap(<View style={{ padding: space.lg }}><Skeleton /></View>);
+  if (!day.data) return wrap(<EmptyState icon="moon-outline" title="Nenhum expediente aberto" />);
+  if (board.isLoading) return wrap(<View style={{ padding: space.lg }}><Skeleton lines={4} /></View>);
   if (board.isError) {
-    if (isApiError(board.error, 'BusinessDayRequired')) return <EmptyState icon="moon-outline" title="Nenhum expediente aberto" />;
-    return <ErrorState message={errorMessage(board.error)} onRetry={() => void board.refetch()} />;
+    if (isApiError(board.error, 'BusinessDayRequired')) return wrap(<EmptyState icon="moon-outline" title="Nenhum expediente aberto" />);
+    return wrap(<ErrorState message={errorMessage(board.error)} onRetry={() => void board.refetch()} />);
   }
 
   const groups = board.data!.groups;
@@ -90,7 +99,7 @@ export default function ProductionTab() {
     );
   };
 
-  return (
+  return wrap(
     <ScrollView
       style={{ flex: 1, backgroundColor: c.bg }}
       contentContainerStyle={{ padding: space.lg, gap: space.lg, flexDirection: wide ? 'row' : 'column', alignItems: wide ? 'flex-start' : undefined }}
@@ -104,7 +113,7 @@ export default function ProductionTab() {
           {column(tab)}
         </>
       )}
-    </ScrollView>
+    </ScrollView>,
   );
 }
 

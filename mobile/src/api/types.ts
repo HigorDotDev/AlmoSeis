@@ -66,7 +66,8 @@ export interface Tokens {
   tokenType: 'Bearer';
   accessToken: string;
   accessTokenExpiresAt: Instant;
-  refreshToken: string;
+  /** Web: `null`, o refresh vai no cookie `HttpOnly` `__Secure-almoseis-rt` (ADR-0053 §3). */
+  refreshToken: string | null;
   refreshTokenExpiresAt: Instant;
 }
 
@@ -117,7 +118,7 @@ export interface LoginBody {
   preferredTenantId: Uuid | null;
 }
 
-export type Platform = 'ANDROID' | 'IOS';
+export type Platform = 'ANDROID' | 'IOS' | 'WEB';
 
 export interface SharedDevice {
   id: Uuid;
@@ -125,7 +126,8 @@ export interface SharedDevice {
   installationId: string;
   name: string;
   platform: Platform;
-  deviceSecret: string;
+  /** Web: `null`, o segredo vai no cookie `HttpOnly` `__Secure-almoseis-ds` (ADR-0053 §3.8). */
+  deviceSecret: string | null;
   registeredAt: Instant;
   registeredBy: Author;
 }

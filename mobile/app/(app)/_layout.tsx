@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ConnectivityBar, useColors } from '@/components/ui';
 import { useMeSync } from '@/features/session/hooks';
 import { ScreenHeader, useSharedDeviceIdle } from '@/features/shell/AppShell';
+import { useWaitingOrdersTitle } from '@/features/shell/tabTitle';
 import { useAppRuntime } from '@/features/sync/useAppRuntime';
 import { useSession } from '@/stores/session';
 
@@ -21,6 +22,7 @@ function SignedIn() {
   const insets = useSafeAreaInsets();
   useAppRuntime();
   useMeSync();
+  useWaitingOrdersTitle();
   const touch = useSharedDeviceIdle();
   return (
     <View style={{ flex: 1, paddingTop: insets.top, backgroundColor: c.surface }} onTouchStart={touch}>

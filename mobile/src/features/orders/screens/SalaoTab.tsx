@@ -5,7 +5,7 @@ import { RefreshControl, View } from 'react-native';
 
 import { errorMessage } from '@/api/errors';
 import type { OrderSummary } from '@/api/types';
-import { EmptyState, ErrorState, Fab, SegmentedControl, Skeleton, space, useColors } from '@/components/ui';
+import { EmptyState, ErrorState, Fab, SegmentedControl, Skeleton, space, useColors, WEB_CONTENT_MAX } from '@/components/ui';
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { useCurrentMenu } from '@/features/menu/hooks';
 import { useCanWrite } from '@/stores/session';
@@ -39,31 +39,33 @@ export default function SalaoTab() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      <FlashList<OrderSummary>
-        data={items}
-        keyExtractor={(o) => o.id}
-        contentContainerStyle={{ padding: space.lg, paddingBottom: 160 }}
-        ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
-        refreshControl={<RefreshControl refreshing={orders.isRefetching} onRefresh={() => void orders.refetch()} />}
-        onEndReached={() => orders.hasNextPage && !orders.isFetchingNextPage && void orders.fetchNextPage()}
-        ListHeaderComponent={
-          <View style={{ gap: space.md, marginBottom: space.md }}>
-            <SegmentedControl
-              value={type}
-              onChange={setType}
-              options={[
-                { value: 'PF', label: 'PF' },
-                { value: 'KILO', label: 'Quilo' },
-              ]}
-            />
-            {type === 'PF' && menu.data?.missing ? <MenuMissingCard menuType="PF" sources={menu.data.missing.sources} businessDate={menu.data.missing.businessDate} /> : null}
-          </View>
-        }
-        ListEmptyComponent={
-          orders.isLoading ? <Skeleton /> : orders.isError ? <ErrorState message={errorMessage(orders.error)} onRetry={() => void orders.refetch()} /> : <EmptyState title="Nenhuma comanda aberta" />
-        }
-        renderItem={({ item }) => <OrderCard order={item} />}
-      />
+      <View style={[{ flex: 1 }, WEB_CONTENT_MAX]}>
+        <FlashList<OrderSummary>
+          data={items}
+          keyExtractor={(o) => o.id}
+          contentContainerStyle={{ padding: space.lg, paddingBottom: 160 }}
+          ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
+          refreshControl={<RefreshControl refreshing={orders.isRefetching} onRefresh={() => void orders.refetch()} />}
+          onEndReached={() => orders.hasNextPage && !orders.isFetchingNextPage && void orders.fetchNextPage()}
+          ListHeaderComponent={
+            <View style={{ gap: space.md, marginBottom: space.md }}>
+              <SegmentedControl
+                value={type}
+                onChange={setType}
+                options={[
+                  { value: 'PF', label: 'PF' },
+                  { value: 'KILO', label: 'Quilo' },
+                ]}
+              />
+              {type === 'PF' && menu.data?.missing ? <MenuMissingCard menuType="PF" sources={menu.data.missing.sources} businessDate={menu.data.missing.businessDate} /> : null}
+            </View>
+          }
+          ListEmptyComponent={
+            orders.isLoading ? <Skeleton /> : orders.isError ? <ErrorState message={errorMessage(orders.error)} onRetry={() => void orders.refetch()} /> : <EmptyState title="Nenhuma comanda aberta" />
+          }
+          renderItem={({ item }) => <OrderCard order={item} />}
+        />
+      </View>
       {/* Um botão só: a ação segue o filtro (docs/10-ux.md D6). */}
       {canCreate ? (
         type === 'PF' ? (

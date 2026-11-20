@@ -27,6 +27,7 @@ import {
   TextField,
   space,
   useColors,
+  WEB_CONTENT_MAX,
 } from '@/components/ui';
 import { formatBusinessDate, formatTime } from '@/lib/dates';
 import { formatBRL } from '@/lib/money';
@@ -53,7 +54,7 @@ export default function OrderDetailScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       <Stack.Screen options={{ title: `#${o.orderNumber} · ${orderTypeNames[o.orderType]}` }} />
-      <ScrollView contentContainerStyle={{ padding: space.lg, gap: space.md, paddingBottom: 140 }} refreshControl={<RefreshControl refreshing={order.isRefetching} onRefresh={() => void order.refetch()} />}>
+      <ScrollView contentContainerStyle={[{ padding: space.lg, gap: space.md, paddingBottom: 140 }, WEB_CONTENT_MAX]} refreshControl={<RefreshControl refreshing={order.isRefetching} onRefresh={() => void order.refetch()} />}>
         <OrderHeader order={o} pending={!!pending} />
         <ItemsBlock order={o} />
         <FinancialBlock order={o} />
@@ -264,7 +265,7 @@ function ActionBar({ order: o }: { order: Order }) {
 
   return (
     <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: c.surface, borderTopWidth: 1, borderTopColor: c.border, padding: space.sm, paddingBottom: space.sm + insets.bottom, gap: space.sm }}>
-      <Row style={{ flexWrap: 'wrap' }}>
+      <Row style={[{ flexWrap: 'wrap' }, WEB_CONTENT_MAX]}>
         {canPay && active && !o.isPaid ? <Button title="Receber" icon="cash-outline" disabled={!online} onPress={() => router.push(`/orders/${o.id}/pay`)} style={{ flex: 1 }} /> : null}
         {canEdit && editable && o.orderType !== 'KILO' ? <Button title="Adicionar itens" variant="secondary" onPress={() => router.push(`/orders/${o.id}/add-items`)} style={{ flex: 1 }} /> : null}
         {canEdit && editable && o.orderType === 'KILO' ? <Button title="Pesagem" icon="scale-outline" variant="secondary" onPress={() => router.push(`/orders/${o.id}/weighings`)} style={{ flex: 1 }} /> : null}

@@ -1,15 +1,16 @@
 /**
  * Sessão (08 §8.7). Tokens em memória e no SecureStore; `me` também em cache local para abrir offline.
  * Renovação: `refresh()` é chamado só pelo single-flight do cliente (`refreshSingleFlight`).
+ * Onde e como os tokens vivem em cada plataforma fica no `sessionTransport` (web: cookie + memória, ADR-0053).
  */
 import { create } from 'zustand';
 
-import { isApiError } from '@/api/errors';
-import { authApi } from '@/api/endpoints/auth';
+import { sharedDeviceAuth } from '@/api/endpoints/sharedDeviceAuth';
 import type { Me, Permission, Session, Tokens } from '@/api/types';
 import { metaRepo } from '@/db/metaRepo';
 
 import { secure, type SharedDeviceCredentials } from './secure';
+import { sessionTransport } from './sessionTransport';
 
 export type SessionStatus = 'loading' | 'signedOut' | 'signedIn';
 
@@ -31,6 +32,10 @@ interface SessionState {
   setMe(me: Me): void;
   refresh(): Promise<boolean>;
   signOut(reason: SignOutReason): Promise<void>;
+  /** Web: outra aba saiu da conta; limpa esta sem chamar a API de novo. */
+  applyRemoteSignOut(): Promise<void>;
+  /** Web: outra aba renovou o token. */
+  applyRemoteTokens(tokens: Tokens): void;
   markReadOnly(): void;
   setUpgradeRequired(info: { minVersion?: string; storeUrl?: string }): void;
   setSharedDevice(device: SharedDeviceCredentials | null): Promise<void>;
@@ -55,21 +60,20 @@ export const useSession = create<SessionState>((set, get) => ({
   signOutReason: null,
 
   async hydrate() {
-    const [installationId, tokens, sharedDevice, meJson] = await Promise.all([
-      secure.installationId(),
-      secure.tokens(),
-      secure.sharedDevice(),
-      metaRepo.get(ME_KEY),
-    ]);
-    const me = meJson ? (JSON.parse(meJson) as Me) : null;
-    const valid = tokens !== null && new Date(tokens.refreshTokenExpiresAt).getTime() > Date.now() && me !== null;
+    const [installationId, sharedDevice, meJson] = await Promise.all([secure.installationId(), secure.sharedDevice(), metaRepo.get(ME_KEY)]);
+    const cachedMe = meJson ? (JSON.parse(meJson) as Me) : null;
+    const restored = await sessionTransport.restore(installationId, cachedMe);
+    if (restored) {
+      await secure.setTokens(restored.tokens);
+      if (restored.me !== cachedMe) await metaRepo.set(ME_KEY, JSON.stringify(restored.me));
+    }
     set({
       installationId,
       sharedDevice,
-      tokens: valid ? tokens : null,
-      me: valid ? me : null,
-      readOnly: valid ? !me!.subscription.canWrite : false,
-      status: valid ? 'signedIn' : 'signedOut',
+      tokens: restored?.tokens ?? null,
+      me: restored?.me ?? null,
+      readOnly: restored ? !restored.me.subscription.canWrite : false,
+      status: restored ? 'signedIn' : 'signedOut',
     });
   },
 
@@ -88,6 +92,7 @@ export const useSession = create<SessionState>((set, get) => ({
       readOnly: !session.me.subscription.canWrite,
       signOutReason: null,
     });
+    sessionTransport.announceSignedIn(session.me.tenant.id);
   },
 
   setMe(me) {
@@ -98,33 +103,37 @@ export const useSession = create<SessionState>((set, get) => ({
   async refresh() {
     const { tokens, installationId } = get();
     if (!tokens || !installationId) return false;
-    try {
-      const { data } = await authApi.refresh(tokens.refreshToken, installationId);
-      await secure.setTokens(data);
-      set({ tokens: data });
-      return true;
-    } catch (e) {
-      if (isApiError(e) && e.status === 401) {
-        return false;
-      }
-      // Rede: a sessão continua; quem chamou trata como falha de rede.
-      throw e;
-    }
+    // 401 → null; rede → lança: a sessão continua e quem chamou trata como falha de rede.
+    const data = await sessionTransport.refresh(tokens, installationId);
+    if (!data) return false;
+    await secure.setTokens(data);
+    set({ tokens: data });
+    return true;
   },
 
   async signOut(reason) {
     const { tokens } = get();
-    if (tokens && reason === 'user') {
+    if (tokens) {
       try {
-        await authApi.logout(tokens.refreshToken);
+        await sessionTransport.logout(tokens, reason);
       } catch {
         // Sem rede: o refresh expira sozinho no servidor.
       }
     }
-    await secure.setTokens(null);
-    await metaRepo.remove(ME_KEY);
-    onTenantDataCleared();
-    set({ tokens: null, me: null, status: 'signedOut', readOnly: false, signOutReason: reason });
+    // Web: as outras abas saem também (ADR-0053 §3.5). No celular não faz nada.
+    if (reason !== 'expired') sessionTransport.announceSignedOut();
+    await clearLocalSession(reason);
+  },
+
+  async applyRemoteSignOut() {
+    if (get().status !== 'signedIn') return;
+    await clearLocalSession('user');
+  },
+
+  applyRemoteTokens(tokens) {
+    if (get().status !== 'signedIn') return;
+    void secure.setTokens(tokens);
+    set({ tokens });
   },
 
   markReadOnly() {
@@ -136,10 +145,25 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async setSharedDevice(device) {
+    // Web: apaga o cookie do segredo (`DELETE /auth/shared-device`). No celular não faz nada.
+    if (!device && get().sharedDevice) await sharedDeviceAuth.forget().catch(() => {});
     await secure.setSharedDevice(device);
     set({ sharedDevice: device });
   },
 }));
+
+async function clearLocalSession(reason: SignOutReason): Promise<void> {
+  await secure.setTokens(null);
+  await metaRepo.remove(ME_KEY);
+  onTenantDataCleared();
+  useSession.setState({ tokens: null, me: null, status: 'signedOut', readOnly: false, signOutReason: reason });
+}
+
+// Web: renovação e saída feitas em outra aba chegam aqui (no celular, `subscribe` não faz nada).
+sessionTransport.subscribe({
+  onTokens: (tokens) => useSession.getState().applyRemoteTokens(tokens),
+  onSignedOut: () => void useSession.getState().applyRemoteSignOut(),
+});
 
 export function hasPermission(me: Me | null, permission: Permission): boolean {
   return me?.permissions.includes(permission) ?? false;

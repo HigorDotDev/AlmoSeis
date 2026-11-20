@@ -11,6 +11,16 @@ import { useSession } from '@/stores/session';
 
 export const DRAFT_DEBOUNCE_MS = 500;
 
+/** Gravações ainda no debounce, por rascunho. */
+const pendingWrites = new Map<string, () => Promise<void>>();
+
+/** Grava já tudo o que está no debounce (ex.: antes de a web recarregar a página por um 426, ADR-0053 §6.3). */
+export async function flushAllDrafts(): Promise<void> {
+  const writes = [...pendingWrites.values()];
+  pendingWrites.clear();
+  await Promise.all(writes.map((w) => w()));
+}
+
 export function useDraft<T>(kind: DraftKind, targetId: string | null = null) {
   const tenantId = useSession((s) => s.me?.tenant.id ?? null);
   const [draftId, setDraftId] = useState<string>(() => newKey());
@@ -29,9 +39,14 @@ export function useDraft<T>(kind: DraftKind, targetId: string | null = null) {
     };
   }, [tenantId, kind, targetId]);
 
+  const draftIdRef = useRef(draftId);
+  useEffect(() => {
+    draftIdRef.current = draftId;
+  }, [draftId]);
   useEffect(
     () => () => {
       if (timer.current) clearTimeout(timer.current);
+      pendingWrites.delete(draftIdRef.current);
     },
     [],
   );
@@ -41,8 +56,11 @@ export function useDraft<T>(kind: DraftKind, targetId: string | null = null) {
       if (!tenantId) return;
       dirty.current = true;
       if (timer.current) clearTimeout(timer.current);
+      const write = () => draftsRepo.save({ id: draftId, tenantId, kind, targetId, formJson: JSON.stringify(value) });
+      pendingWrites.set(draftId, write);
       timer.current = setTimeout(() => {
-        void draftsRepo.save({ id: draftId, tenantId, kind, targetId, formJson: JSON.stringify(value) });
+        pendingWrites.delete(draftId);
+        void write();
       }, DRAFT_DEBOUNCE_MS);
     },
     [tenantId, draftId, kind, targetId],
@@ -53,6 +71,7 @@ export function useDraft<T>(kind: DraftKind, targetId: string | null = null) {
     async (value: T) => {
       if (timer.current) clearTimeout(timer.current);
       timer.current = null;
+      pendingWrites.delete(draftId);
       if (!tenantId) return;
       await draftsRepo.save({ id: draftId, tenantId, kind, targetId, formJson: JSON.stringify(value) });
     },
@@ -75,6 +94,7 @@ export function useDraft<T>(kind: DraftKind, targetId: string | null = null) {
 
   const discard = useCallback(async () => {
     if (timer.current) clearTimeout(timer.current);
+    pendingWrites.delete(draftId);
     await draftsRepo.remove(draftId);
   }, [draftId]);
 

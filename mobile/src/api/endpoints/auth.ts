@@ -5,11 +5,18 @@ import type { DeviceEmployees, LoginBody, Me, Session, SignupBody, Tokens, Uuid 
 export const authApi = {
   signup: (body: SignupBody) => apiRequest<Session>('POST', '/auth/signup', { body, anonymous: true }),
   login: (body: LoginBody) => apiRequest<Session>('POST', '/auth/login', { body, anonymous: true }),
-  refresh: (refreshToken: string, installationId: string) =>
-    apiRequest<Tokens>('POST', '/auth/refresh', { body: { refreshToken, installationId }, anonymous: true }),
-  logout: (refreshToken: string) => apiRequest<void>('POST', '/auth/logout', { body: { refreshToken } }),
+  /** Web (ADR-0053 §3.3): `refreshToken = null`, o refresh vai no cookie e não no corpo. */
+  refresh: (refreshToken: string | null, installationId: string) =>
+    apiRequest<Tokens>('POST', '/auth/refresh', {
+      body: refreshToken === null ? { installationId } : { refreshToken, installationId },
+      anonymous: true,
+    }),
+  logout: (refreshToken: string | null) =>
+    apiRequest<void>('POST', '/auth/logout', refreshToken === null ? {} : { body: { refreshToken } }),
   switchTenant: (tenantId: Uuid) => apiRequest<Session>('POST', '/auth/switch-tenant', { body: { tenantId } }),
-  me: () => apiRequest<Me>('GET', '/auth/me'),
+  /** `headers`: na restauração da sessão web, o token recém-obtido antes de ir para o store. */
+  me: (headers?: Record<string, string>) =>
+    apiRequest<Me>('GET', '/auth/me', headers ? { anonymous: true, headers } : {}),
   setPin: (pin: string, currentPassword: string) => apiRequest<void>('PUT', '/auth/me/pin', { body: { pin, currentPassword } }),
   /** Os outros aparelhos da pessoa saem no próximo refresh; este continua logado. */
   changePassword: (currentPassword: string, newPassword: string) =>

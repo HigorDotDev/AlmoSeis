@@ -1,7 +1,8 @@
 /** Preferências locais do aparelho (08 §8.10 `menu/settings`): som, fonte da cozinha, última aba. */
-import Storage from 'expo-sqlite/kv-store';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+
+import { preferencesStorage } from '@/db/kvStorage';
 
 export type TabName = 'marmitas' | 'salao' | 'pedidos' | 'fechamento';
 
@@ -24,6 +25,6 @@ export const usePreferences = create<PreferencesState>()(
       setKitchenFontScale: (kitchenFontScale) => set({ kitchenFontScale }),
       setLastTab: (lastTab) => set({ lastTab }),
     }),
-    { name: 'almoseis.preferences', storage: createJSONStorage(() => Storage) },
+    { name: 'almoseis.preferences', storage: createJSONStorage(() => preferencesStorage) },
   ),
 );

@@ -6,6 +6,7 @@
 
 | Item | Escolha |
 |---|---|
+| Alvos | Android e iOS; navegador desktop (Chrome/Edge) com o mesmo código, §8.15 (ADR-0053) |
 | Base | Expo SDK estável mais recente (Dev Client + EAS Build/Update, `runtimeVersion: fingerprint`), React Native com a New Architecture, Hermes, TypeScript `strict` |
 | Navegação | Expo Router; abas superiores com `@react-navigation/material-top-tabs` via `withLayoutContext` |
 | Servidor/cache | TanStack Query v5 + `@tanstack/query-async-storage-persister` sobre `expo-sqlite/kv-store` |
@@ -594,3 +595,54 @@ Critério de pronto do mobile (`docs/02-padroes.md` §2.6): fluxos E2E 1 e 2 pas
 | Inatividade compartilhada | `sharedDeviceIdleSeconds` é editado em "Formas de pagamento" (mesmo `PATCH /tenant/settings`) | `menu/settings` é só local (8.10) |
 | Som | `assets/sounds/new-order.wav` (bipe curto gerado) via `expo-audio` | ADR-0036 |
 | E2E | Fluxos Maestro em `mobile/e2e/` escritos a partir de 8.13; **ainda não rodados** em emulador | Exigem homolog e Dev Client instalado |
+
+---
+
+## 8.15 Web desktop (ADR-0053)
+
+O mesmo `mobile/` roda no navegador do computador do balcão (Chrome e Edge no Windows, RF-216, RNF-207), instalável como PWA. **Mesmas telas, permissões e regras.** As diferenças de plataforma ficam em arquivos `.web.ts(x)` ao lado do nativo, com a mesma interface; o Metro escolhe o `.web` no build web, e o Jest (preset nativo) e o `tsc` enxergam o arquivo nativo. As telas não testam `Platform.OS`; ele só aparece em estilo (largura máxima no desktop).
+
+> **Armadilha:** dentro de `foo.web.ts`, `import … from './foo'` resolve para **ele mesmo** no bundle web (laço infinito). Só `import type` é seguro; código compartilhado vai para um terceiro arquivo sem sufixo de plataforma (ex.: `tabTitleFormat.ts`, `db/web/idb.ts`).
+
+### Build e configuração
+
+| Item | Como ficou |
+|---|---|
+| Dependências | `react-native-web`; `fake-indexeddb` (só testes) |
+| `metro.config.js` | `assetExts.push('wasm')` (sobrou do spike; o `expo-sqlite` não entra no bundle web) |
+| `app.json` → `web` | `output: "single"` (SPA), `bundler: "metro"`, `name`, `shortName`, `lang: pt-BR`, `themeColor` `#B23C0B`, `backgroundColor` `#F6F5F2`, `display: standalone` |
+| `public/` | `index.html` (modelo do Expo + `<link rel="manifest">`, `robots noindex`, `:focus-visible`), `manifest.json`, `icons/icon-192.png` e `icon-512.png`, `favicon.png`. **Os ícones são o placeholder do Expo** até existir a marca |
+| API | `config.web.ts`: `EXPO_PUBLIC_WEB_API_BASE_URL` antes de `EXPO_PUBLIC_API_BASE_URL`. O app web e a API precisam ser do mesmo *site* para o cookie `SameSite=Strict` (no desenvolvimento, `http://localhost:8082` → `http://localhost:5080`; o IP da máquina, usado pelo celular, não serve) |
+| Exportar | `npx expo export --platform web` → `dist/` estático (hospedagem no `09-devops.md`) |
+
+### Diferenças por arquivo
+
+| Interface (nativo) | Web | O que muda |
+|---|---|---|
+| `config.ts` | `config.web.ts` | `APP_PLATFORM = 'WEB'` (`X-App-Platform` em toda requisição); `APP_VERSION` de `Constants.expoConfig.version` (o `version` do `app.json`, embutido no build) |
+| `api/transport.ts` | `transport.web.ts` | `credentials: 'include'` em `/auth/*`, `POST /devices/shared` e `/invitations/{code}/accept` (rotas que leem ou emitem os cookies, 06 §6.3 "App no navegador"); hub com `&appPlatform=WEB` na query (o navegador não manda header no WebSocket, 06 §6.14) |
+| `stores/secure.ts` | `secure.web.ts` | access token **só em memória**; o refresh nunca fica no cliente (é zerado mesmo se vier no corpo); `installationId` = `crypto.randomUUID()` no `localStorage`; aparelho compartilhado: só os dados não secretos no IndexedDB (`meta`), o `deviceSecret` fica no cookie `__Secure-almoseis-ds` |
+| `stores/sessionTransport.ts` | `sessionTransport.web.ts` | restaurar: celular lê o SecureStore; web chama `POST /auth/refresh` (cookie `__Secure-almoseis-rt`, corpo `{ installationId }`) e depois `GET /auth/me`; `401` → login. Sair: celular revoga só em "Sair"; web chama `POST /auth/logout` (sem corpo) em **todo** motivo exceto `expired`, senão um F5 restauraria a sessão pelo cookie (ex.: inatividade no aparelho compartilhado) |
+| `features/auth/tabCoordinator.ts` | (usado só pelo `sessionTransport.web.ts`) | **várias abas:** renovação sob Web Lock `almoseis.auth.refresh` (uma por vez entre todas as abas, senão o servidor revoga a família, ADR-0027); `BroadcastChannel` `almoseis.session` repassa o access token novo (quem esperou o lock e recebeu um token válido não renova de novo), o logout (as outras abas saem) e a entrada/troca de estabelecimento (as outras abas recarregam). Sem Web Locks, só o single-flight da aba |
+| `api/endpoints/sharedDeviceAuth.ts` | `sharedDeviceAuth.web.ts` | lista: `GET /auth/shared-device/employees?installationId=` + `X-Tenant-Id`; `pin-login` sem `X-Device-Secret`; "deixar de usar como compartilhado" (`setSharedDevice(null)`) chama `DELETE /auth/shared-device` |
+| `db/migrations.ts`, `draftsRepo.ts`, `pendingOpsRepo.ts`, `metaRepo.ts` | `*.web.ts` + `db/web/idb.ts` | **IndexedDB** `almoseis` v1, um *object store* por tabela (`meta`, `drafts`, `pending_operations`, índice `tenantId`) e `kv`. Toda escrita resolve no `complete` da transação; `pendingOpsRepo.insert` usa `durability: 'strict'` e `add` (chave repetida falha como o `INSERT`). A pendência está gravada **antes** do envio: F5 no meio do "Receber" cai no `GET /operations/{key}`. `openLocalDb` pede `navigator.storage.persist()` uma vez |
+| `db/kvStorage.ts` | `kvStorage.web.ts` | cache persistido do TanStack Query no IndexedDB (`kv`); preferências (`usePreferences`) no `localStorage` |
+| `features/sync/appLifecycle.ts` | `appLifecycle.web.ts` | **o SignalR não desconecta com a aba oculta** (ADR-0053 §7.1). Reconecta e sincroniza em `visibilitychange` visível, `online`, `pageshow` (bfcache) e ao detectar que o computador dormiu (intervalo de 30 s atrasado > 90 s) |
+| `lib/keepAwake.ts` | `keepAwake.web.ts` | Wake Lock próprio: o do `expo-keep-awake` web não readquire o lock ao voltar a aba e lança erro sem suporte |
+| `features/production/orderSound.ts` | `orderSound.web.ts` | `HTMLAudioElement`; `needsUnlock` enquanto a página não teve ativação do usuário (`navigator.userActivation`). A aba Pedidos mostra a faixa "Som desativado neste navegador — Ativar som"; o clique toca o aviso uma vez. No celular `needsUnlock` é sempre `false` |
+| `features/shell/tabTitle.ts` | `tabTitle.web.ts` | com a aba oculta, `document.title` = "(2) Pedidos novos · AlmoSeis", contando `OrderCreated` de outras pessoas; volta ao normal quando a aba vem para a frente. Quando os pedidos do site (ADR-0046) chegarem ao app, passa a contar "Novos do site" aguardando aceite (só este arquivo muda) |
+| `features/update/upgradeHandler.ts` + `UpdateRequiredScreen.tsx` | `*.web.ts(x)` | `426`: grava os rascunhos no debounce (`flushAllDrafts`) e recarrega a página **uma vez** (marca `almoseis.reloadedFor426` na `sessionStorage`, vale 10 min); se persistir, "Estamos atualizando o AlmoSeis. Tente de novo em alguns minutos." com "Recarregar", sem link de loja |
+| `lib/keyboard.ts` | `keyboard.web.ts` | `useKeyDown`: `Enter` confirma o `ConfirmDialog` (exceto com o foco num botão, que já trata a tecla); PIN aceita dígitos, `Backspace` e `Enter`. `Esc` fecha diálogos e *sheets* pelo `onRequestClose` do `Modal` do react-native-web. O peso do quilo já é um `TextInput` |
+
+### Sem arquivo `.web`
+
+- **Abas superiores:** o `react-native-tab-view` usa `PanResponderAdapter` na web (`Pager.tsx`), sem `react-native-pager-view`; o `TopTabs` funciona como está (clique na aba).
+- **Conectividade:** o `expo-network` web já usa `navigator.onLine` e os eventos `online`/`offline`.
+- **Layout:** janelas ≥ 720 px usam o layout de tablet existente (cozinha em 3 colunas). No desktop, `Screen`, listas das abas, detalhe do pedido, rodapé de envio, aba Fechamento, `ConfirmDialog` (520 px) e `BottomSheet` (640 px) têm largura máxima centralizada (`WEB_CONTENT_MAX`, 760 px, via `Platform.select`, vazio no celular).
+- **Assinatura:** ADR-0017 igual; nenhuma tela nova mostra preço ou compra.
+
+### Testes
+
+- `webLocalDb.test.ts`: repositórios web contra `fake-indexeddb` (upsert do rascunho, `latest` com alvo nulo, `purgeOld`, pendência que sobrevive ao "F5", chave repetida, filtros e ordem).
+- `tabCoordinator.test.ts`: duas abas renovando juntas → uma renovação só e nunca simultâneas; sem canal, renovações em série; single-flight na aba; token vencendo não é reaproveitado; logout e entrada chegam às outras abas.
+- Pendentes: E2E web (Playwright) dos critérios de aceite do RF-216.

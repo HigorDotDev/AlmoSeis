@@ -2,6 +2,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 
 import { authApi } from '@/api/endpoints/auth';
+import { sharedDeviceAuth } from '@/api/endpoints/sharedDeviceAuth';
 import { devicesApi, invitationsApi } from '@/api/endpoints/tenant';
 import type { ExistingAccount, NewAccount, Session, SignupBody } from '@/api/types';
 import { APP_PLATFORM } from '@/config';
@@ -62,7 +63,8 @@ export function useResetPassword() {
 }
 
 /**
- * Registra este aparelho como compartilhado (ADR-0027): guarda o `deviceSecret` e desloga quem registrou,
+ * Registra este aparelho como compartilhado (ADR-0027): guarda o `deviceSecret` (na web ele vem `null` e fica
+ * no cookie `HttpOnly`, ADR-0053 §3.8) e desloga quem registrou,
  * deixando o aparelho na seleção de funcionário.
  */
 export function useRegisterSharedDevice() {
@@ -90,7 +92,7 @@ export function useDeviceEmployees() {
   const device = useSession((s) => s.sharedDevice);
   return useQuery({
     queryKey: ['deviceEmployees', device?.id],
-    queryFn: async () => (await authApi.deviceEmployees(device!.installationId, device!.tenantId, device!.deviceSecret)).data,
+    queryFn: async () => (await sharedDeviceAuth.employees(device!)).data,
     enabled: !!device,
     staleTime: 60_000,
   });
@@ -100,8 +102,7 @@ export function usePinLogin() {
   const device = useSession((s) => s.sharedDevice);
   const signIn = useSession((s) => s.signIn);
   return useMutation({
-    mutationFn: async ({ employeeId, pin }: { employeeId: string; pin: string }) =>
-      (await authApi.pinLogin({ tenantId: device!.tenantId, installationId: device!.installationId, employeeId, pin }, device!.deviceSecret)).data,
+    mutationFn: async ({ employeeId, pin }: { employeeId: string; pin: string }) => (await sharedDeviceAuth.pinLogin(device!, employeeId, pin)).data,
     onSuccess: (s: Session) => signIn(s),
   });
 }

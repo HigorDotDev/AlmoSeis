@@ -5,6 +5,7 @@
 import { API_BASE_URL, APP_PLATFORM, APP_VERSION, REQUEST_TIMEOUT_MS } from '@/config';
 
 import { ApiError, NetworkUnknownError, type ProblemDetails } from './errors';
+import { credentialsFor } from './transport';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -112,6 +113,8 @@ async function send(method: HttpMethod, path: string, options: RequestOptions): 
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       signal: controller.signal,
+      // Web: cookies de sessão nas rotas de /auth (ADR-0053 §3). No celular fica o padrão.
+      ...(credentialsFor(path) ? { credentials: credentialsFor(path) } : {}),
     });
   } catch (e) {
     if (options.signal?.aborted) {
