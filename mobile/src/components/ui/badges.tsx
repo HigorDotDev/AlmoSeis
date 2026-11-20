@@ -1,18 +1,20 @@
 /**
- * Selos (08 §8.11, RNF-001): produção é pílula; financeiro é quadrado. Forma, ícone e texto diferentes,
- * para não depender só de cor.
+ * Selos (08 §8.11, RNF-001): produção é pílula; financeiro é quadrado; atendimento é pílula com contorno; origem
+ * "Site" é etiqueta. Forma, ícone e texto diferentes, para não depender só de cor.
  */
 import { Ionicons } from '@expo/vector-icons';
 import { View } from 'react-native';
 
-import type { MoneyString, ProductionStatus } from '@/api/types';
+import type { FulfillmentStatus, FulfillmentType, MoneyString, ProductionStatus } from '@/api/types';
 import { formatBRL, toCents } from '@/lib/money';
-import { productionNames } from '@/lib/strings';
+import { fulfillmentStatusNames, productionNames, READY_FOR_PICKUP } from '@/lib/strings';
 
 import { Text, type IconName } from './primitives';
 import { radius, space, useColors } from './theme';
 
-function Badge({ shape, icon, label, fg, bg, testID }: { shape: 'pill' | 'square'; icon: IconName; label: string; fg: string; bg: string; testID?: string }) {
+type Shape = 'pill' | 'square' | 'outline' | 'tag';
+
+function Badge({ shape, icon, label, fg, bg, testID }: { shape: Shape; icon: IconName; label: string; fg: string; bg: string; testID?: string }) {
   return (
     <View
       testID={testID}
@@ -23,9 +25,10 @@ function Badge({ shape, icon, label, fg, bg, testID }: { shape: 'pill' | 'square
         gap: 4,
         paddingHorizontal: space.sm,
         paddingVertical: 3,
-        borderRadius: shape === 'pill' ? radius.pill : 4,
+        borderRadius: shape === 'pill' || shape === 'outline' ? radius.pill : shape === 'tag' ? radius.sm : 4,
         backgroundColor: bg,
-        borderWidth: shape === 'square' ? 1.5 : 0,
+        borderWidth: shape === 'square' || shape === 'outline' ? 1.5 : 0,
+        borderStyle: shape === 'outline' ? 'dashed' : 'solid',
         borderColor: fg,
       }}
     >
@@ -69,6 +72,31 @@ export function PaymentBadge({ totalAmount, paidAmount, isPaid, canceled }: { to
     );
   }
   return <Badge testID="payment-badge" shape="square" icon="alert-circle-outline" label="A pagar" fg={c.danger} bg={c.dangerBg} />;
+}
+
+/** Pedido feito pela página de pedidos (`origin = WEB`, ADR-0046 item 21). */
+export function SiteBadge() {
+  const c = useColors();
+  return <Badge testID="site-badge" shape="tag" icon="globe-outline" label="Site" fg={c.primary} bg={c.primaryBg} />;
+}
+
+/**
+ * Atendimento de entrega/retirada (ADR-0046 item 2). `PENDING` só aparece como "Pronto para retirar" (derivado,
+ * `isReadyForPickup`); fora isso, pendente não tem selo, porque a marcação é opcional.
+ */
+export function FulfillmentBadge({ fulfillmentType, status, isReadyForPickup }: { fulfillmentType: FulfillmentType; status: FulfillmentStatus | null; isReadyForPickup: boolean }) {
+  const c = useColors();
+  if (fulfillmentType === 'DINE_IN' || status === null) return null;
+  if (status === 'PENDING') {
+    if (!isReadyForPickup) return null;
+    return <Badge testID="fulfillment-badge" shape="outline" icon="bag-check-outline" label={READY_FOR_PICKUP} fg={c.info} bg={c.infoBg} />;
+  }
+  const spec = {
+    OUT_FOR_DELIVERY: { icon: 'bicycle-outline' as IconName, fg: c.info, bg: c.infoBg },
+    DELIVERED: { icon: 'home-outline' as IconName, fg: c.success, bg: c.successBg },
+    PICKED_UP: { icon: 'bag-handle-outline' as IconName, fg: c.success, bg: c.successBg },
+  }[status];
+  return <Badge testID="fulfillment-badge" shape="outline" icon={spec.icon} label={fulfillmentStatusNames[status]} fg={spec.fg} bg={spec.bg} />;
 }
 
 export type SyncPillState = 'draft' | 'sending' | 'unknown' | 'failed' | 'confirmed';

@@ -11,8 +11,10 @@ import {
   ConfirmDialog,
   EmptyState,
   ErrorState,
+  FulfillmentBadge,
   Row,
   SegmentedControl,
+  SiteBadge,
   Skeleton,
   Text,
   font,
@@ -21,6 +23,7 @@ import {
 } from '@/components/ui';
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { useAcknowledgeAlerts, useOrderAlerts, useProduction, useSetProductionStatus } from '@/features/orders/hooks';
+import { FulfillmentActions, NewWebOrdersSection } from '@/features/orders/webOrderComponents';
 import { useOrderSound } from '@/features/production/orderSound';
 import { onRealtimeEvent } from '@/features/realtime/realtime';
 import { relativeTime } from '@/lib/dates';
@@ -35,7 +38,10 @@ const NEXT: Record<ProductionStatus, ProductionStatus | null> = { OPEN: 'IN_PROG
 const PREV: Record<ProductionStatus, ProductionStatus | null> = { OPEN: null, IN_PROGRESS: 'OPEN', COMPLETED: 'IN_PROGRESS' };
 const ADVANCE_LABEL: Record<ProductionStatus, string> = { OPEN: 'Iniciar', IN_PROGRESS: 'Concluir', COMPLETED: '' };
 
-/** 08 §8.9 Aba Pedidos (produção): Abertos → Em produção → Concluídos, do mais antigo ao mais novo. */
+/**
+ * 08 §8.9 Aba Pedidos (produção): Abertos → Em produção → Concluídos, do mais antigo ao mais novo (pelo aceite).
+ * No topo, a faixa "Novos do site" recolhida (ADR-0046 item 21): a cozinha vê a contagem; só o balcão aceita.
+ */
 export default function ProductionTab() {
   useKeepAwake();
   const c = useColors();
@@ -65,15 +71,13 @@ export default function ProductionTab() {
 
   // Web: o navegador bloqueia o som até um clique (ADR-0053 §7.2). No celular `needsUnlock` é sempre false.
   const soundBanner = sound && needsUnlock ? <Banner tone="warning" text="Som desativado neste navegador" action={{ label: 'Ativar som', onPress: unlock }} /> : null;
-  const wrap = (node: ReactNode) =>
-    soundBanner ? (
-      <View style={{ flex: 1, backgroundColor: c.bg }}>
-        <View style={{ padding: space.lg, paddingBottom: 0 }}>{soundBanner}</View>
-        {node}
-      </View>
-    ) : (
-      node
-    );
+  const wrap = (node: ReactNode) => (
+    <View style={{ flex: 1, backgroundColor: c.bg }}>
+      {soundBanner ? <View style={{ padding: space.lg, paddingBottom: 0 }}>{soundBanner}</View> : null}
+      <NewWebOrdersSection collapsible style={{ marginHorizontal: space.lg, marginTop: space.lg }} />
+      {node}
+    </View>
+  );
 
   if (day.isLoading) return wrap(<View style={{ padding: space.lg }}><Skeleton /></View>);
   if (!day.data) return wrap(<EmptyState icon="moon-outline" title="Nenhum expediente aberto" />);
@@ -158,6 +162,12 @@ function ProductionCard({ order: o, status, flash, onFlashed }: { order: Product
           {o.label ?? (o.orderType === 'PF' ? 'Salão' : 'Marmita')}
           {o.fulfillmentType === 'DELIVERY' ? ' · Entrega' : o.fulfillmentType === 'PICKUP' ? ' · Retirada' : ''}
         </Text>
+        {o.origin === 'WEB' || (o.fulfillmentStatus && o.fulfillmentStatus !== 'PENDING') || (status === 'COMPLETED' && o.fulfillmentType === 'PICKUP') ? (
+          <Row style={{ flexWrap: 'wrap' }}>
+            {o.origin === 'WEB' ? <SiteBadge /> : null}
+            <FulfillmentBadge fulfillmentType={o.fulfillmentType} status={o.fulfillmentStatus} isReadyForPickup={status === 'COMPLETED' && o.fulfillmentType === 'PICKUP' && o.fulfillmentStatus === 'PENDING'} />
+          </Row>
+        ) : null}
         {o.items.map((i) => (
           <View key={i.id}>
             <Text style={[big, !i.requiresPreparation && { color: c.textMuted }]} maxFontSizeMultiplier={1.3}>
@@ -180,6 +190,20 @@ function ProductionCard({ order: o, status, flash, onFlashed }: { order: Product
             {next ? <Button title={ADVANCE_LABEL[status]} onPress={() => setTarget(next)} disabled={!online} style={{ flex: 1 }} /> : null}
             {prev ? <Button title="Voltar status" variant="secondary" onPress={() => setTarget(prev)} disabled={!online} style={{ flex: next ? undefined : 1 }} /> : null}
           </Row>
+        ) : null}
+        {/* Concluído: "Saiu para entrega"/"Retirado" ali mesmo (ADR-0046 item 18); as voltas ficam no detalhe. */}
+        {status === 'COMPLETED' ? (
+          <FulfillmentActions
+            compact
+            order={{
+              id: o.id,
+              version: o.version,
+              orderNumber: o.orderNumber,
+              fulfillmentType: o.fulfillmentType,
+              fulfillmentStatus: o.fulfillmentStatus,
+              productionStatus: status,
+            }}
+          />
         ) : null}
       </Card>
       <ConfirmDialog

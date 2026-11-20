@@ -15,6 +15,42 @@ export function differenceText(diff: string | null): string | null {
   return cents < 0 ? `Faltam ${formatBRL(-cents)}` : `Sobram ${formatBRL(cents)}`;
 }
 
+/** "2 pedidos do site aguardando aceite serão recusados" (ADR-0046 item 13), ou `null` sem nenhum. */
+export function autoRejectWarning(awaitingAcceptanceCount: number): string | null {
+  if (awaitingAcceptanceCount <= 0) return null;
+  return awaitingAcceptanceCount === 1
+    ? '1 pedido do site aguardando aceite será recusado.'
+    : `${awaitingAcceptanceCount} pedidos do site aguardando aceite serão recusados.`;
+}
+
+/** "N entregas sem marcação de entregue" (ADR-0046 item 20): só informa, a marcação é opcional. */
+export function unmarkedDeliveriesText(count: number): string | null {
+  if (count <= 0) return null;
+  return count === 1 ? '1 entrega sem marcação de entregue.' : `${count} entregas sem marcação de entregue.`;
+}
+
+/**
+ * Pedidos do site e entregas (RF-210, ADR-0046 itens 13 e 20): informativo, fora do vendido. Some quando está tudo
+ * zerado, para não ocupar a tela de quem não usa a página de pedidos.
+ */
+function WebOrdersCard({ summary: s }: { summary: ClosingSummary }) {
+  const w = s.webOrders;
+  const unmarked = unmarkedDeliveriesText(s.unmarkedDeliveryCount);
+  if (!w || (w.awaitingAcceptanceCount === 0 && w.autoRejectedCount === 0 && w.notAcceptedCount === 0 && !unmarked)) return null;
+  return (
+    <Card>
+      <Text variant="subtitle">Pedidos do site e entregas</Text>
+      {!s.isFinal ? <KeyValue label="Aguardando aceite" value={String(w.awaitingAcceptanceCount)} /> : null}
+      {s.isFinal && w.autoRejectedCount > 0 ? <KeyValue label="Recusados ao fechar" value={String(w.autoRejectedCount)} /> : null}
+      <KeyValue label="Não aceitos (recusados, expirados, desistências)" value={String(w.notAcceptedCount)} />
+      {unmarked ? <Text muted>{unmarked}</Text> : null}
+      <Text variant="small" muted>
+        Pedidos do site não aceitos não entram no vendido.
+      </Text>
+    </Card>
+  );
+}
+
 export function ClosingSummaryView({ summary: s }: { summary: ClosingSummary }) {
   const c = useColors();
   const timeZone = useSession((st) => st.me?.tenant.timeZone ?? 'America/Sao_Paulo');
@@ -84,6 +120,8 @@ export function ClosingSummaryView({ summary: s }: { summary: ClosingSummary }) 
         {diff !== null ? <Text style={{ color: toCents(diff) === 0 ? c.success : c.danger, fontWeight: '700' }}>{differenceText(diff)}</Text> : null}
         {s.cash.justification ? <Text muted>Justificativa: {s.cash.justification}</Text> : null}
       </Card>
+
+      <WebOrdersCard summary={s} />
 
       <Card>
         <KeyValue label="Recebido de dias anteriores" value={formatBRL(s.receivedFromPreviousDays)} />

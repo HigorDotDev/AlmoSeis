@@ -6,6 +6,8 @@ import { ordersApi } from '@/api/endpoints/orders';
 import { qk } from '@/api/queryKeys';
 import type {
   CreateOrderBody,
+  EstimatedReadyMinutes,
+  FulfillmentStatus,
   NewItemInput,
   Order,
   OrderBalance,
@@ -15,8 +17,10 @@ import type {
 } from '@/api/types';
 import { useCriticalMutation } from '@/features/sync/useCriticalMutation';
 import { formatBRL } from '@/lib/money';
-import { orderTypeNames, productionNames } from '@/lib/strings';
+import { acceptanceStatusNames, fulfillmentStatusNames, orderTypeNames, productionNames, rejectionReasonNames } from '@/lib/strings';
 import { gramsToKgLabel } from '@/lib/weight';
+
+import { orderNumberLabel, type RejectReason } from './webOrders';
 
 const STALE = 30_000;
 
@@ -63,6 +67,21 @@ export function useOrderHistory(id: string) {
   });
 }
 
+/**
+ * Faixa "Novos do site" (ADR-0046 item 21): `GET /orders?acceptanceStatus=AWAITING_ACCEPTANCE` do expediente aberto.
+ * Fica sob `['orders', 'list']`: `OrderAwaitingAcceptance`/`OrderAccepted`/`OrderRejected` (entityType `ORDER`) e o
+ * sync a invalidam. O intervalo é só uma rede de segurança para a expiração feita pelo job.
+ */
+export function useAwaitingOrders(enabled = true) {
+  return useQuery({
+    queryKey: qk.awaitingOrders,
+    queryFn: async () => (await ordersApi.list({ acceptanceStatus: 'AWAITING_ACCEPTANCE', limit: 50 })).data.items,
+    enabled,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+  });
+}
+
 export function useProduction(businessDayId: string | undefined, enabled = true) {
   return useQuery({
     queryKey: qk.production(businessDayId),
@@ -71,6 +90,12 @@ export function useProduction(businessDayId: string | undefined, enabled = true)
     staleTime: 15_000,
     refetchInterval: 60_000,
   });
+}
+
+function invalidateOrderLists(client: QueryClient, orderId: string): void {
+  void client.invalidateQueries({ queryKey: qk.order(orderId) });
+  void client.invalidateQueries({ queryKey: ['orders', 'list'] });
+  void client.invalidateQueries({ queryKey: ['production'] });
 }
 
 /** A escrita devolveu o pedido inteiro: ele vira o cache, e a próxima escrita já usa a versão nova. */
@@ -203,6 +228,74 @@ export function useCancelOrder(orderId: string) {
   return useOrderVersioned<{ reason: string; version: number }>(orderId, (v) => versioned.cancelOrder(orderId, v.reason, v.version), () => 'Cancelar pedido', 'Pedido cancelado');
 }
 
+/**
+ * Aceite do pedido do site (ADR-0046 itens 6–9): [I][M]. `409 VersionConflict` traz o pedido atual em `current`
+ * ("Já aceito por Bruno"); `WebOrderExpired` e `OrderNotAwaitingAcceptance` recarregam a faixa.
+ */
+export function useAcceptOrder(orderId: string, onAccepted?: (order: Order) => void) {
+  const client = useQueryClient();
+  return useCriticalMutation<{ estimatedReadyMinutes: EstimatedReadyMinutes | null; version: number }, Order>({
+    request: (v) => critical.acceptOrder(orderId, v.estimatedReadyMinutes, v.version),
+    describe: (v) => `Aceitar pedido do site${v.estimatedReadyMinutes ? ` — pronto em ~${v.estimatedReadyMinutes} min` : ''}`,
+    onConfirmed: (o) => {
+      setOrderInCache(client, o);
+      onAccepted?.(o);
+    },
+    onConflict: (current) => {
+      if (current) client.setQueryData(qk.order(orderId), current as Order);
+      invalidateOrderLists(client, orderId);
+    },
+    onRejected: () => {
+      invalidateOrderLists(client, orderId);
+    },
+    successMessage: (o) => `Pedido do site aceito: ${orderNumberLabel(o.orderNumber)}`,
+  });
+}
+
+/** Recusa (ADR-0046 item 12): só [M]. */
+export function useRejectOrder(orderId: string, onRejectedOk?: (order: Order) => void) {
+  const client = useQueryClient();
+  return useCriticalMutation<{ reasonCode: RejectReason; message: string | null; version: number }, Order>({
+    request: (v) => versioned.rejectOrder(orderId, v.reasonCode, v.message, v.version),
+    describe: (v) => `Recusar pedido do site — ${rejectionReasonNames[v.reasonCode]}`,
+    idempotent: false,
+    onConfirmed: (o) => {
+      setOrderInCache(client, o);
+      onRejectedOk?.(o);
+    },
+    onConflict: (current) => {
+      if (current) client.setQueryData(qk.order(orderId), current as Order);
+      invalidateOrderLists(client, orderId);
+    },
+    onRejected: () => {
+      invalidateOrderLists(client, orderId);
+    },
+    successMessage: () => 'Pedido do site recusado',
+  });
+}
+
+/**
+ * Atendimento (ADR-0046 item 18): só [M]. Vale para pedidos do site e do app. `ProductionNotCompleted` (a cozinha
+ * voltou o status enquanto a tela estava aberta) recarrega o pedido para o botão virar "Concluir e marcar".
+ */
+export function useSetFulfillment(orderId: string, orderNumber: number | null) {
+  const client = useQueryClient();
+  return useCriticalMutation<{ to: FulfillmentStatus; completeProduction: boolean; version: number }, Order>({
+    request: (v) => versioned.setFulfillment(orderId, v.to, v.completeProduction, v.version),
+    describe: (v) => `${v.completeProduction ? 'Concluir e marcar ' : ''}${fulfillmentStatusNames[v.to]} — pedido ${orderNumberLabel(orderNumber)}`,
+    idempotent: false,
+    onConfirmed: (o) => setOrderInCache(client, o),
+    onConflict: (current) => {
+      if (current) client.setQueryData(qk.order(orderId), current as Order);
+      invalidateOrderLists(client, orderId);
+    },
+    onRejected: () => {
+      invalidateOrderLists(client, orderId);
+    },
+    successMessage: (o, v) => `${orderNumberLabel(o.orderNumber)}: ${fulfillmentStatusNames[v.to]}`,
+  });
+}
+
 export function useAcknowledgeAlerts(orderId: string) {
   const client = useQueryClient();
   return useMutation({
@@ -220,6 +313,8 @@ export function summarizeOrder(order: Order): string[] {
     `Total: ${formatBRL(order.totalAmount)} (pago ${formatBRL(order.paidAmount)})`,
     `${order.items.length} ${order.items.length === 1 ? 'item' : 'itens'}: ${order.items.map((i) => `${i.quantity}× ${i.name}`).join(', ')}`,
     order.productionStatus ? `Produção: ${productionNames[order.productionStatus]}` : null,
+    order.fulfillmentStatus ? `Atendimento: ${fulfillmentStatusNames[order.fulfillmentStatus]}` : null,
+    order.acceptanceStatus !== 'ACCEPTED' ? `Pedido do site: ${acceptanceStatusNames[order.acceptanceStatus].toLowerCase()}` : null,
     order.isPaid ? 'Pedido quitado' : null,
   ].filter((l): l is string => l !== null);
 }

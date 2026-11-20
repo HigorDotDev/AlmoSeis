@@ -18,6 +18,8 @@ export const qk = {
   menuList: (f: object) => ['menus', 'list', f] as const,
   orders: (f: OrderFilters) => ['orders', 'list', f] as const,
   order: (id: string) => ['orders', id] as const,
+  /** Faixa "Novos do site" (`acceptanceStatus=AWAITING_ACCEPTANCE`): sob `['orders', 'list']`, invalidada junto. */
+  awaitingOrders: ['orders', 'list', 'awaiting'] as const,
   lastMarmitaOrder: (customerId: string | null) => ['orders', 'lastMarmita', customerId] as const,
   orderAlerts: (id: string) => ['orders', id, 'alerts'] as const,
   orderHistory: (id: string) => ['orders', id, 'history'] as const,

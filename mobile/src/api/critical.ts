@@ -6,9 +6,12 @@ import { apiRequest, type ApiResult, type HttpMethod } from './client';
 import type {
   CashMovementType,
   CreateOrderBody,
+  EstimatedReadyMinutes,
+  FulfillmentStatus,
   NewItemInput,
   ProductionStatus,
   RegisterPaymentBody,
+  RejectionReasonCode,
   UpdateOrderBody,
   Uuid,
 } from './types';
@@ -38,6 +41,13 @@ export const critical = {
     method: 'POST',
     path: `/orders/${orderId}/weighings`,
     body: { weighings },
+    ifMatch: version,
+  }),
+  /** Aceite do pedido do site (ADR-0046 itens 6–9): [I][M]. */
+  acceptOrder: (orderId: Uuid, estimatedReadyMinutes: EstimatedReadyMinutes | null, version: number): CriticalRequest => ({
+    method: 'POST',
+    path: `/orders/${orderId}/accept`,
+    body: { estimatedReadyMinutes },
     ifMatch: version,
   }),
   registerPayment: (orderId: Uuid, body: RegisterPaymentBody, orderVersion: number): CriticalRequest => ({
@@ -104,6 +114,20 @@ export const versioned = {
     method: 'POST',
     path: `/orders/${orderId}/cancel`,
     body: { reason },
+    ifMatch: version,
+  }),
+  /** Recusa do pedido do site (ADR-0046 item 12): só [M]. */
+  rejectOrder: (orderId: Uuid, reasonCode: Exclude<RejectionReasonCode, 'BUSINESS_DAY_CLOSED'>, message: string | null, version: number): CriticalRequest => ({
+    method: 'POST',
+    path: `/orders/${orderId}/reject`,
+    body: { reasonCode, message },
+    ifMatch: version,
+  }),
+  /** Atendimento de entrega/retirada (ADR-0046 item 18): só [M]. `completeProduction` exige também `production.update`. */
+  setFulfillment: (orderId: Uuid, fulfillmentStatus: FulfillmentStatus, completeProduction: boolean, version: number): CriticalRequest => ({
+    method: 'PATCH',
+    path: `/orders/${orderId}/fulfillment`,
+    body: { fulfillmentStatus, completeProduction },
     ifMatch: version,
   }),
 };

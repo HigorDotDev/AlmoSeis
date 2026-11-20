@@ -103,6 +103,7 @@ Os tipos (`Order`, `OrderSummary`, `Payment`…) ficam em `src/api/types.ts`, **
 | `['products', filtros]`, `['marmitaSizes']` | catálogo | 10 min |
 | `['menus', 'current', menuType]`, `['menus', id]`, `['menus', 'list', filtros]` | cardápios | 2 min |
 | `['orders', 'list', filtros]`, `['orders', id]` | pedidos | 30 s |
+| `['orders', 'list', 'awaiting']` | `GET /orders?acceptanceStatus=AWAITING_ACCEPTANCE` (faixa "Novos do site", ADR-0046); sob `['orders', 'list']`, invalidada junto | 15 s, `refetchInterval` 30 s |
 | `['production', businessDayId]` | painel da cozinha | 15 s |
 | `['orders', id, 'alerts' \| 'history' \| 'payments']` | detalhes | 30 s |
 | `['customers', 'search', termo]`, `['customers', id]`, `['customers', id, 'pending']` | clientes | 1 min |
@@ -255,6 +256,8 @@ Na aba Pedidos:
 - com a preferência local "Som de pedidos" ligada, `OrderCreated` e `OrderAlertCreated` com `affectsProduction` tocam um som curto (`expo-audio`, volume respeitando o sistema);
 - o card do pedido pisca uma vez.
 
+Em qualquer aba (`features/orders/useWebOrderSound.ts`, montado no layout de `(app)`): `OrderAwaitingAcceptance` (pedido do site chegou, ADR-0046 item 23) toca **o mesmo som** de pedido novo para quem tem `orders.view`, com a mesma preferência. O som próprio vem com o push (EP-002 F-209, fatia 5). Os eventos `OrderAwaitingAcceptance`, `OrderAccepted`, `OrderRejected` e `OrderFulfillmentChanged` têm `entityType: ORDER`: o mapa de §8.3 já invalida `['orders', 'list']` (inclusive a faixa) e `['production']`, e o sync faz o mesmo pelo feed.
+
 ---
 
 ## 8.7 Sessão, entrada e dispositivo compartilhado (ADR-0018, ADR-0027)
@@ -349,12 +352,21 @@ Convenções:
 
 ### Aba Marmitas — `(tabs)/marmitas`
 
-- **Dados:** `['orders', 'list', { orderType: 'MARMITA' }]` do expediente aberto, mais `['menus', 'current', 'MARMITA']`.
+- **Dados:** `['orders', 'list', { orderType: 'MARMITA' }]` do expediente aberto (a lista comum só traz pedidos **aceitos**, padrão do `acceptanceStatus`), mais `['menus', 'current', 'MARMITA']` e a faixa `['orders', 'list', 'awaiting']`.
 - **Layout:**
+  - **faixa "Novos do site (n)"** no topo (abaixo);
   - filtro segmentado *Todos / A pagar / Entrega / Retirada*;
   - busca por nome;
-  - cards `OrderCard` com número, cliente, entrega ou retirada, total, `PaymentBadge` (financeiro), `ProductionBadge` (produção) e o ponto de alerta;
+  - cards `OrderCard` com número, cliente, entrega ou retirada, total, `PaymentBadge` (financeiro), `ProductionBadge` (produção), `SiteBadge` (pedido do site), `FulfillmentBadge` (atendimento) e o ponto de alerta; em entrega/retirada, o **próximo passo** do atendimento (abaixo);
   - FAB "Nova marmita".
+- **Faixa "Novos do site"** (`NewWebOrdersSection`, ADR-0046 item 21, EP-002 RF-206). Sem pedidos aguardando, não ocupa espaço. Visível para `orders.view`; os botões só com `orders.accept` (sem ela: "Aguardando o balcão aceitar."). Um `WebOrderCard` por pedido:
+  - selo "Site", entrega/retirada e a **contagem regressiva** até `acceptanceDeadline` ("Aceite em 9:41"; âmbar nos 3 min finais; "Prazo esgotado" no zero). A contagem usa o relógio do aparelho e é só aviso: os botões não somem no zero, quem decide é o servidor (`409 WebOrderExpired`);
+  - cliente e total em destaque; itens, endereço, telefone com "telefone não verificado" (ADR-0044) e observação, lidos de `GET /orders/{id}` (a lista só traz `itemCount`);
+  - **"Aceitar"** → Confirma ("Aceitar pedido do site?", cliente, atendimento, total) com o tempo estimado opcional em chips (*Sem estimativa / 15 / 30 / 45 / 60 min*, "o cliente vê") → `POST /orders/{id}/accept` [I][M] com `If-Match` = versão mais nova entre lista e detalhe. Sucesso: toast "Pedido do site aceito: #15", e o pedido sai da faixa e entra na lista (e na cozinha, pelo `OrderCreated`);
+  - **"Recusar"** → Confirma de perigo com o motivo em chips (Item acabou, Fora da área de entrega, Muitos pedidos agora, Estamos fechando, Pedido suspeito, Outro motivo), a mensagem (opcional, 5–200 caracteres; obrigatória em "Outro"), a faixa "O cliente verá esta mensagem." e a prévia do que o cliente lê (em "Pedido suspeito", o texto não é mostrado) → `POST /orders/{id}/reject` [M];
+  - `409 VersionConflict`: o `current` vira o texto do toast ("Já aceito por Bruno.", "Já recusado por Carla.", "O prazo acabou, o pedido expirou.", "O cliente desistiu deste pedido.") e nada é gravado; `409 WebOrderExpired` → "O prazo acabou, o pedido expirou."; `409 OrderNotAwaitingAcceptance` → texto pela extensão `acceptanceStatus`. Em todos, a faixa e o detalhe são recarregados;
+  - resultado desconhecido do aceite: a pendência fica, o diálogo mostra "Verificando se o aceite entrou…" e confirmar de novo não reenvia (§8.5).
+  - **"Possível duplicado"** (ADR-0046 item 21) ainda **não** aparece: o contrato não traz como saber se o mesmo telefone tem outro pedido nos últimos 30 min.
 - **Sem cardápio** (`404 MenuNotFound`): o `MenuMissingCard` oferece "Usar o de ontem", "Usar o da semana passada" (`POST /menus/{id}/clone`), "Usar modelo semanal" e "Montar agora" (`menu/menus/today`), conforme `sources` (RN-003.2).
 - **Primeiro uso — "Prepare seu restaurante"** (`docs/10-ux.md` D1): sem expediente aberto e com o cadastro incompleto (nenhum tamanho de marmita ativo **ou** nenhum prato principal ativo), quem tem `catalog.manage` vê o `SetupChecklist` no lugar do `NoBusinessDayCard`. Passos, cada um com uma frase de explicação e o atalho:
   1. Tamanhos de marmita (`/marmita-sizes`, feito com ≥ 1 ativo) → `menu/sizes` — "O preço da marmita vem do tamanho: P, M, G.";
@@ -410,7 +422,14 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 
 ### Detalhe do pedido — `orders/[id]`
 
-- **Cabeçalho:** "#12 · Marmita · Entrega", cliente/mesa, `ProductionBadge` e `PaymentBadge` lado a lado, mas com formas e cores distintas (RNF-001).
+- **Cabeçalho:** "#12 · Marmita · Entrega" ("Pedido do site · Marmita · Entrega" enquanto não há número), cliente/mesa, telefone ("telefone não verificado" em pedido `WEB`), "por Ana" ou "pelo site" (`createdBy: null`), `SiteBadge`, `ProductionBadge`, `PaymentBadge` (só em pedido aceito) e `FulfillmentBadge` lado a lado, com formas e cores distintas (RNF-001).
+- **Aceite (pedido do site, ADR-0046):** aguardando → card "Aguardando aceite" com a contagem e "Aceitar"/"Recusar" (os mesmos da faixa); aceito → faixa "Pedido do site aceito por Bruno às 12:03 · pronto em ~30 min"; recusado, expirado ou desistência → faixa com o desfecho ("Recusado por Carla: Item acabou — "A costela acabou."", "Ninguém aceitou no prazo", "O cliente desistiu") e "Não é venda". **Enquanto não é `ACCEPTED`, nenhuma escrita aparece** (itens, receber, editar, cancelar): o servidor responde `409 OrderNotAccepted` (item 4); só "Histórico" fica no menu.
+- **Atendimento** (entrega/retirada aceitas e ativas, pedidos do site **e** do app, uso opcional, ADR-0046 itens 18 e 20): card com o status ("Pendente", "Pronto para retirar" — derivado de `isReadyForPickup` —, "Saiu para entrega · 12:15", "Entregue", "Retirado") e os botões de `features/orders/fulfillment.ts`:
+  - entrega: "Saiu para entrega" → "Entregue"; com saída, também "Voltou sem entregar"; entregue: "Desfazer "Entregue"" (correção);
+  - retirada: "Retirado"; retirado: "Desfazer "Retirado"";
+  - produção não concluída: o avanço vira **"Concluir e marcar saída"/"Concluir e marcar retirado"** (`completeProduction: true`) para quem também tem `production.update`; sem ela, "fica disponível quando a cozinha concluir";
+  - Confirma com "Atendimento: Pendente → Saiu para entrega" (e "Produção: Em produção → Concluído" no concluir e marcar) e a nota "O financeiro não muda" → `PATCH /orders/{id}/fulfillment` [M]. `409 ProductionNotCompleted` (a cozinha voltou o status) mostra a mensagem no diálogo e recarrega o pedido.
+- **Depois da saída** (`OUT_FOR_DELIVERY`, `DELIVERED`, `PICKED_UP`): "Adicionar itens" some e a barra explica "O pedido já saiu: para incluir itens, crie outro pedido."; a tela de inclusão mostra o mesmo aviso e trava o envio; "Editar dados" não oferece trocar entrega ↔ retirada. Se a saída acontecer com a tela aberta, o `409 OrderAlreadyDispatched` mostra "Este pedido já saiu (ou foi retirado). Para incluir itens, crie outro pedido." (item 19).
 - **Lista de itens:** composição, observação e adicionais.
   - Ações por item (`orders.edit`, pedido não pago): alterar quantidade/observação (`PATCH …/items/{itemId}` [M]) e remover (`DELETE` [M]). Ambas passam pelo Confirma.
   - Pesagens (quilo), com remover.
@@ -448,6 +467,7 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
   - itens com composição e observações em destaque;
   - selo de alerta, que expande as mudanças e permite dar ciência ali mesmo.
 - **Ação:** um botão de avanço ("Iniciar" → "Concluir"), e "Voltar status" no menu do card. Ambos passam pelo Confirma (RN-007.3) e chamam `PATCH /orders/{id}/status` [M].
+- **Pedidos do site e atendimento (ADR-0046):** o painel só traz pedidos aceitos, ordenados pelo aceite. No topo, a faixa "Novos do site (n)" **recolhida** (só a contagem; "Ver" abre os cards; a cozinha não tem `orders.accept` e vê "Aguardando o balcão aceitar."). O card leva o selo "Site" e o selo de atendimento; nos **concluídos** de entrega/retirada, o avanço do atendimento ("Saiu para entrega", "Entregue", "Retirado") aparece no próprio card, com Confirma; as voltas ficam no detalhe.
 - **Comportamento da aba:** `useKeepAwake`, som (§8.6) e fonte maior, ajustável em `menu/settings`.
 
 ### Aba Fechamento — `(tabs)/fechamento`
@@ -458,12 +478,13 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
   2. **Por forma de pagamento:** Dinheiro / Pix / Cartão, com estornos;
   3. **Caixa físico:** saldo inicial, recebido em dinheiro, suprimentos, retiradas, estornos em dinheiro, **esperado**;
   4. "Recebido de dias anteriores", Cancelamentos e Estornos;
+  4a. **Pedidos do site e entregas** (só quando algum número não é zero; informativo, fora do vendido, RF-210, ADR-0046 itens 13 e 20): aguardando aceite (`webOrders.awaitingAcceptanceCount`, só no parcial), recusados ao fechar (`autoRejectedCount`, só no finalizado), não aceitos (`notAcceptedCount`) e "N entregas sem marcação de entregue" (`unmarkedDeliveryCount`);
   5. Botões: "Suprimento/Retirada" → `closing/cash-movement` ([I], motivo obrigatório); "Fechar expediente" → `closing/finalize` (`closing.finalize`); "Histórico".
 - O resumo é atualizado por `ClosingUpdated`, ou puxando para baixo.
 
 ### Fechar expediente — `closing/finalize`
 
-- **Passo 1, conferir:** o resumo, em modo leitura, e um aviso se existirem pedidos pendentes ("3 pedidos ficarão pendentes: R$ 220,00").
+- **Passo 1, conferir:** o resumo, em modo leitura, e um aviso se existirem pedidos pendentes ("3 pedidos ficarão pendentes: R$ 220,00") e outro se houver pedidos do site aguardando aceite ("2 pedidos do site aguardando aceite serão recusados.", ADR-0046 item 13). O fechamento não fica bloqueado por eles; o mesmo aviso se repete no Confirma.
 - **Passo 2, contar o dinheiro:** "Quanto há no caixa?" (`MoneyInput`), com uma calculadora opcional de cédulas e moedas que soma quantidades por valor de face. Mostra a diferença em tempo real, com cor e texto ("Faltam R$ 10,00").
 - **Diferença ≠ 0:** justificativa obrigatória, com no mínimo 5 caracteres (RN-010.13).
 - "Fechar expediente" → Confirma (valores e diferença) → `POST /closing/finalize` [I][M].
@@ -522,6 +543,8 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 | `PaymentBadge` | Forma **quadrada** com ícone: A pagar (vermelho), Parcial ("R$ 20 de R$ 55", azul), Pago (cifrão, verde). Distinto do de produção mesmo para daltônicos (RNF-001) |
 | `SyncStatePill` | Rascunho / Enviando / Pendente de confirmação / Confirmado (RN-014.5) |
 | `AlertDot` | Ponto laranja com número; `accessibilityLabel` "1 alteração não vista" |
+| `SiteBadge` | Etiqueta (raio 8, sem borda) "Site" com globo, em `primaryBg`: pedido com `origin = WEB` (ADR-0046 item 21) |
+| `FulfillmentBadge` | **Pílula com contorno tracejado**, a terceira forma (produção = pílula, financeiro = quadrado): "Pronto para retirar" (derivado), "Saiu para entrega", "Entregue", "Retirado". Pendente não tem selo: a marcação é opcional |
 | `ConnectivityBar`, `SubscriptionBanner`, `ConflictSheet`, `EmptyState`, `ErrorState`, `Skeleton`, `BottomSheet`, `Chip`, `SegmentedControl`, `PermissionGate` | `PermissionGate permission="payments.register"` esconde o filho; com `fallback="disabled"`, mostra desabilitado com explicação |
 
 **Tema:** tokens de cor com modo claro e escuro; contraste AA. O modo segue o sistema (ou o navegador) até alguém tocar no botão de sol/lua do cabeçalho, ao lado do perfil: a escolha (`themeMode`: `system`/`light`/`dark`) fica nas preferências do aparelho e vale para quem usar o aparelho ou o navegador. `useColorMode()` decide o modo, `useColors()` devolve a paleta, e o `ThemeProvider` da raiz pinta o fundo das abas e das telas com a mesma paleta; fonte do sistema escalável (respeita a acessibilidade do Android), com limite de escala nos cards da cozinha. Todo ícone de ação tem `accessibilityLabel`.
@@ -542,7 +565,12 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 | `PermissionDenied` | "Você não tem permissão para isso. Peça a um gerente." |
 | `SubscriptionInactive` | Ativa o modo somente leitura e o banner |
 | `ValidationFailed` | Mensagens de `errors` nos campos correspondentes |
-| `VersionConflict` | `ConflictSheet` (§8.5) |
+| `VersionConflict` | `ConflictSheet` (§8.5); no aceite/recusa do pedido do site, toast com o `current` ("Já aceito por Bruno.") |
+| `OrderNotAccepted` | "Este pedido do site ainda não foi aceito." |
+| `OrderNotAwaitingAcceptance` | Pela extensão `acceptanceStatus`: "Este pedido do site já foi aceito." / "…já foi recusado." / "O cliente desistiu deste pedido." / "O prazo acabou, o pedido expirou." |
+| `WebOrderExpired` | "O prazo acabou, o pedido expirou." |
+| `OrderAlreadyDispatched` | "Este pedido já saiu (ou foi retirado). Para incluir itens, crie outro pedido." |
+| `ProductionNotCompleted` | "A cozinha ainda não concluiu este pedido. Use "Concluir e marcar" ou espere a conclusão." |
 | `TooManyRequests` | "Muitas tentativas. Aguarde {Retry-After} s." |
 | outros / 5xx | "Algo deu errado. Código: {traceId curto}." (o `traceId` vai para o suporte) |
 
@@ -567,6 +595,7 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 | Unitários (Jest) | `money.ts` (inclusive `splitEvenly` e a ausência de float), `weight.ts` (mesmos casos do teste de DDL: 452 g × 59,90 = 27,07; 250 g × 1,42 = 0,36), parsers de `ProblemDetails`, mapa entityType → chaves |
 | Hooks (RNTL + fetch simulado) | `useCriticalMutation`: sucesso, 4xx, 409 com `current`, timeout → `UNKNOWN` → `/operations` `COMPLETED`/`NOT_FOUND`; `syncEngine` com `410`; refresh single-flight com 3 requisições paralelas recebendo `401` |
 | Componentes (RNTL) | `ConfirmDialog` (cancelar não chama a API), `MoneyInput`, `PermissionGate`, `OrderCard` com os dois badges |
+| Pedidos do site (ADR-0046) | `webOrders.test.ts`: botões de atendimento por tipo/status/permissão, "Concluir e marcar", `isDispatched`, contagem regressiva, texto do conflito pelo `current`, validação da recusa, título da aba, avisos do fechamento, mensagens dos `errorCode`s novos. `webOrderFlow.test.tsx` (fetch simulado, exemplos literais do 06): faixa com prazo, itens, endereço e "telefone não verificado"; cozinha sem botões; aceite com `If-Match` + `Idempotency-Key` + tempo estimado; `409` "Já aceito por Bruno"; `WebOrderExpired`; rede caindo → pendência `UNKNOWN` e nenhum reenvio; recusa com motivo, "Outro" obrigatório e sem `Idempotency-Key`; "Concluir e marcar saída" com `completeProduction`; `ProductionNotCompleted`; selos "Site"/atendimento no `OrderCard`; "Pronto para retirar"; fechamento com os pedidos do site |
 | E2E (Maestro, emulador Android de entrada) | 1) cadastro → abrir expediente → marmita com bebida → receber em dinheiro com troco → fechar com diferença e justificativa; 2) desligar a rede no meio do "Receber" → religar → app resolve sem duplicar; 3) PIN no aparelho compartilhado + inatividade |
 
 Critério de pronto do mobile (`docs/02-padroes.md` §2.6): fluxos E2E 1 e 2 passando em homolog antes de cada release para as lojas.
@@ -634,7 +663,7 @@ O mesmo `mobile/` roda no navegador do computador do balcão (Chrome e Edge no W
 | `features/sync/appLifecycle.ts` | `appLifecycle.web.ts` | **o SignalR não desconecta com a aba oculta** (ADR-0053 §7.1). Reconecta e sincroniza em `visibilitychange` visível, `online`, `pageshow` (bfcache) e ao detectar que o computador dormiu (intervalo de 30 s atrasado > 90 s) |
 | `lib/keepAwake.ts` | `keepAwake.web.ts` | Wake Lock próprio: o do `expo-keep-awake` web não readquire o lock ao voltar a aba e lança erro sem suporte |
 | `features/production/orderSound.ts` | `orderSound.web.ts` | `HTMLAudioElement`; `needsUnlock` enquanto a página não teve ativação do usuário (`navigator.userActivation`). A aba Pedidos mostra a faixa "Som desativado neste navegador — Ativar som"; o clique toca o aviso uma vez. No celular `needsUnlock` é sempre `false` |
-| `features/shell/tabTitle.ts` | `tabTitle.web.ts` | com a aba oculta, `document.title` = "(2) Pedidos novos · AlmoSeis", contando `OrderCreated` de outras pessoas; volta ao normal quando a aba vem para a frente. Quando os pedidos do site (ADR-0046) chegarem ao app, passa a contar "Novos do site" aguardando aceite (só este arquivo muda) |
+| `features/shell/tabTitle.ts` | `tabTitle.web.ts` | com a aba oculta, `document.title` = "(2) Novos do site · AlmoSeis": quantos pedidos do site **aguardam aceite agora** (a mesma consulta da faixa, `['orders', 'list', 'awaiting']`, mantida em dia pelos eventos com a aba oculta). Aceito em outro computador ou expirado, o número cai; volta ao título normal quando a aba vem para a frente (EP-002 fatia 1, 2026-11-20). O som do pedido do site é o mesmo do pedido novo (§8.6) |
 | `features/update/upgradeHandler.ts` + `UpdateRequiredScreen.tsx` | `*.web.ts(x)` | `426`: grava os rascunhos no debounce (`flushAllDrafts`) e recarrega a página **uma vez** (marca `almoseis.reloadedFor426` na `sessionStorage`, vale 10 min); se persistir, "Estamos atualizando o AlmoSeis. Tente de novo em alguns minutos." com "Recarregar", sem link de loja |
 | `lib/keyboard.ts` | `keyboard.web.ts` | `useKeyDown`: `Enter` confirma o `ConfirmDialog` (exceto com o foco num botão, que já trata a tecla); tecla segurada (`repeat`) é ignorada; PIN aceita dígitos, `Backspace` e `Enter`. `Esc` fecha diálogos e *sheets* pelo `onRequestClose` do `Modal` do react-native-web. O peso do quilo já é um `TextInput` |
 | `lib/confirm.ts` | `confirm.web.ts` | `confirmAction`: pergunta de sim/não antes de ação destrutiva (encerrar sessão, descartar pendência). No celular, `Alert.alert`; na web, `window.confirm`, porque o `Alert` do react-native-web não faz nada. Uma regra de lint proíbe importar `Alert` de `react-native` fora de `lib/confirm.ts` |

@@ -14,6 +14,7 @@ import {
   ConflictSheet,
   Divider,
   ErrorState,
+  FulfillmentBadge,
   IconButton,
   KeyValue,
   PaymentBadge,
@@ -21,6 +22,7 @@ import {
   QuantityStepper,
   Row,
   Section,
+  SiteBadge,
   Skeleton,
   SyncStatePill,
   Text,
@@ -31,14 +33,17 @@ import {
 } from '@/components/ui';
 import { formatBusinessDate, formatTime } from '@/lib/dates';
 import { formatBRL } from '@/lib/money';
-import { fulfillmentNames, orderTypeNames, paymentMethodNames } from '@/lib/strings';
+import { fulfillmentNames, fulfillmentStatusNames, orderTypeNames, paymentMethodNames, READY_FOR_PICKUP } from '@/lib/strings';
 import { gramsToKgLabel } from '@/lib/weight';
 import { useIsOnline } from '@/stores/connectivity';
 import { useBlockedBy } from '@/stores/pendingOps';
 import { useCanWrite, useSession } from '@/stores/session';
 
 import { orderLabel } from '../components';
+import { isDispatched } from '../fulfillment';
 import { summarizeOrder, useCancelOrder, useOrder, useRemoveItem, useRemoveWeighing, useUpdateItem } from '../hooks';
+import { AcceptanceCountdown, acceptanceOutcomeText, AcceptRejectActions, FulfillmentActions, PhoneLine } from '../webOrderComponents';
+import { orderNumberLabel } from '../webOrders';
 
 /** 08 §8.9 `orders/[id]`. */
 export default function OrderDetailScreen() {
@@ -53,9 +58,11 @@ export default function OrderDetailScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      <Stack.Screen options={{ title: `#${o.orderNumber} · ${orderTypeNames[o.orderType]}` }} />
+      <Stack.Screen options={{ title: `${orderNumberLabel(o.orderNumber)} · ${orderTypeNames[o.orderType]}` }} />
       <ScrollView contentContainerStyle={[{ padding: space.lg, gap: space.md, paddingBottom: 140 }, WEB_CONTENT_MAX]} refreshControl={<RefreshControl refreshing={order.isRefetching} onRefresh={() => void order.refetch()} />}>
         <OrderHeader order={o} pending={!!pending} />
+        <AcceptanceBlock order={o} />
+        <FulfillmentBlock order={o} />
         <ItemsBlock order={o} />
         <FinancialBlock order={o} />
       </ScrollView>
@@ -67,12 +74,14 @@ export default function OrderDetailScreen() {
 function OrderHeader({ order: o, pending }: { order: Order; pending: boolean }) {
   const timeZone = useSession((s) => s.me?.tenant.timeZone ?? 'America/Sao_Paulo');
   const canceled = o.cancellationStatus === 'CANCELED';
+  const accepted = o.acceptanceStatus === 'ACCEPTED';
   return (
     <Card>
       <Text variant="title">
-        #{o.orderNumber} · {orderTypeNames[o.orderType]} · {fulfillmentNames[o.fulfillmentType]}
+        {orderNumberLabel(o.orderNumber)} · {orderTypeNames[o.orderType]} · {fulfillmentNames[o.fulfillmentType]}
       </Text>
       <Text>{orderLabel({ customerName: o.customer?.name ?? null, tableLabel: o.tableLabel, tabNumber: o.tabNumber })}</Text>
+      {o.customer?.phoneNumber ? <PhoneLine phone={o.customer.phoneNumber} unverified={o.origin === 'WEB'} /> : null}
       {o.deliveryAddress ? (
         <Text variant="small" muted>
           {[o.deliveryAddress.street, o.deliveryAddress.number, o.deliveryAddress.complement, o.deliveryAddress.neighborhood].filter(Boolean).join(', ')}
@@ -80,11 +89,13 @@ function OrderHeader({ order: o, pending }: { order: Order; pending: boolean }) 
         </Text>
       ) : null}
       <Text variant="small" muted>
-        {formatBusinessDate(o.businessDate)} · {formatTime(o.createdAt, timeZone)} · por {o.createdBy.displayName}
+        {formatBusinessDate(o.businessDate)} · {formatTime(o.createdAt, timeZone)} · {o.createdBy ? `por ${o.createdBy.displayName}` : 'pelo site'}
       </Text>
       <Row style={{ flexWrap: 'wrap' }}>
+        {o.origin === 'WEB' ? <SiteBadge /> : null}
         {!canceled ? <ProductionBadge status={o.productionStatus} /> : null}
-        <PaymentBadge totalAmount={o.totalAmount} paidAmount={o.paidAmount} isPaid={o.isPaid} canceled={canceled} />
+        {accepted ? <PaymentBadge totalAmount={o.totalAmount} paidAmount={o.paidAmount} isPaid={o.isPaid} canceled={canceled} /> : null}
+        {!canceled ? <FulfillmentBadge fulfillmentType={o.fulfillmentType} status={o.fulfillmentStatus} isReadyForPickup={o.isReadyForPickup} /> : null}
         {pending ? <SyncStatePill state="unknown" /> : null}
       </Row>
       {o.notes ? <Text>Obs.: {o.notes}</Text> : null}
@@ -97,10 +108,69 @@ function OrderHeader({ order: o, pending }: { order: Order; pending: boolean }) 
   );
 }
 
+/**
+ * Aceite do pedido do site (ADR-0046): aguardando → prazo e "Aceitar"/"Recusar"; aceito → quem aceitou e o tempo
+ * estimado; recusado, expirado ou desistência → o desfecho (o pedido não é venda e não aceita escrita).
+ */
+function AcceptanceBlock({ order: o }: { order: Order }) {
+  const timeZone = useSession((s) => s.me?.tenant.timeZone ?? 'America/Sao_Paulo');
+  if (o.origin !== 'WEB') return null;
+  if (o.acceptanceStatus === 'AWAITING_ACCEPTANCE') {
+    return (
+      <Card>
+        <Row style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
+          <Text variant="subtitle">Aguardando aceite</Text>
+          <AcceptanceCountdown deadline={o.acceptanceDeadline} />
+        </Row>
+        <Text variant="small" muted>
+          Até ser aceito, o pedido não tem número, não vai para a cozinha e não entra no fechamento.
+        </Text>
+        <AcceptRejectActions
+          orderId={o.id}
+          version={o.version}
+          lines={[
+            { label: 'Cliente', value: o.customer?.name ?? 'Sem nome' },
+            { label: 'Atendimento', value: fulfillmentNames[o.fulfillmentType] },
+            { label: 'Total', value: formatBRL(o.totalAmount) },
+          ]}
+        />
+      </Card>
+    );
+  }
+  if (o.acceptanceStatus === 'ACCEPTED') {
+    if (!o.acceptedAt) return null;
+    const who = o.acceptedBy ? ` por ${o.acceptedBy.displayName}` : '';
+    const eta = o.estimatedReadyMinutes ? ` · pronto em ~${o.estimatedReadyMinutes} min` : '';
+    return <Banner tone="info" text={`Pedido do site aceito${who} às ${formatTime(o.acceptedAt, timeZone)}${eta}.`} />;
+  }
+  const outcome = acceptanceOutcomeText(o);
+  return outcome ? <Banner tone="danger" text={`${outcome} Não é venda: não vai para a cozinha nem para o fechamento.`} /> : null;
+}
+
+/** Atendimento de entrega/retirada (ADR-0046 item 18), em pedidos do site e do app; uso opcional. */
+function FulfillmentBlock({ order: o }: { order: Order }) {
+  const timeZone = useSession((s) => s.me?.tenant.timeZone ?? 'America/Sao_Paulo');
+  if (o.acceptanceStatus !== 'ACCEPTED' || o.cancellationStatus !== 'ACTIVE' || o.fulfillmentType === 'DINE_IN' || o.fulfillmentStatus === null) return null;
+  const status = o.isReadyForPickup ? READY_FOR_PICKUP : fulfillmentStatusNames[o.fulfillmentStatus];
+  const at = o.deliveredAt ?? o.pickedUpAt ?? o.outForDeliveryAt;
+  return (
+    <Card>
+      <Row style={{ justifyContent: 'space-between' }}>
+        <Text variant="subtitle">Atendimento</Text>
+        <Text style={{ fontWeight: '700' }}>
+          {status}
+          {at && o.fulfillmentStatus !== 'PENDING' ? ` · ${formatTime(at, timeZone)}` : ''}
+        </Text>
+      </Row>
+      <FulfillmentActions order={o} />
+    </Card>
+  );
+}
+
 function ItemsBlock({ order: o }: { order: Order }) {
   const canEdit = useCanWrite('orders.edit');
   const online = useIsOnline();
-  const editable = canEdit && online && !o.isPaid && o.cancellationStatus === 'ACTIVE';
+  const editable = canEdit && online && !o.isPaid && o.cancellationStatus === 'ACTIVE' && o.acceptanceStatus === 'ACCEPTED';
   const [editing, setEditing] = useState<OrderItem | null>(null);
   const [removing, setRemoving] = useState<{ kind: 'item' | 'weighing'; id: string; label: string } | null>(null);
   const [conflict, setConflict] = useState<Order | null>(null);
@@ -260,18 +330,27 @@ function ActionBar({ order: o }: { order: Order }) {
   const canCancel = useCanWrite('orders.cancel');
   const [menu, setMenu] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
-  const active = o.cancellationStatus === 'ACTIVE';
+  // Pedido do site não aceito: nenhuma escrita além de aceitar/recusar (`409 OrderNotAccepted`, ADR-0046 item 4).
+  const accepted = o.acceptanceStatus === 'ACCEPTED';
+  const active = o.cancellationStatus === 'ACTIVE' && accepted;
   const editable = active && !o.isPaid && online;
+  // Depois da saída não entra item novo (`409 OrderAlreadyDispatched`, ADR-0046 item 19).
+  const dispatched = isDispatched(o.fulfillmentStatus);
 
   return (
     <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: c.surface, borderTopWidth: 1, borderTopColor: c.border, padding: space.sm, paddingBottom: space.sm + insets.bottom, gap: space.sm }}>
       <Row style={[{ flexWrap: 'wrap' }, WEB_CONTENT_MAX]}>
         {canPay && active && !o.isPaid ? <Button title="Receber" icon="cash-outline" disabled={!online} onPress={() => router.push(`/orders/${o.id}/pay`)} style={{ flex: 1 }} /> : null}
-        {canEdit && editable && o.orderType !== 'KILO' ? <Button title="Adicionar itens" variant="secondary" onPress={() => router.push(`/orders/${o.id}/add-items`)} style={{ flex: 1 }} /> : null}
+        {canEdit && editable && o.orderType !== 'KILO' && !dispatched ? <Button title="Adicionar itens" variant="secondary" onPress={() => router.push(`/orders/${o.id}/add-items`)} style={{ flex: 1 }} /> : null}
         {canEdit && editable && o.orderType === 'KILO' ? <Button title="Pesagem" icon="scale-outline" variant="secondary" onPress={() => router.push(`/orders/${o.id}/weighings`)} style={{ flex: 1 }} /> : null}
         <IconButton icon="ellipsis-vertical" label="Mais ações" onPress={() => setMenu(true)} />
       </Row>
-      <BottomSheet visible={menu} title={`Pedido #${o.orderNumber}`} onClose={() => setMenu(false)}>
+      {canEdit && editable && o.orderType !== 'KILO' && dispatched ? (
+        <Text variant="small" muted style={WEB_CONTENT_MAX}>
+          O pedido já saiu: para incluir itens, crie outro pedido.
+        </Text>
+      ) : null}
+      <BottomSheet visible={menu} title={`Pedido ${orderNumberLabel(o.orderNumber)}`} onClose={() => setMenu(false)}>
         {canEdit && active ? <Button title="Editar dados" variant="secondary" disabled={!online} onPress={() => { setMenu(false); router.push(`/orders/${o.id}/edit`); }} /> : null}
         {canEdit && active && !o.isPaid && o.orderType === 'KILO' ? (
           <Button title="Adicionar bebidas" variant="secondary" disabled={!online} onPress={() => { setMenu(false); router.push(`/orders/${o.id}/add-items`); }} />
@@ -295,7 +374,7 @@ function CancelDialog({ order: o, visible, onClose }: { order: Order; visible: b
       title="Cancelar pedido?"
       description={hasPayments ? 'Este pedido tem pagamentos. Estorne os pagamentos antes de cancelar (ADR-0022).' : undefined}
       lines={[
-        { label: 'Pedido', value: `#${o.orderNumber}` },
+        { label: 'Pedido', value: orderNumberLabel(o.orderNumber) },
         { label: 'Total', value: formatBRL(o.totalAmount) },
       ]}
       warning={cancel.error}

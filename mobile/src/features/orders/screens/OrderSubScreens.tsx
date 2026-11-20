@@ -52,6 +52,7 @@ import {
 } from '../compose';
 import { AddonPicker, BeverageGrid } from '../formParts';
 import { summarizeOrder, useAcknowledgeAlerts, useAddItems, useAddWeighings, useOrder, useOrderAlerts, useOrderHistory, useUpdateOrder } from '../hooks';
+import { isDispatched } from '../fulfillment';
 import { MarmitaBuilderSheet } from '../MarmitaBuilderSheet';
 import { newKey } from '@/lib/ids';
 
@@ -111,6 +112,8 @@ function AddItems({ order: o }: { order: Order }) {
   ];
 
   const add = useAddItems(o, draft.draftId, () => router.back());
+  // ADR-0046 item 19: depois da saída, `409 OrderAlreadyDispatched`. O servidor decide; aqui só evita a viagem.
+  const dispatched = isDispatched(o.fulfillmentStatus);
 
   const lines = [
     ...form.marmitas.map((l) => ({ label: `${l.quantity}× ${marmitaLineLabel(l, book)}`, value: formatBRL(marmitaLineCents(book, l)) })),
@@ -180,9 +183,10 @@ function AddItems({ order: o }: { order: Order }) {
           {addonFor ? <AddonPicker addons={addons} value={form.addons[addonFor] ?? []} onChange={(list) => update({ ...form, addons: { ...form.addons, [addonFor]: list } })} /> : null}
         </Section>
       ) : null}
+      {dispatched ? <Banner tone="warning" text="Este pedido já saiu (ou foi retirado). Para incluir itens, crie outro pedido." /> : null}
       {add.error ? <Banner tone="danger" text={add.error} /> : null}
       {add.state === 'unknown' ? <Banner tone="warning" text="Não sabemos se os itens foram incluídos. Verificando…" /> : null}
-      <Button title={`Incluir ${items.length} ${items.length === 1 ? 'item' : 'itens'}`} disabled={items.length === 0 || !online || add.state === 'unknown'} onPress={() => setConfirm(true)} />
+      <Button title={`Incluir ${items.length} ${items.length === 1 ? 'item' : 'itens'}`} disabled={items.length === 0 || !online || add.state === 'unknown' || dispatched} onPress={() => setConfirm(true)} />
 
       <MarmitaBuilderSheet
         key={builder ? 'open' : 'closed'}
@@ -285,6 +289,14 @@ const operationNames: Record<string, string> = {
   OrderCanceled: 'Pedido cancelado',
   PaymentRegistered: 'Pagamento',
   PaymentReversed: 'Estorno',
+  // Pedido do site e atendimento (06 §6.9 histórico, ADR-0046 item 24).
+  WebOrderSubmitted: 'Enviado pelo site',
+  WebOrderWithdrawn: 'Cliente desistiu',
+  OrderAccepted: 'Pedido aceito',
+  OrderRejected: 'Pedido recusado',
+  WebOrderExpired: 'Expirou sem aceite',
+  WebOrderAutoRejected: 'Recusado no fechamento',
+  OrderFulfillmentChanged: 'Atendimento',
 };
 
 function describeChange(after: Record<string, unknown> | null): string | null {
@@ -314,7 +326,7 @@ export function HistoryScreen() {
             </Text>
           </Row>
           <Text variant="small" muted>
-            {h.actor?.displayName ?? 'Sistema'}
+            {h.actor?.displayName ?? (h.origin === 'WEB' ? 'Cliente, pelo site' : 'Sistema')}
           </Text>
           {describeChange(h.after) ? <Text variant="small">{describeChange(h.after)}</Text> : null}
         </Card>
@@ -401,14 +413,19 @@ function EditOrder({ order: o }: { order: Order }) {
         <>
           <TextField label="Cliente" value={name} onChangeText={setName} />
           <TextField label="Telefone" value={phone} onChangeText={(t) => setPhone(maskBR(t))} keyboardType="phone-pad" />
-          <SegmentedControl
-            value={fulfillment === 'DELIVERY' ? 'DELIVERY' : 'PICKUP'}
-            onChange={(f) => setFulfillment(f)}
-            options={[
-              { value: 'PICKUP', label: 'Retirada' },
-              { value: 'DELIVERY', label: 'Entrega' },
-            ]}
-          />
+          {isDispatched(o.fulfillmentStatus) ? (
+            // ADR-0046 item 19: trocar entrega ↔ retirada depois da saída → `409 OrderAlreadyDispatched`.
+            <Banner tone="info" text={`${fulfillment === 'DELIVERY' ? 'Entrega' : 'Retirada'}: não muda depois que o pedido saiu.`} />
+          ) : (
+            <SegmentedControl
+              value={fulfillment === 'DELIVERY' ? 'DELIVERY' : 'PICKUP'}
+              onChange={(f) => setFulfillment(f)}
+              options={[
+                { value: 'PICKUP', label: 'Retirada' },
+                { value: 'DELIVERY', label: 'Entrega' },
+              ]}
+            />
+          )}
           {fulfillment === 'DELIVERY' ? (
             <>
               <TextField label="Rua" value={street} onChangeText={setStreet} />

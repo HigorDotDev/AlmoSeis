@@ -1,5 +1,15 @@
 /** Textos pt-BR do app (08 §8.1: sem biblioteca de i18n). */
-import type { FulfillmentType, OrderType, PaymentMethod, ProductKind, ProductionStatus, Role } from '@/api/types';
+import type {
+  AcceptanceStatus,
+  FulfillmentStatus,
+  FulfillmentType,
+  OrderType,
+  PaymentMethod,
+  ProductKind,
+  ProductionStatus,
+  RejectionReasonCode,
+  Role,
+} from '@/api/types';
 
 export const roleNames: Record<Role, string> = {
   OWNER: 'Proprietário',
@@ -16,6 +26,47 @@ export const fulfillmentNames: Record<FulfillmentType, string> = { DELIVERY: 'En
 export const paymentMethodNames: Record<PaymentMethod, string> = { CASH: 'Dinheiro', PIX: 'Pix', CARD: 'Cartão' };
 
 export const productionNames: Record<ProductionStatus, string> = { OPEN: 'Aberto', IN_PROGRESS: 'Em produção', COMPLETED: 'Concluído' };
+
+/** Atendimento (ADR-0046 item 2). "Pronto para retirar" é derivado (`isReadyForPickup`), não um valor gravado. */
+export const fulfillmentStatusNames: Record<FulfillmentStatus, string> = {
+  PENDING: 'Pendente',
+  OUT_FOR_DELIVERY: 'Saiu para entrega',
+  DELIVERED: 'Entregue',
+  PICKED_UP: 'Retirado',
+};
+
+export const READY_FOR_PICKUP = 'Pronto para retirar';
+
+export const acceptanceStatusNames: Record<AcceptanceStatus, string> = {
+  AWAITING_PAYMENT: 'Aguardando pagamento',
+  AWAITING_ACCEPTANCE: 'Aguardando aceite',
+  ACCEPTED: 'Aceito',
+  REJECTED: 'Recusado',
+  EXPIRED: 'Expirado',
+  WITHDRAWN: 'Cliente desistiu',
+};
+
+/** Motivo da recusa para quem atende (ADR-0046 item 12). */
+export const rejectionReasonNames: Record<RejectionReasonCode, string> = {
+  ITEM_UNAVAILABLE: 'Item acabou',
+  OUT_OF_DELIVERY_AREA: 'Fora da área de entrega',
+  TOO_BUSY: 'Muitos pedidos agora',
+  CLOSING_SOON: 'Estamos fechando',
+  SUSPECTED_PRANK: 'Pedido suspeito',
+  OTHER: 'Outro motivo',
+  BUSINESS_DAY_CLOSED: 'Expediente fechado',
+};
+
+/** O que o cliente vê na página para cada motivo (06 §6.9, `POST /orders/{id}/reject`). */
+export const rejectionCustomerText: Record<RejectionReasonCode, string | null> = {
+  ITEM_UNAVAILABLE: 'Um item do seu pedido acabou.',
+  OUT_OF_DELIVERY_AREA: 'Não entregamos nesse endereço.',
+  TOO_BUSY: 'Estamos com muitos pedidos agora.',
+  CLOSING_SOON: 'Estamos fechando.',
+  SUSPECTED_PRANK: 'O restaurante não pôde aceitar seu pedido.',
+  OTHER: null,
+  BUSINESS_DAY_CLOSED: 'O restaurante encerrou o atendimento.',
+};
 
 export const productKindNames: Record<ProductKind, string> = {
   MAIN_DISH: 'Pratos',
@@ -60,6 +111,11 @@ export const errorMessages: Record<string, string> = {
   NotFound: 'Não encontrado.',
   NoOpenBusinessDay: 'Nenhum expediente aberto.',
   ValidationFailed: 'Confira os campos destacados.',
+  OrderNotAccepted: 'Este pedido do site ainda não foi aceito.',
+  OrderNotAwaitingAcceptance: 'Este pedido do site não aguarda mais aceite.',
+  WebOrderExpired: 'O prazo acabou, o pedido expirou.',
+  OrderAlreadyDispatched: 'Este pedido já saiu (ou foi retirado). Para incluir itens, crie outro pedido.',
+  ProductionNotCompleted: 'A cozinha ainda não concluiu este pedido. Use "Concluir e marcar" ou espere a conclusão.',
 };
 
 export const GENERIC_ERROR = 'Algo deu errado.';

@@ -80,6 +80,15 @@ export function errorMessage(e: unknown): string {
       const balance = e.extensions.balance;
       return typeof balance === 'string' ? `O valor passa do saldo (${formatBRL(balance)}).` : 'O valor passa do saldo.';
     }
+    case 'OrderNotAwaitingAcceptance': {
+      // Extensão `acceptanceStatus` (06 §6.1): diz o que aconteceu com o pedido do site.
+      const status = e.extensions.acceptanceStatus;
+      if (status === 'ACCEPTED') return 'Este pedido do site já foi aceito.';
+      if (status === 'REJECTED') return 'Este pedido do site já foi recusado.';
+      if (status === 'WITHDRAWN') return 'O cliente desistiu deste pedido.';
+      if (status === 'EXPIRED') return errorMessages.WebOrderExpired!;
+      return errorMessages.OrderNotAwaitingAcceptance!;
+    }
     case 'ProductUnavailable':
       return e.detail ?? 'Um produto não está disponível hoje.';
     case 'TooManyRequests':

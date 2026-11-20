@@ -10,9 +10,11 @@ import {
   Button,
   Card,
   EmptyState,
+  FulfillmentBadge,
   PaymentBadge,
   ProductionBadge,
   Row,
+  SiteBadge,
   SyncStatePill,
   Text,
   space,
@@ -27,6 +29,9 @@ import { formatTime } from '@/lib/dates';
 import { useBlockedBy } from '@/stores/pendingOps';
 import { usePermission, useSession } from '@/stores/session';
 
+import { FulfillmentActions } from './webOrderComponents';
+import { orderNumberLabel } from './webOrders';
+
 export function orderLabel(o: Pick<OrderSummary, 'customerName' | 'tableLabel' | 'tabNumber'>): string {
   if (o.tableLabel) return `Mesa ${o.tableLabel}${o.tabNumber ? ` · Comanda ${o.tabNumber}` : ''}`;
   if (o.tabNumber) return `Comanda ${o.tabNumber}`;
@@ -36,13 +41,14 @@ export function orderLabel(o: Pick<OrderSummary, 'customerName' | 'tableLabel' |
 /**
  * Número, cliente, atendimento, total, selo financeiro, selo de produção e alerta (08 §8.9).
  * Cliente e total em destaque; nº, hora e atendimento numa linha só (docs/10-ux.md D8). O tipo já vem da aba.
+ * Pedido do site leva o selo "Site"; entrega/retirada mostra o selo de atendimento e o próximo passo (ADR-0046).
  */
 export function OrderCard({ order }: { order: OrderSummary }) {
   const timeZone = useSession((s) => s.me?.tenant.timeZone ?? 'America/Sao_Paulo');
   const pending = useBlockedBy(`/orders/${order.id}`);
   const canceled = order.cancellationStatus === 'CANCELED';
   return (
-    <Card onPress={() => router.push(`/orders/${order.id}`)} accessibilityLabel={`Pedido ${order.orderNumber}, ${orderLabel(order)}`} style={canceled ? { opacity: 0.6 } : undefined}>
+    <Card onPress={() => router.push(`/orders/${order.id}`)} accessibilityLabel={`Pedido ${orderNumberLabel(order.orderNumber)}, ${orderLabel(order)}`} style={canceled ? { opacity: 0.6 } : undefined}>
       <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <Row style={{ flex: 1 }}>
           <Text variant="title" numberOfLines={1} style={{ flexShrink: 1 }}>
@@ -53,14 +59,17 @@ export function OrderCard({ order }: { order: OrderSummary }) {
         <Text variant="title">{formatBRL(order.totalAmount)}</Text>
       </Row>
       <Text muted style={{ fontWeight: '500' }}>
-        #{order.orderNumber} · {formatTime(order.createdAt, timeZone)} · {fulfillmentNames[order.fulfillmentType]} · {order.itemCount}{' '}
+        {orderNumberLabel(order.orderNumber)} · {formatTime(order.createdAt, timeZone)} · {fulfillmentNames[order.fulfillmentType]} · {order.itemCount}{' '}
         {order.itemCount === 1 ? 'item' : 'itens'}
       </Text>
       <Row style={{ flexWrap: 'wrap' }}>
+        {order.origin === 'WEB' ? <SiteBadge /> : null}
         <PaymentBadge totalAmount={order.totalAmount} paidAmount={order.paidAmount} isPaid={order.isPaid} canceled={canceled} />
         {!canceled ? <ProductionBadge status={order.productionStatus} /> : null}
+        {!canceled ? <FulfillmentBadge fulfillmentType={order.fulfillmentType} status={order.fulfillmentStatus} isReadyForPickup={order.isReadyForPickup} /> : null}
         {pending ? <SyncStatePill state="unknown" /> : null}
       </Row>
+      <FulfillmentActions order={order} compact />
     </Card>
   );
 }

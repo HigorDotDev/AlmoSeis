@@ -36,6 +36,8 @@ export type Permission =
   | 'orders.edit'
   | 'orders.cancel'
   | 'orders.delivery-fee.edit'
+  | 'orders.accept'
+  | 'orders.fulfillment.update'
   | 'production.view'
   | 'production.update'
   | 'payments.register'
@@ -426,6 +428,16 @@ export type FulfillmentType = 'DELIVERY' | 'PICKUP' | 'DINE_IN';
 export type ProductionStatus = 'OPEN' | 'IN_PROGRESS' | 'COMPLETED';
 export type CancellationStatus = 'ACTIVE' | 'CANCELED';
 export type ItemKind = 'MARMITA' | 'PF' | 'BEVERAGE' | 'ADDON';
+/** `APP`: criado no app; `WEB`: página de pedidos (EP-002, ADR-0046). */
+export type OrderOrigin = 'APP' | 'WEB';
+/** ADR-0046 item 1. `AWAITING_PAYMENT` é reservado à Fase 2. */
+export type AcceptanceStatus = 'AWAITING_PAYMENT' | 'AWAITING_ACCEPTANCE' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED' | 'WITHDRAWN';
+/** ADR-0046 item 2: só em `DELIVERY`/`PICKUP` aceitos. */
+export type FulfillmentStatus = 'PENDING' | 'OUT_FOR_DELIVERY' | 'DELIVERED' | 'PICKED_UP';
+/** ADR-0046 item 12. `BUSINESS_DAY_CLOSED` é só do sistema (finalização do fechamento). */
+export type RejectionReasonCode = 'ITEM_UNAVAILABLE' | 'OUT_OF_DELIVERY_AREA' | 'TOO_BUSY' | 'CLOSING_SOON' | 'SUSPECTED_PRANK' | 'OTHER' | 'BUSINESS_DAY_CLOSED';
+/** Os tempos estimados aceitos por `POST /orders/{id}/accept`. */
+export type EstimatedReadyMinutes = 15 | 30 | 45 | 60;
 
 export interface OrderAddon {
   id: Uuid;
@@ -438,7 +450,8 @@ export interface OrderAddon {
   requiresPreparation: boolean;
   notes: string | null;
   createdAt: Instant;
-  createdBy: Author;
+  /** `null` no que o cliente montou na página (pedido `WEB`). */
+  createdBy: Author | null;
 }
 
 export interface OrderItem {
@@ -456,7 +469,7 @@ export interface OrderItem {
   notes: string | null;
   addons: OrderAddon[];
   createdAt: Instant;
-  createdBy: Author;
+  createdBy: Author | null;
 }
 
 export interface Weighing {
@@ -483,11 +496,12 @@ export interface OrderPaymentSummary {
 export interface Order {
   id: Uuid;
   version: number;
-  orderNumber: number;
+  /** `null` enquanto o pedido do site não é aceito; recusados, expirados e desistências nunca recebem (ADR-0046). */
+  orderNumber: number | null;
   businessDayId: Uuid;
   businessDate: BusinessDate;
   orderType: OrderType;
-  origin: string;
+  origin: OrderOrigin;
   fulfillmentType: FulfillmentType;
   customer: { id: Uuid | null; name: string; phoneNumber: string | null } | null;
   deliveryAddress: Address | null;
@@ -505,21 +519,46 @@ export interface Order {
   productionStatusChangedAt: Instant | null;
   cancellationStatus: CancellationStatus;
   cancellation: { canceledAt: Instant; canceledBy: Author; reason: string } | null;
+  acceptanceStatus: AcceptanceStatus;
+  acceptanceDeadline: Instant | null;
+  acceptedAt: Instant | null;
+  acceptedBy: Author | null;
+  estimatedReadyMinutes: EstimatedReadyMinutes | null;
+  rejection: OrderRejection | null;
+  expiredAt: Instant | null;
+  withdrawnAt: Instant | null;
+  fulfillmentStatus: FulfillmentStatus | null;
+  fulfillmentStatusChangedAt: Instant | null;
+  outForDeliveryAt: Instant | null;
+  deliveredAt: Instant | null;
+  pickedUpAt: Instant | null;
+  /** Derivado no servidor: `PICKUP` + produção `COMPLETED` + atendimento `PENDING`. */
+  isReadyForPickup: boolean;
   items: OrderItem[];
   weighings: Weighing[];
   payments: OrderPaymentSummary[];
   pendingAlertCount: number;
   createdAt: Instant;
-  createdBy: Author;
+  /** `null` em pedido `WEB`. */
+  createdBy: Author | null;
   updatedAt: Instant;
+}
+
+export interface OrderRejection {
+  reasonCode: RejectionReasonCode;
+  message: string | null;
+  rejectedAt: Instant;
+  /** `null` na recusa do sistema ao finalizar o fechamento. */
+  rejectedBy: Author | null;
 }
 
 export interface OrderSummary {
   id: Uuid;
   version: number;
-  orderNumber: number;
+  orderNumber: number | null;
   businessDate: BusinessDate;
   orderType: OrderType;
+  origin: OrderOrigin;
   fulfillmentType: FulfillmentType;
   customerName: string | null;
   tableLabel: string | null;
@@ -530,6 +569,10 @@ export interface OrderSummary {
   isPaid: boolean;
   productionStatus: ProductionStatus | null;
   cancellationStatus: CancellationStatus;
+  acceptanceStatus: AcceptanceStatus;
+  acceptanceDeadline: Instant | null;
+  fulfillmentStatus: FulfillmentStatus | null;
+  isReadyForPickup: boolean;
   itemCount: number;
   pendingAlertCount: number;
   createdAt: Instant;
@@ -542,6 +585,8 @@ export interface OrderFilters {
   isPaid?: boolean;
   cancellationStatus?: CancellationStatus;
   productionStatus?: ProductionStatus;
+  /** Padrão no servidor: `ACCEPTED`. `AWAITING_ACCEPTANCE` é a faixa "Novos do site". */
+  acceptanceStatus?: AcceptanceStatus;
   customerId?: Uuid;
   search?: string;
   limit?: number;
@@ -631,11 +676,15 @@ export interface ProductionOrder {
   version: number;
   orderNumber: number;
   orderType: OrderType;
+  origin: OrderOrigin;
   fulfillmentType: FulfillmentType;
+  fulfillmentStatus: FulfillmentStatus | null;
   label: string | null;
   notes: string | null;
   isPaid: boolean;
   createdAt: Instant;
+  /** O painel ordena pelo aceite (no app, igual a `createdAt`). */
+  acceptedAt: Instant;
   items: ProductionItem[];
   pendingAlertCount: number;
 }
@@ -737,6 +786,10 @@ export interface ClosingSummary {
   totalPending: MoneyString;
   canceled: { count: number; total: MoneyString };
   reversed: { count: number; total: MoneyString };
+  /** Informativo, fora do vendido (ADR-0046 item 13, RF-210.2). */
+  webOrders: { awaitingAcceptanceCount: number; autoRejectedCount: number; notAcceptedCount: number };
+  /** Entregas aceitas e ativas sem "Entregue" (ADR-0046 item 20). Só informa. */
+  unmarkedDeliveryCount: number;
   byOrderType: { orderType: OrderType; count: number; sold: MoneyString; received: MoneyString; pending: MoneyString; reversed: MoneyString }[];
   byPaymentMethod: { paymentMethod: PaymentMethod; count: number; received: MoneyString; reversed: MoneyString }[];
   cash: {

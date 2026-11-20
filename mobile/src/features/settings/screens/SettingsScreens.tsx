@@ -201,6 +201,13 @@ const operationText: Record<string, string> = {
   BusinessDayOpened: 'abriu o expediente',
   DailyClosingFinalized: 'fechou o expediente',
   CashMovementRegistered: 'registrou movimentação de caixa',
+  OrderAccepted: 'aceitou o pedido do site',
+  OrderRejected: 'recusou o pedido do site',
+  OrderFulfillmentChanged: 'mudou o atendimento',
+  WebOrderSubmitted: 'enviou o pedido pelo site',
+  WebOrderWithdrawn: 'desistiu do pedido',
+  WebOrderExpired: 'expirou o pedido do site',
+  WebOrderAutoRejected: 'recusou o pedido do site ao fechar',
 };
 
 export function AuditScreen() {
@@ -222,7 +229,7 @@ export function AuditScreen() {
         return (
           <Card key={l.id}>
             <Text>
-              {l.actor?.displayName ?? (l.origin === 'PLATFORM_ADMIN' ? 'Suporte AlmoSeis' : 'Sistema')} {operationText[l.operationType] ?? l.operationType}
+              {l.actor?.displayName ?? (l.origin === 'PLATFORM_ADMIN' ? 'Suporte AlmoSeis' : l.origin === 'WEB' ? 'Cliente' : 'Sistema')} {operationText[l.operationType] ?? l.operationType}
               {amount ? ` ${formatBRL(amount)}` : ''}
             </Text>
             <Text variant="small" muted>

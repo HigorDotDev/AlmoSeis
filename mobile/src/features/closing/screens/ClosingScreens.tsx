@@ -32,7 +32,7 @@ import { orderTypeNames, paymentMethodNames } from '@/lib/strings';
 import { useIsOnline } from '@/stores/connectivity';
 import { useCanWrite } from '@/stores/session';
 
-import { ClosingSummaryView, differenceText } from '../components';
+import { autoRejectWarning, ClosingSummaryView, differenceText } from '../components';
 import { useAddAdjustment, useAddCashMovement, useCashMovements, useClosing, useClosingHistory, useClosingSummary, useFinalizeClosing, useMonthlyClosing } from '../hooks';
 
 export function CashMovementScreen() {
@@ -142,6 +142,8 @@ export function FinalizeScreen() {
   const diffCents = toCents(counted) - toCents(s.cash.expectedCash);
   const needsJustification = diffCents !== 0;
   const pending = pendingOrders.data?.pages.flatMap((p) => p.items) ?? [];
+  // ADR-0046 item 13: a finalização recusa os pedidos do site ainda aguardando; não bloqueia o fechamento.
+  const webWarning = autoRejectWarning(s.webOrders?.awaitingAcceptanceCount ?? 0);
 
   return (
     <Screen>
@@ -153,6 +155,7 @@ export function FinalizeScreen() {
           {toCents(s.totalPending) > 0 ? (
             <Banner tone="warning" text={`${pending.length || 'Alguns'} ${pending.length === 1 ? 'pedido ficará pendente' : 'pedidos ficarão pendentes'}: ${formatBRL(s.totalPending)}.`} />
           ) : null}
+          {webWarning ? <Banner tone="warning" text={webWarning} /> : null}
           <ClosingSummaryView summary={s} />
           <Button title="Conferido, contar o dinheiro" onPress={() => { setConflictMsg(false); setStep(2); }} />
         </>
@@ -184,6 +187,7 @@ export function FinalizeScreen() {
         visible={confirm}
         title="Fechar expediente?"
         description="Depois de fechado, o expediente não muda. Correções viram ajustes (ADR-0014)."
+        warning={webWarning}
         lines={[
           { label: 'Total vendido', value: formatBRL(s.totalSold) },
           { label: 'Esperado no caixa', value: formatBRL(s.cash.expectedCash) },

@@ -1,48 +1,49 @@
 /**
- * Web (ADR-0053 §7.4): com a aba oculta, o título mostra quantos pedidos novos chegaram desde que ela saiu da
- * frente. Ao voltar, o título volta ao normal.
+ * Web (ADR-0053 §7.4): com a aba oculta, o título mostra quantos pedidos do site aguardam aceite (ADR-0046),
+ * "(2) Novos do site · AlmoSeis". Ao voltar para a frente, o título volta ao normal.
  *
- * Hoje conta `OrderCreated` de outras pessoas (o mesmo aviso que toca o som). Quando os pedidos do site
- * (ADR-0046) chegarem ao app, a contagem passa a ser "pedidos do site aguardando aceite" e o texto
- * "Novos do site"; só este arquivo muda.
+ * A contagem é a da faixa "Novos do site" (`GET /orders?acceptanceStatus=AWAITING_ACCEPTANCE`), mantida em dia por
+ * `OrderAwaitingAcceptance`/`OrderAccepted`/`OrderRejected` e pelo sync: o SignalR continua conectado com a aba
+ * oculta (ADR-0053 §7.1). Aceito em outro computador ou expirado, o número cai sozinho.
  */
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-import { onRealtimeEvent } from '@/features/realtime/realtime';
-import { useSession } from '@/stores/session';
+import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
+import { useAwaitingOrders } from '@/features/orders/hooks';
+import { hasPermission, useSession } from '@/stores/session';
 
 import { BASE_TITLE, formatTabTitle } from './tabTitleFormat';
 
 export function useWaitingOrdersTitle(): void {
-  const ownId = useSession((s) => s.me?.employee.id ?? null);
+  const canView = useSession((s) => hasPermission(s.me, 'orders.view'));
+  const day = useCurrentBusinessDay();
+  const awaiting = useAwaitingOrders(canView && !!day.data);
+  const count = awaiting.data?.length ?? 0;
+  const [hidden, setHidden] = useState(() => document.visibilityState === 'hidden');
+  // Título de quando a aba saiu da frente (a navegação pode mudá-lo); devolvido quando ela volta.
+  const base = useRef<string | null>(null);
 
   useEffect(() => {
-    let count = 0;
-    let base: string | null = null;
-
-    const restore = () => {
-      if (base !== null) document.title = base;
-      base = null;
-      count = 0;
-    };
-
-    const off = onRealtimeEvent((e) => {
-      if (e.eventType !== 'OrderCreated') return;
-      if (e.actorEmployeeId && e.actorEmployeeId === ownId) return;
-      if (document.visibilityState === 'visible') return;
-      if (base === null) base = document.title || BASE_TITLE;
-      count += 1;
-      document.title = formatTabTitle(count, base);
-    });
-
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') restore();
-    };
+    const onVisibility = () => setHidden(document.visibilityState === 'hidden');
     document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      off();
-      document.removeEventListener('visibilitychange', onVisibility);
-      restore();
-    };
-  }, [ownId]);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
+
+  useEffect(() => {
+    if (hidden) {
+      if (base.current === null) base.current = document.title || BASE_TITLE;
+      document.title = formatTabTitle(count, base.current);
+    } else if (base.current !== null) {
+      document.title = base.current;
+      base.current = null;
+    }
+  }, [hidden, count]);
+
+  useEffect(
+    () => () => {
+      if (base.current !== null) document.title = base.current;
+      base.current = null;
+    },
+    [],
+  );
 }
