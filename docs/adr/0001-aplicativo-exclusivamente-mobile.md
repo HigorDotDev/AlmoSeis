@@ -5,6 +5,7 @@
 - **Origem:** EP-001 §16
 - **Relacionados:** ADR-0025 (administração da plataforma sem UI web)
 - **Complementado por:** ADR-0044 e ADR-0051 (Propostos): página web pública para o **consumidor**. Este ADR continua valendo para o restaurante.
+- **Complementado por:** ADR-0053 (Proposto): o mesmo app do restaurante roda também no navegador do desktop (mesma base de código, PWA). Não é um dashboard web separado.
 
 ## Contexto
 

@@ -23,7 +23,7 @@ ADRs com status `Proposto` já orientam a implementação, mas precisam ser revi
 | `docs/09-devops.md` | Ambientes, Docker Compose local, imagem, pipelines GitHub Actions/EAS, Bicep, segredos, alertas, backup e restauração |
 | `docs/10-ux.md` | UX/UI: inventário das telas, diagnóstico de usabilidade, proposta de design system e telas (desenho no Figma) |
 | `docs/11-epico-ep002.md` | Épico EP-002: página de pedidos pela web (página pública por slug, aceite, taxa por distância, push, acompanhamento; Fase 2 pagamento online com split; Fase 3 marketplace) e questões em aberto |
-| `docs/adr/` | Decisões ADR-0001 a ADR-0052 (ADR-0044 a ADR-0052 são do EP-002, todos `Proposto`) |
+| `docs/adr/` | Decisões ADR-0001 a ADR-0053 (ADR-0044 a ADR-0053 são do EP-002, todos `Proposto`) |
 
 ## Decisões que mais pegam de surpresa
 

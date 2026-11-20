@@ -1,11 +1,11 @@
 # ÉPICO EP-002 — Página de pedidos pela web
 
-> **Nota de precedência (2026-11-19):** as decisões deste épico estão nos ADRs 0044–0052 (`docs/adr/README.md`), todos `Proposto`. **Onde houver diferença, o ADR prevalece.** O EP-002 substitui o esboço "Atendimento automatizado" do §15 do EP-001: o chatbot de WhatsApp deu lugar a uma página web que o restaurante envia pelo WhatsApp.
+> **Nota de precedência (2026-11-19):** as decisões deste épico estão nos ADRs 0044–0053 (`docs/adr/README.md`), todos `Proposto`. **Onde houver diferença, o ADR prevalece.** O EP-002 substitui o esboço "Atendimento automatizado" do §15 do EP-001: o chatbot de WhatsApp deu lugar a uma página web que o restaurante envia pelo WhatsApp.
 
 **Produto:** AlmoSeis — página pública de pedidos por restaurante  
 **Versão:** 1.0 — Requisitos iniciais  
 **Status:** Planejamento  
-**Plataformas:** web (consumidor, navegador do celular); Android e iOS (restaurante, app existente)  
+**Plataformas:** web (consumidor, navegador do celular); Android, iOS e navegador do desktop (restaurante, app existente, ADR-0053)  
 **Modelo de negócio:** a página vem com a assinatura; taxa por transação online soma à assinatura (Fase 2)  
 **Arquitetura:** a mesma API e o mesmo domínio de pedidos do EP-001, mais um projeto web Next.js (ADR-0051)
 
@@ -24,6 +24,8 @@ O restaurante envia o link pelo WhatsApp. O cliente final monta o pedido sozinho
 - O cliente **acompanha** o pedido por um link, sem login.
 
 O ADR-0001 continua valendo: o produto para o restaurante continua sendo só o app. A página é para o consumidor.
+
+O mesmo app do restaurante passa a rodar também no **navegador do desktop** (Chrome e Edge no Windows), instalável como PWA, para quem atende pelo computador do balcão (RF-216, ADR-0053). É a mesma base de código de `mobile/`, não um dashboard separado, e não tem relação com o projeto `web/` da página.
 
 ## 1.2. Objetivos de negócio
 
@@ -45,7 +47,7 @@ O ADR-0001 continua valendo: o produto para o restaurante continua sendo só o a
 
 | Fase | Conteúdo | Situação |
 |---|---|---|
-| **Fase 1** | Página pública e perfil (slug), cardápio do dia de marmitas e bebidas, entrega e retirada, taxa por distância, envio "pagar na entrega/retirada", aceite/recusa no app, push com o app fechado, acompanhamento pelo cliente, status "Saiu para entrega"/"Entregue"/"Retirado" | Detalhada neste épico |
+| **Fase 1** | Página pública e perfil (slug), cardápio do dia de marmitas e bebidas, entrega e retirada, taxa por distância, envio "pagar na entrega/retirada", aceite/recusa no app, push com o app fechado, acompanhamento pelo cliente, status "Saiu para entrega"/"Entregue"/"Retirado", app do restaurante no navegador do desktop | Detalhada neste épico |
 | **Fase 2** | Pagamento online na página (Pix e cartão) com split via Asaas, subconta do restaurante, estorno online, fechamento com recebimento online | Detalhada, com questões em aberto |
 | **Fase 3** | Marketplace: homepage que lista restaurantes próximos e todos da plataforma | Só esboço (§3, RF-215) |
 
@@ -190,6 +192,35 @@ Cada tenant tem uma página `dominio/{slug}` com perfil público (ADR-0044).
 
 ---
 
+## RF-216 — App do restaurante no navegador do desktop (Fase 1)
+
+O mesmo app do restaurante (`mobile/`, Expo Router) roda no navegador do computador do balcão (ADR-0053).
+
+- RN-216.1: Uma base de código, exportada também para web e instalável como PWA no Chrome e no Edge (ícone e janela próprios). Não é o projeto `web/` da página (ADR-0051).
+- RN-216.2: As telas, as permissões e as regras são as mesmas do celular. Janelas com largura ≥ 720 px usam o layout de tablet (por exemplo, a cozinha em 3 colunas).
+- RN-216.3: Servido em `app.{dominio}`, com a API em `api.{dominio}`.
+- RN-216.4: Na web, o access token fica só em memória. O refresh token fica num cookie `HttpOnly; Secure; SameSite=Strict` restrito às rotas de `/auth`, emitido só para `X-App-Platform: WEB` e nunca no corpo da resposta. O mobile não muda.
+- RN-216.5: As rotas que aceitam cookie conferem o `Origin` contra a lista do ambiente e exigem o header `X-App-Platform: WEB`. O CORS só tem origens listadas, sem curinga.
+- RN-216.6: O aparelho compartilhado com PIN funciona no navegador, com o `deviceSecret` num cookie `HttpOnly` separado (*a confirmar*, Q-24).
+- RN-216.7: Rascunhos e pendências ficam no IndexedDB do navegador, com a mesma regra do ADR-0010: a pendência é gravada antes do envio. Recarregar a página no meio de um pagamento não duplica nada. Limpar o navegador apaga os rascunhos.
+- RN-216.8: Com a aba aberta, mesmo oculta, o app continua conectado e toca o som de pedido novo e de pedido do site. O som é liberado por um clique em "Ativar som" a cada abertura. O título da aba mostra quantos pedidos do site aguardam aceite.
+- RN-216.9: Na aba Pedidos, a tela fica ligada (Wake Lock).
+- RN-216.10: Sem push com o navegador fechado nesta fase (Web Push depois, Q-26).
+- RN-216.11: `426` na web recarrega a página uma vez. Se o erro persistir, mostra "Estamos atualizando o AlmoSeis", sem link de loja.
+- RN-216.12: Como no celular, o app no navegador não mostra preço nem link de compra da assinatura (ADR-0017).
+- RN-216.13: Todas as ações funcionam com mouse e teclado físico (`Enter` confirma, `Esc` fecha, PIN e gramas pelo teclado). Atalhos de teclado ficam fora.
+
+**Critérios de aceite:**
+
+- no Chrome e no Edge do Windows, entrar, abrir o expediente, criar marmita, receber com troco, aceitar um pedido do site e fechar o expediente funcionam como no celular;
+- o refresh token não aparece no corpo nem no `localStorage`;
+- uma requisição com `Origin` fora da lista é recusada;
+- duas abas abertas não derrubam a sessão ao renovar o token;
+- um F5 durante "Receber" termina no fluxo de resultado desconhecido, sem pagamento em dobro;
+- com a aba oculta, um pedido do site toca o som.
+
+---
+
 ## RF-211 — Pagamento online com split (Fase 2)
 
 - RN-211.1: "Pagar agora" por Pix (QR na página) ou cartão (checkout do provedor). A AlmoSeis nunca recebe dados de cartão (ADR-0050).
@@ -286,6 +317,13 @@ Cada tenant tem uma página `dominio/{slug}` com perfil público (ADR-0044).
 
 - WCAG 2.1 AA, áreas de toque de pelo menos 44 px, funciona com a fonte do sistema grande.
 
+## RNF-207 — App do restaurante no navegador (ADR-0053)
+
+- Navegadores alvo: Chrome e Edge nas duas versões principais mais recentes, no Windows 10 e 11. Firefox e Safari sem garantia, com aviso discreto.
+- Janela mínima de 1024 × 600 px CSS (notebook 1366 × 768 com escala de 125%).
+- CSP restrita e nenhum script de terceiros.
+- Foco visível e ordem do `Tab` coerente em todas as telas.
+
 ---
 
 # 5. Arquitetura
@@ -300,6 +338,8 @@ Cada tenant tem uma página `dominio/{slug}` com perfil público (ADR-0044).
 | Módulo Notifications | Push pela Expo (ADR-0049) |
 | Módulo OnlinePayments (novo, Fase 2) | `IOrderPaymentGateway`, Asaas, webhooks (ADR-0050) |
 | Provedores externos | Google Geocoding/Routes (a confirmar), Cloudflare Turnstile, Expo Push, Asaas (Fase 2) |
+| App do restaurante na web (`mobile/` exportado para web) | Novo alvo de build, PWA em `app.{dominio}` (Azure Static Web Apps, a confirmar), arquivos `.web.ts` para sessão, banco local, som e tela ligada (ADR-0053) |
+| API — autenticação e CORS | Refresh e `deviceSecret` em cookie para `X-App-Platform: WEB`, checagem de `Origin`, política CORS do app do restaurante separada da página pública (ADR-0053) |
 
 ---
 
@@ -317,6 +357,18 @@ Este épico **não** altera agora os documentos abaixo. Cada agente atualiza o s
 | `09-devops.md` | `devops-agent` | Container App `almoseis-web`, workflow `web.yml`, DNS e CDN no Cloudflare, segredos novos, alertas de mapas e de push, credenciais FCM/APNs no EAS |
 | `10-ux.md` | `ux-agent` | Telas da página (perfil, cardápio, carrinho, endereço, confirmação, acompanhamento) e as novas telas do app |
 
+### 6.1 Pelo ADR-0053 (app do restaurante no navegador)
+
+| Documento | Agente | O que muda |
+|---|---|---|
+| `04-modelo-dados.md` | `database-agent` | `SharedDevice.Platform` e a plataforma do refresh token (ou da instalação) com o valor `WEB`; `PushRegistration.Platform` prevê `WEB` só quando entrar o Web Push |
+| `05-ddl.md` | `database-agent` | `CHECK` dos campos de plataforma com `WEB` (`shared_device`, `refresh_token` ou equivalente). Sem tabela nova |
+| `06-contratos-api.md` | `backend-agent` (contrato) | `X-App-Platform: WEB`; `Tokens.refreshToken = null` na web + `Set-Cookie` de exemplo (`__Secure-almoseis-rt`, `Path=/api/v1/auth`); `/auth/refresh` e `/auth/logout` lendo o cookie (refresh no corpo vindo da web → `422`); `POST /devices/shared` sem `deviceSecret` no corpo e com o cookie `__Secure-almoseis-ds`; a rota da lista de funcionários do aparelho compartilhado sob `/auth` para a web; `403` por `Origin` não permitido (`errorCode` novo, por exemplo `OriginNotAllowed`); headers expostos pelo CORS (`ETag`, `Location`, `Retry-After`); `426` na web sem `storeUrl` |
+| `07-backend.md` | `backend-agent` | Políticas CORS (app do restaurante com credenciais × página pública sem credenciais) por configuração; conferência de `Origin` no hub do SignalR; serviço de emissão e leitura de cookies de sessão por plataforma; filtro anti-CSRF nas rotas com cookie; `MinSupportedAppVersion` para `WEB`; o log nunca grava o header `Cookie`; testes de segurança listados no ADR-0053 |
+| `08-mobile.md` | `mobile-agent` | Alvo web no §8.1 (`react-native-web`, `metro.config.js` com `wasm`, `web.output: "single"`, manifesto PWA); `secure.web.ts` (access token em memória, `installationId` em `localStorage`); repositório local `.web.ts` sobre IndexedDB e o persister do TanStack Query; Web Locks + `BroadcastChannel` para refresh e logout entre abas; `fetch` com `credentials: 'include'` só na web; SignalR conectado com a aba oculta; faixa "Ativar som", Wake Lock, título da aba com contador; abas superiores sem `react-native-pager-view`; teclado físico no PIN e no quilo; `426` → recarregar; E2E web (Playwright) |
+| `09-devops.md` | `devops-agent` | Static Web Apps (ou Container App com nginx) para `app.` e `app-homolog.`; DNS no Cloudflare; `staticwebapp.config.json` com CSP, cache e rota de volta para `index.html`; workflow `mobile-web.yml` (homolog automático, produção por aprovação, depois da API); `Cors:RestaurantAppOrigins` por ambiente; `MinSupportedAppVersion:WEB` |
+| `10-ux.md` | `ux-agent` | Layout de tablet nas larguras de desktop, estados de foco e *hover*, faixa "Ativar som", aviso de navegador não testado, tela "Estamos atualizando o AlmoSeis" |
+
 ---
 
 # 7. Fora do escopo
@@ -331,8 +383,11 @@ Este épico **não** altera agora os documentos abaixo. Cada agente atualiza o s
 - Gestão de entregadores, roteirização e rastreio do entregador no mapa.
 - Avaliações e comentários.
 - Chave Pix do restaurante na página para pagamento manual antecipado (avaliar depois do piloto).
-- Dashboard web para restaurantes (ADR-0001).
+- Dashboard web separado para restaurantes (ADR-0001). O que entra é o próprio app no navegador (RF-216, ADR-0053).
 - Impressão automática de comanda.
+- App Windows nativo (Tauri/Electron), impressora de comanda e balança ligadas ao computador (ADR-0053).
+- Web Push com o navegador fechado (Q-26) e atalhos de teclado.
+- Uso offline do app web ao recarregar a página (*service worker* com cache, Q-27).
 
 ---
 
@@ -362,6 +417,13 @@ Este épico **não** altera agora os documentos abaixo. Cada agente atualiza o s
 | F-220 | Link de acompanhamento para pedidos do app | — | P2 |
 | F-221 | Bloquear telefone após trote | — | P2 |
 | F-222 | Marketplace | 3 | P2 |
+| F-223 | App do restaurante no navegador: build web, PWA, hospedagem em `app.{dominio}`, layout de desktop, mouse e teclado | 1 | P0 |
+| F-224 | Sessão web: refresh em cookie `HttpOnly`, CORS por lista, anti-CSRF, lock entre abas, `426` na web | 1 | P0 |
+| F-225 | Rascunhos e pendências no IndexedDB | 1 | P0 |
+| F-226 | Alertas na aba do navegador: SignalR com a aba oculta, "Ativar som", Wake Lock, contador no título | 1 | P0 |
+| F-227 | Aparelho compartilhado com PIN no navegador (`deviceSecret` em cookie) | 1 | P0 (*a confirmar*, Q-24) |
+| F-228 | Notificação local do navegador para pedido do site com a aba oculta | 1 | P1 |
+| F-229 | Web Push (VAPID) com o navegador fechado | — | P2 |
 
 **P0:** obrigatório para o piloto da página. **P1:** logo depois. **P2:** evolução.
 
@@ -405,6 +467,14 @@ Como proprietário, quero definir meu link, o preço por km e a taxa mínima e p
 
 Como proprietário, quero compartilhar o link no WhatsApp e imprimir um QR code para o balcão.
 
+### US-212 — Atender pelo computador do balcão
+
+Como atendente, quero usar o AlmoSeis no navegador do computador do balcão, com tela grande, mouse e teclado, para lançar pedidos e aceitar os do site sem largar o WhatsApp Web.
+
+### US-213 — Trocar de funcionário no computador do balcão
+
+Como funcionário, quero entrar com o meu PIN no computador do balcão para que o que eu faço fique no meu nome, sem usar a conta de outra pessoa.
+
 ### US-210 — Receber online (Fase 2)
 
 Como proprietário, quero receber Pix e cartão pela página, com o dinheiro caindo na minha conta, para que o pedido pago vá direto para a cozinha.
@@ -427,6 +497,7 @@ Como caixa, quero ver o recebido online separado do dinheiro para que a conferê
 8. Reenvio do mesmo pedido não cria duplicado.
 9. Nenhum dado pessoal do cliente aparece em log, auditoria, evento ou push.
 10. A página carrega dentro das metas do RNF-201 num Android de entrada.
+11. O app do restaurante funciona no Chrome e no Edge do Windows com as mesmas telas e permissões do celular, sem refresh token acessível ao JavaScript (RF-216).
 
 ---
 
@@ -461,6 +532,11 @@ Como caixa, quero ver o recebido online separado do dinheiro para que a conferê
 | R-209 | Enquadramento regulatório se a AlmoSeis receber o valor cheio | Cobrança emitida pela subconta do restaurante (ADR-0050) |
 | R-210 | Telefone de outra pessoa digitado no pedido | Vínculo com `Customer` sem alterar dados, aviso "telefone não verificado" (ADR-0044) |
 | R-211 | Lojas de apps questionarem a comissão exibida no app | Venda de bem físico; confirmar com as diretrizes, como no ADR-0017 |
+| R-212 | Aba do navegador suspensa (guias suspensas do Edge, Economia de memória do Chrome) ou navegador fechado: pedido do site expira sem ninguém ver | SignalR com a aba oculta, contador no título, notificação local (P1), onboarding com a exceção de suspensão, expiração visível; Web Push depois (ADR-0053) |
+| R-213 | Navegador limpo apaga rascunhos e pendências de resultado desconhecido | `navigator.storage.persist()`, PWA instalado, pendência conferível pelo histórico do pedido (ADR-0053) |
+| R-214 | Dados de clientes (fiado) no cache do navegador de um computador usado para outras coisas, inclusive por extensões | Sair apaga os dados do tenant; perfil de navegador só para o AlmoSeis, sem extensões; CSP restrita (ADR-0053) |
+| R-215 | Proprietário entra com a própria conta no computador do balcão e não sai (sessão de 30 dias com permissões de dono) | Modo compartilhado com PIN no balcão, orientado no onboarding (Q-25) |
+| R-216 | Bibliotecas do Expo sem suporte web completo (abas, tela ligada, áudio) | Arquivos `.web.ts` atrás da mesma interface; confirmar no spike antes de detalhar o `08` |
 
 ---
 
@@ -477,6 +553,7 @@ Como caixa, quero ver o recebido online separado do dinheiro para que a conferê
 | [0050](adr/0050-pagamento-online-split-asaas.md) | Pagamento online com split (Asaas, `IOrderPaymentGateway`) |
 | [0051](adr/0051-projeto-web-nextjs-hospedagem.md) | Projeto web Next.js e hospedagem |
 | [0052](adr/0052-lgpd-cliente-da-pagina.md) | LGPD do cliente da página |
+| [0053](adr/0053-app-restaurante-navegador-desktop.md) | App do restaurante também no navegador do desktop (mesma base, PWA, sessão em cookie, CORS, IndexedDB) |
 
 ---
 
@@ -507,3 +584,11 @@ Precisam de decisão do usuário antes do código que depende delas ir para prod
 | Q-19 | N | **Validade do Pix** na página | 15 min | 0050 |
 | Q-20 | T | **Comissão exibida no app** e as diretrizes das lojas | Exibir como informação contratual; confirmar | 0050 |
 | Q-21 | T | **Chargeback com split** no Asaas | Confirmar antes de liberar cartão | 0050 |
+| Q-22 | T | **Hospedagem do app web do restaurante**: Azure Static Web Apps (Free ou Standard) ou Container App com nginx | Static Web Apps. Free em homologação; em produção, Free no piloto (sem SLA) e Standard se precisar de SLA | 0053 |
+| Q-23 | T | **Endereço do app web**: `app.{dominio}` e `app-homolog.{dominio}` (depende da Q-07) | `app.almoseis.app` e `app-homolog.almoseis.app`, seguindo o `api-homolog.` do `09-devops.md` | 0053 |
+| Q-24 | N | **Aparelho compartilhado com PIN no navegador** já no MVP web? | Sim. O computador do balcão é o caso típico de aparelho compartilhado; sem PIN, a equipe usa uma conta só | 0027, 0053 |
+| Q-25 | N | **Sessão pessoal no navegador**: refresh de 30 dias como no celular, ou mais curto (por exemplo, 12 h) fora do modo compartilhado? | 30 dias, como no celular, com o onboarding orientando o modo compartilhado no balcão | 0027, 0053 |
+| Q-26 | T | **Web Push (VAPID)** com o navegador fechado: quando? | Depois do piloto web (P2), só se houver pedidos do site expirando no desktop. Encaixa no ADR-0049 com `platform = WEB` | 0049, 0053 |
+| Q-27 | T | **Abrir o app web sem internet** (*service worker* com cache do app) | Não no MVP. Com a aba aberta, vale o ADR-0010 | 0010, 0053 |
+| Q-28 | N | **Firefox e Safari**: bloquear ou só avisar? | Só avisar ("Navegador não testado") | 0053 |
+| Q-29 | T | **Bibliotecas na web**: fallback do `react-native-tab-view` sem `react-native-pager-view`, `expo-keep-awake` e `expo-audio` na web | Confirmar no spike; se faltar, `.web.ts` próprio | 0053 |

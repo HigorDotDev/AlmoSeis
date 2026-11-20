@@ -98,8 +98,9 @@ Complementos: ADR-0027 (`deviceSecret` do aparelho compartilhado) e ADR-0028 (pe
 | [0050](0050-pagamento-online-split-asaas.md) | Fase 2: cobrança emitida pela subconta do restaurante com split da comissão, `IOrderPaymentGateway`, `apiKey` no Key Vault, online fora do caixa físico | Proposto |
 | [0051](0051-projeto-web-nextjs-hospedagem.md) | Next.js em `web/`, `packages/shared`, Container App `almoseis-web` com Cloudflare na frente | Proposto |
 | [0052](0052-lgpd-cliente-da-pagina.md) | Aviso de privacidade na página, anonimização dos pedidos não aceitos em 7 dias, dados só no navegador (complementa 0024) | Proposto |
+| [0053](0053-app-restaurante-navegador-desktop.md) | App do restaurante também no navegador do desktop: mesma base `mobile/` exportada para web (PWA) em `app.{dominio}`; refresh e `deviceSecret` em cookie `HttpOnly` só para `X-App-Platform: WEB`, CORS por lista, rascunhos em IndexedDB, 426 recarrega a página, Web Push depois (complementa 0001, 0010, 0027, 0035, 0036) | Proposto |
 
-Afetados (linha de referência no próprio ADR): 0001, 0016, 0021, 0026, 0036. Também complementados, sem linha própria: 0006, 0013, 0022, 0023/0039, 0024, 0028, 0033, 0041.
+Afetados (linha de referência no próprio ADR): 0001, 0016, 0021, 0026, 0036. Também complementados, sem linha própria: 0006, 0013, 0022, 0023/0039, 0024, 0028, 0033, 0041; e, pelo 0053, 0010, 0017, 0027, 0035 e 0049.
 
 ## Impacto no modelo do épico (§6)
 
