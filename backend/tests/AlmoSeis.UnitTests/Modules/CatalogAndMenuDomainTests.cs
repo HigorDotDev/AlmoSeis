@@ -142,7 +142,8 @@ public sealed class CatalogAndMenuDomainTests
             default,
             default,
             default,
-            isAvailable is { } a ? new Optional<bool>(a) : default);
+            isAvailable is { } a ? new Optional<bool>(a) : default,
+            default);
 
     private static IReadOnlyDictionary<string, string[]> Errors(BusinessException ex) =>
         (IReadOnlyDictionary<string, string[]>)ex.Extensions["errors"]!;

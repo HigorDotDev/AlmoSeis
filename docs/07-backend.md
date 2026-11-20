@@ -19,6 +19,7 @@ backend/
     AlmoSeis.Modules.Ordering/
     AlmoSeis.Modules.Payments/
     AlmoSeis.Modules.Closing/
+    AlmoSeis.Modules.Storefront/   # página de pedidos: perfil público, slug, estado, cardápio da página (EP-002)
     AlmoSeis.Modules.Audit/
     AlmoSeis.Modules.Sync/
     AlmoSeis.Api/
@@ -44,7 +45,7 @@ Api ──► Modules.* ──► Infrastructure ──► SharedKernel
 | `Modules.X` | `Domain/`, `Application/`, `Infrastructure/`, `Contracts/`, `XModule.cs` | `SharedKernel`, `Infrastructure`, outros `Modules.*` (**só** o namespace `Contracts`) |
 | `Api` | Host, controllers, hub, middlewares, filtros, composição | todos |
 
-**Ordem entre módulos** (referências de projeto não podem formar ciclo): `Identity`, `Catalog` ← `Menu` ← `Closing` ← `Ordering` ← `Payments`. O `Closing` fica **abaixo** do `Ordering` porque todos dependem do expediente (`IBusinessDayReader`); por isso o fechamento lê pedidos e pagamentos com SQL (`ClosingInputsQuery`), sem referenciar esses módulos.
+**Ordem entre módulos** (referências de projeto não podem formar ciclo): `Identity`, `Catalog` ← `Menu` ← `Closing` ← `Storefront` ← `Ordering` ← `Payments`. O `Closing` fica **abaixo** do `Ordering` porque todos dependem do expediente (`IBusinessDayReader`); por isso o fechamento lê pedidos e pagamentos com SQL (`ClosingInputsQuery`), sem referenciar esses módulos. O `Storefront` (EP-002) lê catálogo, cardápio, expediente e assinatura, e o `Ordering` o usa para o envio e o acompanhamento pela página (`IStorefrontGate`). O autocadastro (Identity, abaixo de todos) prepara a página pela porta `ITenantCreatedListener`, declarada no Identity e implementada pelo Storefront.
 
 **Visibilidade:** em cada módulo, tudo é `internal`, exceto `Contracts/*` e a classe `XModule` (registro). Assim um módulo **não consegue** usar o domínio de outro, mesmo referenciando o projeto. `InternalsVisibleTo` só para `AlmoSeis.UnitTests` e `AlmoSeis.IntegrationTests`.
 
@@ -152,11 +153,14 @@ public interface IDomainEvent  { DateTimeOffset OccurredAt { get; } }
 
 | Classe | Responsabilidade |
 |---|---|
-| `ITenantContext` / `TenantContext` (scoped, imutável após `Initialize`) | `TenantId`, `UserId`, `EmployeeId`, `SharedDeviceId`, `BypassFilter`. Preenchido pelo `TenantContextMiddleware` a partir das claims. Vazio em rotas públicas. `InitializeForSystem(tenantId)`: só o tenant, sem usuário nem funcionário, para jobs que gravam no tenant (expiração do pedido do site) e o canal web (ADR-0046); a auditoria sai sem ator |
+| `ITenantContext` / `TenantContext` (scoped, imutável após `Initialize`) | `TenantId`, `UserId`, `EmployeeId`, `SharedDeviceId`, `BypassFilter` e `Source` (`JWT`, `PUBLIC_SLUG`, `TRACKING_TOKEN`, `GATEWAY_WEBHOOK`, `SYSTEM`; ADR-0045 item 3). Preenchido a partir das claims nas rotas autenticadas. `InitializeForSystem(tenantId)`: só o tenant, sem usuário nem funcionário, para jobs que gravam no tenant (expiração e retenção do pedido do site). `InitializeForPublic(tenantId, source)`: rotas `/public/*`, tenant resolvido pelo slug ou pelo token (`IsAnonymous`); auditoria sem ator e idempotência sem usuário |
 | `IAuditWriter` / `AuditWriter` | `Add(operationType, entityType, entityId, orderId?, before?, after?)` adiciona `AuditLog` ao contexto (mesma transação). Preenche origem, ator, dispositivo e `correlationId` = `Activity.Current.TraceId`. `before`/`after` são **objetos anônimos escolhidos pelo handler**, nunca a entidade inteira (ADR-0024, ADR-0031) |
 | `ChangeFeedWriter` | Etapa 3b |
 | `OutboxWriter` + `IIntegrationEventMapper<TEvent>` | Etapa 3c. Os mappers ficam nos módulos e produzem o envelope de 06 §6.14 |
-| `IdempotencyStore` | `TryBeginAsync(key, userId, endpoint, requestHash)` → `Started` \| `Replay(stored)` \| `KeyReused`. `CompleteAsync(status, body, resourceId)`. Usa a mesma transação (§7.4) |
+| `IdempotencyStore` | `TryBeginAsync(key, userId, endpoint, requestHash)` → `Started` \| `Replay(stored)` \| `KeyReused`. `CompleteAsync(status, body, resourceId)`. Usa a mesma transação (§7.4). Nas rotas públicas (`ITenantContext.IsAnonymous`), `user_id` nulo e escopo `(tenant, key)` (ADR-0045 item 10) |
+| `ITurnstileVerifier` / `TurnstileVerifier` (`Security/PublicPageProtection.cs`) | `siteverify` do Cloudflare (cliente HTTP tipado, 3 s): `Passed` (ou `Turnstile:Enabled = false`), `Failed` (sem token, inválido, repetido) ou `Unavailable` (erro, tempo esgotado, `internal-error`). O token nunca vai para log |
+| `IClientIpHasher` | IP → HMAC-SHA-256 com sal **diário** derivado de `PublicPage:IpHashSecret` (vazio → segredo aleatório por processo). O IP em claro nunca é gravado (ADR-0045 item 14) |
+| `TrackingTokens` | `New()`: 16 bytes aleatórios em base64url (22 caracteres); `LooksValid(token)` evita consultar o banco com lixo. O hash é o `ISecretHasher` (SHA-256) |
 | `IObjectStorage` / `R2ObjectStorage` | `CreateUploadUrl(key, contentType)` (URL pré-assinada PUT de 15 min, assinada localmente), `GetAsync(key)` (HEAD do objeto: tamanho e tipo), `PublicUrl(key)`, `IsConfigured`. `AWSSDK.S3` apontado para `https://{AccountId}.r2.cloudflarestorage.com`, com a mesma configuração validada contra o R2 no UrbanCarePlatform: `ForcePathStyle` e checksum `WHEN_REQUIRED` |
 | `IEmailSender` / `AcsEmailSender` | ADR-0040 |
 | `IJwtTokenIssuer` / `JwtTokenIssuer` | Access token RS256 de 15 min. Chave privada no Key Vault (local: `user-secrets`). Claims: `sub`, `tenant_id`, `employee_id`, `device_id`, `security_stamp`, `jti` (ADR-0027) |
@@ -174,11 +178,14 @@ Ordem em `Program.cs`:
 UseForwardedHeaders            // X-Forwarded-For/Proto só de ForwardedHeaders:KnownNetworks/KnownProxies, ForwardLimit = 1 (ADR-0041)
 UseExceptionHandler            // ProblemDetailsExceptionHandler
 UseHsts / UseHttpsRedirection  // só fora de Development
-UseCors("RestaurantApp")       // Cors:RestaurantAppOrigins com credenciais (ADR-0053 §4); o preflight responde aqui
+UseCors("PublicPage")          // só /api/v1/public: Cors:PublicPageOrigins, sem credenciais (ADR-0053 §4.6, ADR-0045)
+UseCors("RestaurantApp")       // fora de /api/v1/public: Cors:RestaurantAppOrigins com credenciais (ADR-0053 §4). As duas por UseWhen
 HubOriginMiddleware            // /hubs: Origin presente, fora da lista e diferente do host da API → 403 OriginNotAllowed
 AppVersionMiddleware           // X-App-Version < MinSupportedAppVersion → 426 (ADR-0035); ignora /health, /webhooks
-UseRateLimiter                 // políticas auth, pin, invitation, webhook (ADR-0041)
-UseAuthentication              // JwtBearer + OnTokenValidated → EmployeeAccessValidator
+UseRateLimiter                 // políticas auth, pin, invitation, webhook (ADR-0041) e public-read/quote/order/tracking (ADR-0045)
+TrackingHeadersMiddleware      // /public/tracking: no-store, no-referrer, noindex em toda resposta (OnStarting, inclusive erros)
+PublicTenantMiddleware         // /public/stores/{slug} e /public/tracking/{token} → ITenantContext.InitializeForPublic (ADR-0045)
+UseAuthentication              // JwtBearer + OnTokenValidated → EmployeeAccessValidator; /api/v1/public → NoResult (Authorization ignorado)
 TenantContextMiddleware        // claims → ITenantContext; `activity.SetTag("tenant.id", ...)`
 UseAuthorization               // PermissionPolicyProvider
 MapControllers                 // filtros globais abaixo
@@ -190,8 +197,8 @@ MapHealthChecks("/health/live" | "/health/ready")
 
 | Filtro | Escopo | Faz |
 |---|---|---|
-| `SubscriptionWriteGuardFilter` | global, métodos ≠ GET | `ISubscriptionStatusCache.CanWrite(tenant)` (cache de 60 s, invalidado por webhook ou admin) → `402 SubscriptionInactive`. Ignora `/auth/*`, `/admin/*`, `/webhooks/*` |
-| `[Idempotent]` → `IdempotencyFilter` | ações marcadas (lista do ADR-0033) | Sem header → `428 IdempotencyKeyRequired`. Abre a transação, `TryBeginAsync` (o INSERT do registro segura o índice único; um duplicado concorrente **espera**, e com `lock_timeout` de 5 s responde `409 OperationInProgress`). `Replay` → devolve o corpo guardado + `Idempotent-Replayed: true`. `KeyReused` → `422`. Depois da ação **2xx**: `CompleteAsync` + COMMIT. Erro → ROLLBACK (nada é guardado, então o reenvio executa de novo) |
+| `SubscriptionWriteGuardFilter` | global, métodos ≠ GET | `ISubscriptionStatusCache.CanWrite(tenant)` (cache de 60 s, invalidado por webhook ou admin) → `402 SubscriptionInactive`. Ignora `/auth/*`, `/admin/*`, `/webhooks/*` e `/public/*` (a página responde `409 StoreUnavailable` sem o motivo, no handler) |
+| `[Idempotent]` → `IdempotencyFilter` | ações marcadas (lista do ADR-0033) | Sem header → `428 IdempotencyKeyRequired`. Abre a transação, `TryBeginAsync` (o INSERT do registro segura o índice único; um duplicado concorrente **espera**, e com `lock_timeout` de 5 s responde `409 OperationInProgress`). `Replay` → devolve o corpo guardado + `Idempotent-Replayed: true`. `KeyReused` → `422`. Depois da ação **2xx**: `CompleteAsync` + COMMIT. Erro → ROLLBACK (nada é guardado, então o reenvio executa de novo). `[Idempotent(Public = true)]` (envio pela página): o `endpoint` gravado é o modelo da rota (`POST /api/v1/public/stores/{slug}/orders`), para o reenvio depois de um `308` de slug continuar sendo a mesma operação |
 | `[RequiresIfMatch]` → `IfMatchFilter` | ações marcadas [M] em 06 | Sem `If-Match` → `428 IfMatchRequired`. Parse de `"N"` → `IConcurrencyContext.ExpectedVersion` |
 | `ETagResultFilter` | global | Resposta com `IVersionedDto` → header `ETag: "{version}"` |
 | `ValidationFilter` | global | Executa o `IValidator<TRequest>` do corpo → `422 ValidationFailed` com `errors` |
@@ -217,6 +224,9 @@ MapHealthChecks("/health/live" | "/health/ready")
 | `IPermissionChecker` (scoped) | `bool Has(string permission)` sobre o mesmo cache. Usado em handlers quando a permissão depende do **valor** enviado (ex.: `orders.delivery-fee.edit` só se a taxa difere da padrão) |
 | `DeviceSecretAuthenticationHandler` (esquema `DeviceSecret`) | Só para `GET /devices/shared/{installationId}/employees`, `GET /auth/shared-device/employees` (web) e `POST /auth/pin-login`: valida `X-Device-Secret` (na web, só o cookie; o header é ignorado) + `X-Tenant-Id`. Implementado sem esquema próprio (§7.13, "Login por PIN") |
 | `WebSession` (estático) | Transporte da sessão na web (ADR-0053): `IsWeb(request)` (`X-App-Platform: WEB`); `RefreshToken(request, corpo, required)` (web: cookie, e refresh no corpo → `422`; mobile: corpo); `DeviceSecret(request, header)` (mobile: header; web: só o cookie, header ignorado); `EnsureAllowedOrigin(request)` (com `WEB`, `Origin` fora da lista → `403 OriginNotAllowed`); `ReadCookie` (privado, o **único** ponto da API que lê cookie da requisição, e confere o `Origin` antes); emissão e remoção dos cookies (`HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`, sem `Domain`). Fora da web, cookies são ignorados |
+| `PublicPageCorsOptions` / `AddPublicPageCors` (`PublicPage.cs`) | `Cors:PublicPageOrigins`, mesma validação de formato. Política `PublicPage`: sem credenciais, `GET`/`POST`, headers `Content-Type`, `Idempotency-Key`, `X-Turnstile-Token`, `If-None-Match`; expostos `ETag`, `Location`, `Retry-After`, `Idempotent-Replayed`; `Max-Age` 600 |
+| `PublicTenantMiddleware` (`PublicPage.cs`) | Slug → `IStoreSlugResolver` (inexistente → `404 StoreNotFound`; antigo ou com maiúsculas → `301` em GET, `308` nos demais, para o atual). Token → `ITrackingTokenResolver` (inexistente → `404 NotFound`; vencido → `410 TrackingExpired`). Depois, `InitializeForPublic`: a conexão seguinte já abre com `app.tenant_id` do tenant resolvido |
+| `PublicRoutes.IsRenderer` | `X-Web-Renderer-Key` = `PublicPage:RendererKey` (comparação em tempo constante): leitura do servidor da página fora do limite por IP (ADR-0051) |
 | `RestaurantAppCorsOptions` / `AddRestaurantAppCors` | Seção `Cors` (`RestaurantAppOrigins`), validada no início (`RestaurantAppCors.IsValidOrigin`: origem completa `https://`, ou `http://` só em `localhost`/`127.0.0.1`; sem `*`, caminho, query nem credenciais). Política `RestaurantApp`: essas origens, `AllowCredentials`, métodos `GET/POST/PUT/PATCH/DELETE`, headers de 06 §6.3 "App no navegador" (`Authorization`, `Content-Type`, `Idempotency-Key`, `If-Match`, `X-App-Version`, `X-App-Platform`, `X-Tenant-Id`), expostos `ETag`, `Location`, `Retry-After`, `Idempotent-Replayed`, `Max-Age` 600. Lista vazia → nenhuma origem |
 | `PlatformAdminRequirement` / `[PlatformAdmin]` | Política `PlatformAdmin` (ADR-0043): só tokens de `POST /auth/admin/login`. O `EmployeeAccessValidator` reconhece o token sem `tenant_id` com `platform_admin`, aceita-o **só** em `/api/v1/admin` e confere, a cada requisição, `is_platform_admin` e o `security_stamp` do usuário (`IPlatformAdminCheck`). Token de estabelecimento em `/admin/*` → `403`; token de admin fora de `/admin` → `401` |
 
@@ -228,7 +238,9 @@ MapHealthChecks("/health/live" | "/health/ready")
 - `UtcDateTimeOffsetConverter` (sempre `Z`);
 - `DateOnly` ISO.
 
-**Controllers:** finos e sem regra. A origem do refresh e do segredo do aparelho (corpo/header × cookie) é transporte e fica no `WebSession`, chamado pelo `AuthController`. Recebem DTO, montam o comando e chamam `ICommandHandler<,>`/`IQueryHandler<,>` dos `Contracts`. Um controller por recurso de 06: `AuthController`, `DevicesController`, `TenantController`, `SubscriptionController`, `EmployeesController`, `InvitationsController`, `RolesController`, `ProductsController`, `MarmitaSizesController`, `BusinessDaysController`, `MenusController`, `CustomersController`, `OrdersController`, `OrderItemsController`, `OrderAlertsController`, `ProductionController`, `PaymentsController`, `ClosingController`, `SyncController`, `OperationsController`, `AuditLogsController`, `AdminTenantsController`, `AsaasWebhookController`.
+**Controllers públicos** (`AlmoSeis.Api.Controllers.Public`): `PublicStoresController` (`/public/stores/{slug}`, `/orders`, `/delivery-quotes`) e `PublicTrackingController` (`/public/tracking/{token}`, `/withdraw`). `[AllowAnonymous]`, só chamam handlers `IPublicHandler` (regra 9) e só usam DTOs públicos dos `Contracts`. O `304` do acompanhamento (comparação do `If-None-Match` com `"{version}"`) é transporte e fica no controller. O IP de quem conecta (já corrigido pelo `ForwardedHeaders`) vai no comando só para o Turnstile e para o hash.
+
+**Controllers:** finos e sem regra. A origem do refresh e do segredo do aparelho (corpo/header × cookie) é transporte e fica no `WebSession`, chamado pelo `AuthController`. Recebem DTO, montam o comando e chamam `ICommandHandler<,>`/`IQueryHandler<,>` dos `Contracts`. Um controller por recurso de 06: `AuthController`, `DevicesController`, `TenantController`, `SubscriptionController`, `EmployeesController`, `InvitationsController`, `RolesController`, `ProductsController`, `MarmitaSizesController`, `BusinessDaysController`, `MenusController`, `CustomersController`, `OrdersController`, `OrderItemsController`, `OrderAlertsController`, `ProductionController`, `PaymentsController`, `ClosingController`, `SyncController`, `OperationsController`, `AuditLogsController`, `AdminTenantsController`, `AsaasWebhookController`, `StorefrontController` (`/storefront`).
 
 ---
 
@@ -353,6 +365,21 @@ Contracts: `IMenuReader.GetDailyAsync(menuType, date)` → itens disponíveis co
 
 ---
 
+### Storefront (EP-002 fatia 2; ADR-0044, ADR-0045, ADR-0048)
+
+| Classe | Responsabilidade |
+|---|---|
+| `StorefrontSettings` (agregado [V], chave = tenant) | Perfil, chave da página, pausas, modos, endereço, campos da taxa por distância (fatia 4). `CreateDefault` (inativa). `Update(changes, slugChanged, hasActiveMarmitaSize, now)`: ativar exige endereço completo e um tamanho ativo; mudar o endereço apaga a localização; versão sobe também quando só o slug mudou. `DeliveryAvailableOnPage` é sempre falso até a fatia 4 (`DistanceQuotesAvailable`). Não é [S]: o `entityType` do `409` é `STOREFRONTSETTINGS` |
+| `StoreSlug` | Linha de `store_slugs` (só leitura no EF; escrita por SQL) |
+| `SlugRules` | `Slugify`, `Problem(slug)` (formato, só números, reservados, palavras ofensivas por trecho), `Candidates(name, city)` (nome → nome-cidade → -2, -3…). Lista de reservados igual à da migration 0004, coberta por teste |
+| `SlugWriter` | `ReserveFirstFreeAsync` (`INSERT … ON CONFLICT (slug) DO NOTHING`, próximo candidato) e `ChangeAsync` (outro tenant → `422`; antigo do próprio → reativa; máximo de 5 antigos; o atual sai antes de o novo entrar, por causa de `ux_store_slugs_current`) |
+| `StorefrontProvisioner` : `ITenantCreatedListener` | Autocadastro: settings inativa + slug, na mesma transação |
+| `StorefrontStatusCalculator` | `UNAVAILABLE` (inativa ou `ISubscriptionAccess.CanWrite = false`) → `CLOSED` (`IOpenBusinessDate` nulo) → `PAUSED` → `OPEN` |
+| `PublicMenuBuilder` | `DAILY` de `MARMITA` da data (`IMenuReader`) + `ICatalogReader.ListActiveMarmitaSizesAsync` + `ListActiveAsync([ADDON, BEVERAGE])` com `IsVisibleOnPage` |
+| `StoreSlugResolver` : `IStoreSlugResolver` | SQL direto em `store_slugs` (leitura aberta, sem o filtro de tenant), antes de o tenant existir |
+| `StorefrontGate` : `IStorefrontGate` | Para o Ordering: estado, slug, nome, contato, endereço, modos e data do expediente; cardápio da página |
+| Handlers | `GetStorefrontQuery`, `UpdateStorefrontHandler` [M] (`StorefrontUpdated` sem telefone nem endereço), `GetPublicStoreQueryHandler` e `DeliveryQuoteHandler` (`IPublicHandler`; a cotação responde `DeliveryUnavailable` até a fatia 4) |
+
 ## 7.8 Módulo Ordering (núcleo)
 
 ### `Order` (agregado [V][S])
@@ -425,7 +452,10 @@ RecordChange(kind, details, affectsProduction) → OrderChangeEvent + Touch(Orde
 | `RejectOrderHandler` [M] | `POST /orders/{id}/reject` | `WebOrderRules.LoadForDecisionAsync` → `Order.Reject` → auditoria `OrderRejected` |
 | `ChangeFulfillmentHandler` [M] | `PATCH /orders/{id}/fulfillment` | `completeProduction` → `IPermissionChecker` (`production.update`) + `ChangeProductionStatus(COMPLETED)`; depois `ChangeFulfillment`. Auditoria `ProductionStatusChanged` e `OrderFulfillmentChanged` |
 | `ExpireWebOrderHandler` (comando interno) | — (job) | Um pedido por transação, no contexto do tenant (`Origin = SYSTEM`) |
-| `WithdrawWebOrderHandler`, `SubmitWebOrderHandler` (comandos internos) | — (fatias 2/3 do EP-002) | Desistência (`WEB`) e envio pela página (`WEB`, prazo de `WebOrderOptions.AcceptanceMinutes`). Hoje só os testes os chamam |
+| `WithdrawWebOrderHandler`, `SubmitWebOrderHandler` (comandos internos) | — | Os mesmos casos de uso das rotas públicas (`WebOrderWithdrawal`, `WebOrderSubmitter`), usados pelos testes |
+| `PlaceWebOrderHandler` [I] (`IPublicHandler`) | `POST /public/stores/{slug}/orders` | Campo-isca → `IStorefrontGate` (`StoreUnavailable`) → `ITurnstileVerifier` → modalidade (`DeliveryUnavailable`) → forma habilitada → `BrazilianPhone.Normalize` → `pg_advisory_xact_lock` por telefone e por hash do IP + contagem dos aguardando (`TooManyPendingOrders`) → `WebOrderCart.Price` contra o cardápio público (`CartChanged`) → `WebOrderSubmitter` → `OrderTrackingToken` (hash) + `WebOrderIntake` (hash do IP) |
+| `GetWebOrderTrackingQueryHandler`, `WithdrawWebOrderByTrackingHandler` (`IPublicHandler`) | `/public/tracking/{token}`, `/withdraw` | `TrackedOrderLoader` (hash → pedido, no tenant; `404`/`410`) → `WebOrderTracking.BuildAsync` (status do ADR-0047 item 7, linha do tempo, primeiro nome, só rua e número, `changedByStore` = existe `OrderChangeEvent`) |
+| `AnonymizeWebOrderHandler` (comando interno) | — (job) | `Order.AnonymizeNotAccepted` + auditoria `WebOrderAnonymized` (`SYSTEM`) |
 | `GetOrderQuery`, `ListOrdersQuery`, `GetOrderHistoryQuery`, `GetOrderAlertsQuery`, `GetProductionBoardQuery` | `GET`s | projeções. `pendingAlertCount` é calculado por subconsulta (04 §4.7) |
 | Clientes: `CreateCustomer`, `UpdateCustomer`, `Add/Update/RemoveAddress`, `AnonymizeCustomer`, `SearchCustomers`, `GetCustomer`, `GetCustomerPendingOrders` | `/customers/*` | |
 
@@ -437,7 +467,10 @@ RecordChange(kind, details, affectsProduction) → OrderChangeEvent + Touch(Orde
 | `WebOrderRules.LoadForDecisionAsync` | Aceite e recusa: lê o expediente aberto (`FOR SHARE`); prazo vencido → `WebOrderExpired` **antes** do `If-Match` (o job muda a versão); depois `EnsureVersion` (o segundo aceite recebe `VersionConflict` com `current`) e `EnsureAwaitingAcceptance`; expediente do pedido diferente do aberto → `BusinessDayRequired` |
 | `WebOrderCustomerLinker` | Vínculo com `Customer` no aceite (ADR-0044 item 20): `pg_advisory_xact_lock` por telefone, cliente existente sem alterar, ou novo com nome e telefone |
 | `AwaitingWebOrdersRejector` | Implementa `IAwaitingWebOrdersRejector` (Contracts do Closing): na finalização, `RejectBecauseBusinessDayClosed` nos `AWAITING_ACCEPTANCE` do expediente + auditoria `WebOrderAutoRejected` (`SYSTEM`) |
-| `WebOrderExpiryJob` (namespace `Jobs`) | Ver §7.11 |
+| `WebOrderExpiryJob`, `WebOrderRetentionJob` (namespace `Jobs`) | Ver §7.11 |
+| `WebOrderCart` | Preço do carrinho da página contra o `PublicMenuDto` (tamanho + adicionais × quantidade + bebidas); linha com item fora do cardápio, indisponível ou escondido → `available: false`. O `OrderItemResolver` refaz o preço ao gravar, com as mesmas fontes |
+| `BrazilianPhone` | Telefone digitado → E.164 (`+55`), celular (9 + 8 dígitos) ou fixo (2–5 + 7) |
+| `TrackingTokenResolver` : `ITrackingTokenResolver` | SQL direto em `order_tracking_tokens` pelo hash, antes do tenant (para o middleware) |
 
 **Contracts/Ports públicos:**
 - `IOrderPaymentPort` (para Payments):
@@ -509,7 +542,8 @@ O `IAuditWriter` vive em Infrastructure (§7.3). O módulo Audit tem só leitura
 
 **Catálogo de `operationType`** (constantes em `AuditOperations`):
 - `OrderCreated`, `OrderDetailsUpdated`, `OrderItemAdded`, `OrderItemChanged`, `OrderItemRemoved`, `WeighingAdded`, `WeighingRemoved`, `ProductionStatusChanged`, `OrderCanceled`;
-- pedido da página (ADR-0046 item 24): `WebOrderSubmitted` e `WebOrderWithdrawn` (`WEB`, sem ator), `OrderAccepted`, `OrderRejected`, `WebOrderExpired` e `WebOrderAutoRejected` (`SYSTEM`), `OrderFulfillmentChanged`;
+- pedido da página (ADR-0046 item 24): `WebOrderSubmitted` e `WebOrderWithdrawn` (`WEB`, sem ator), `OrderAccepted`, `OrderRejected`, `WebOrderExpired`, `WebOrderAutoRejected` e `WebOrderAnonymized` (`SYSTEM`), `OrderFulfillmentChanged`;
+- página de pedidos: `StorefrontUpdated` (sem telefone de contato nem endereço);
 - `PaymentRegistered`, `PaymentReversed`;
 - `BusinessDayOpened`, `CashMovementRegistered`, `ClosingFinalized`, `ClosingAdjustmentCreated`;
 - `MenuCreated`, `MenuItemsReplaced`, `MenuItemUpdated`, `MenuMaterialized`;
@@ -547,6 +581,7 @@ O `IAuditWriter` vive em Infrastructure (§7.3). O módulo Audit tem só leitura
 | `BillingWebhookProcessor` | contínuo (5 s) | `SKIP LOCKED` |
 | `SubscriptionLifecycleJob` | 1 h | advisory lock |
 | `InvitationExpiryJob` | 15 min | advisory lock |
+| `WebOrderRetentionJob` (Ordering, ADR-0052 itens 3 e 5, ADR-0047 item 4) | 60 min (`WebOrders:RetentionIntervalMinutes`) | advisory lock. Como o de expiração: o `PlatformDbContext` acha os pedidos `WEB` `REJECTED`/`EXPIRED`/`WITHDRAWN` há 7 dias e ainda não anonimizados (`ix_orders_web_retention`), e cada um é anonimizado por `ICommandHandler<AnonymizeWebOrderCommand>` no contexto do tenant. Depois apaga, no papel de plataforma, os `order_tracking_tokens` vencidos e os `web_order_intakes` com mais de 7 dias |
 | `WebOrderExpiryJob` (Ordering, ADR-0046 item 14) | 30 s (`WebOrders:ExpiryIntervalSeconds`) | advisory lock. O `PlatformDbContext` só acha os vencidos de todos os tenants (`ix_orders_acceptance_deadline`, lote de 500); cada pedido é expirado por `ICommandHandler<ExpireWebOrderCommand>` num escopo com `InitializeForSystem(tenant)`: RLS, auditoria `SYSTEM`, feed e outbox normais, um pedido por transação. `VersionConflict` (o aceite gravou antes) é registrado em log e ignorado |
 | `SyncRetentionJob`, `RefreshTokenCleanupJob` | diário, 04:00 UTC | advisory lock |
 | `TenantRetentionJob` (ADR-0024: 90 dias após `CANCELED`) | diário | advisory lock |
@@ -563,7 +598,10 @@ O `IAuditWriter` vive em Infrastructure (§7.3). O módulo Audit tem só leitura
 | `App` (`MinSupportedAppVersion:ANDROID`, `:IOS`, `:WEB`, `StoreUrl:ANDROID`, `:IOS`; sem `StoreUrl:WEB`, então o `426` da web leva `storeUrl: null`) | `AppVersionOptions` | não |
 | `Cors` (`RestaurantAppOrigins`: Development `http://localhost:8082`; homolog `https://app-homolog.almoseis.app`; produção `https://app.almoseis.app`) | `RestaurantAppCorsOptions` | não |
 | `Idempotency` (`TtlHours = 72`, `LockTimeoutSeconds = 5`) | `IdempotencyOptions` | não |
-| `WebOrders` (`AcceptanceMinutes = 10`, `ExpiryJobEnabled = true`, `ExpiryIntervalSeconds = 30`) | `WebOrderOptions` | não |
+| `WebOrders` (`AcceptanceMinutes = 10`, `ExpiryJobEnabled = true`, `ExpiryIntervalSeconds = 30`, `RetentionJobEnabled = true`, `RetentionIntervalMinutes = 60`) | `WebOrderOptions` | não |
+| `Cors:PublicPageOrigins` (Development `http://localhost:3000`) | `PublicPageCorsOptions` | não |
+| `Turnstile` (`Enabled = true`, `SecretKey`, `TimeoutSeconds = 3`). Development: a chave secreta de teste oficial `1x0000000000000000000000000000000AA`; testes: `Enabled = false`. `Enabled` sem chave impede a API de subir | `TurnstileOptions` | chave sim |
+| `PublicPage` (`IpHashSecret`, `RendererKey`) | `PublicPageOptions` | sim |
 | `ForwardedHeaders` (`KnownNetworks`: CIDRs; `KnownProxies`: IPs). Vazio → só loopback (padrão do ASP.NET Core; Development fica assim). Homolog/produção: a sub-rede de onde o ingress do Container Apps conecta (`09-devops.md`) | `ForwardedHeadersSettings` → `ForwardedHeadersOptions` (`XForwardedFor \| XForwardedProto`, `ForwardLimit = 1`) | não |
 
 O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5). A imagem Docker usa a base `aspnet` **não chiseled**, que traz `tzdata`, necessário para `TimeZoneInfo.FindSystemTimeZoneById("America/Sao_Paulo")` no cálculo da `BusinessDate`.
@@ -581,6 +619,7 @@ O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5
 | ↳ `ConcurrencyTests` | Endpoints [M] | `If-Match` velho → `409` com `current`; dois pagamentos concorrentes no mesmo saldo → um falha |
 | ↳ `WebSessionFlowTests` | App no navegador (ADR-0053) | Login web: refresh só no cookie `HttpOnly`; refresh pelo cookie com rotação; reuso revoga a família e apaga o cookie; `Origin` ausente ou estranho → `403`; refresh no corpo vindo da web → `422`; mobile sem `Set-Cookie` e sem ler cookie; logout apaga; aparelho compartilhado web (lista e PIN pelo cookie, revogação apaga o cookie; `X-Device-Secret` ignorado na web; cookie do tenant A com `X-Tenant-Id`/`tenantId` do B → `401 InvalidDeviceSecret`); cookie emitido por `signup`, aceite de convite e `switch-tenant`; `switch-tenant` revoga o refresh anterior da instalação (web e mobile); erros de `/auth/*` levam CORS; `DELETE /auth/shared-device` sem `WEB` sem `Set-Cookie`; preflight de origem permitida e negada e sem headers fora do contrato; `Origin` no hub; `426` da web sem `storeUrl`. Cliente sem `CookieContainer`: os cookies vão no header `Cookie`, como no navegador |
 | ↳ `WebOrderFlowTests` | ADR-0046 | Pedido do app nasce aceito com número; pedido do site aguarda fora das listas, da cozinha e do fechamento e recusa toda escrita (`OrderNotAccepted`); aceite (número seguinte da data, cliente pelo telefone, `OrderCreated` sem rótulo, reenvio idempotente, `VersionConflict` com `current`); dois aceites simultâneos → um aceite e um número; recusa (permissão, motivo, texto); job de expiração e aceite tardio (`WebOrderExpired`); **corrida aceite × expiração** (o pedido é travado por uma conexão externa até os dois UPDATEs entrarem na fila; só o primeiro grava); **teste obrigatório do fechamento** (recusado, expirado, desistência e aguardando nunca entram no vendido; a finalização recusa os aguardando); desistência; transições de atendimento, "Concluir e marcar", `OrderAlreadyDispatched`; isolamento entre tenants. O envio usa o comando interno `SubmitWebOrderCommand` (a rota pública é da fatia 2); o job desligado por configuração e chamado por `RunOnceAsync` |
+| ↳ `PublicStorefrontFlowTests` | EP-002 fatia 2 | Página nasce inativa com slug; ativação exige endereço; perfil e cardápio (indisponível desabilitado, `isVisibleOnPage`); `CLOSED`/`PAUSED`/`UNAVAILABLE` (assinatura suspensa) recusam com `StoreUnavailable`; `storefront.manage`; slug antigo `301`/`308`, inexistente `404`, reservado/de outro tenant `422`, volta ao antigo; **isolamento**: slug de A não lê nem grava dados de B (produtos de B → `CartChanged`; `Authorization` de B ignorado); preço do servidor (`CartChanged` com o carrinho); pedido `AWAITING_ACCEPTANCE` no app e aceite pela fatia 1 refletido no acompanhamento; idempotência anônima (replay, `KeyReused`, `428`); 21 marmitas, só bebidas, PF, telefone, troco em Pix, entrega (`DeliveryUnavailable`), campo-isca; 2 pendentes por telefone e 3 por IP; acompanhamento (só primeiro nome, `304`, headers, token inventado `404`, vencido `410`); desistência; Turnstile ligado (`siteverify` simulado: sem token/falha → `403`, fora do ar → `CAPTCHA_UNAVAILABLE`); rate limit `public-order`; CORS da página sem credenciais e separado do app; retenção (anonimização, tokens e IP) |
 | ↳ `ProtectionFlowTests` | ADR-0035 e ADR-0041 | `426`; limites por login, por IP e por instalação (inclusive `GET /auth/shared-device/employees`, que divide a partição com a rota do mobile); `X-Forwarded-For` de proxy confiável separa os clientes, de endereço não confiável é ignorado, e só a entrada da direita conta (`ForwardLimit = 1`). Um `IStartupFilter` do teste simula o IP de quem conecta, porque o TestServer não tem um |
 | ↳ `DdlMigrationSyncTests` (unitário) + `SchemaTests` | Migrations × `05-ddl.md` × modelo EF | O script embutido é idêntico aos blocos do `05` (a inicial = blocos antes de 05 §5.17; cada alteração = os blocos da sua subseção em §5.17). A migration aplicada pelo login de migration passa no `05-ddl-smoke-test.sql` (31 checagens), e toda entidade EF encontra suas colunas no banco (ADR-0042) |
 | `ArchitectureTests` | ADR-0029 | regras abaixo |
@@ -594,6 +633,7 @@ O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5
 6. Toda entidade com propriedade `TenantId` implementa `ITenantOwned`.
 7. Toda ação de controller que não é GET tem `[HasPermission]` ou `[AllowAnonymous]` explícito.
 8. Cookie da requisição só é lido por `WebSession.ReadCookie`, que confere o `Origin` antes (ADR-0053 §3.4). Análise de fonte: `.Cookies` (exceto `Append`/`Delete` da resposta), o header `Cookie` e `IRequestCookieCollection` fora do `ReadCookie` falham. Os testes de fonte (4 e 8) acham `backend/src` subindo a partir da saída do build ou, com `--artifacts-path`, a partir do próprio arquivo do teste.
+9. Controllers públicos (`AlmoSeis.Api.Controllers.Public`) só recebem handlers cuja implementação é `IPublicHandler`, e todo handler `IPublicHandler` é usado por eles (ADR-0045 item 7).
 
 ---
 
@@ -674,7 +714,12 @@ O `appsettings.json` versionado só tem placeholders (`docs/02-padroes.md` §2.5
 | Aceite × expiração (ADR-0046 item 16) | Disputa pela `version`, sem trava pessimista: o primeiro UPDATE grava, o outro cai no token de concorrência. Aceite e recusa leem o expediente com `FOR SHARE` (como toda escrita de venda), e o job também: a finalização do fechamento não roda no meio | O número do dia só é consumido depois das validações; se o aceite perde no UPDATE, o rollback devolve o número ao `business_date_counters` (sequência sem buracos) |
 | Ordem dos erros no aceite | Prazo vencido → `WebOrderExpired`, depois `If-Match` → `VersionConflict`, depois o estado → `OrderNotAwaitingAcceptance` | O job muda a versão ao expirar: sem isso, o aceite tardio veria só um `VersionConflict`. Já o "Já aceito por Ana" (item 9) precisa do `current` do 409 |
 | Cliente do pedido do site | `pg_advisory_xact_lock` pela chave `customer-phone:{tenant}:{telefone}` antes de procurar o cliente | Dois aceites com o mesmo telefone novo estourariam `ux_customers_phone` (500); assim o segundo espera e acha o cadastro do primeiro |
-| Envio pela página | `SubmitWebOrderCommand` é interno até a fatia 2 (rota pública, `ITenantContext.Source`, anti-abuso). Pedido `WEB` só `MARMITA` (RF-202/ADR-0044) | O modelo, o aceite e os jobs já dependem dele |
+| Envio pela página | Rota pública desde a fatia 2 (`PlaceWebOrderHandler`), sobre o mesmo `WebOrderSubmitter` do comando interno. Pedido `WEB` só `MARMITA` (RF-202/ADR-0044) | O modelo, o aceite e os jobs já dependiam dele |
+| Tenant das rotas públicas | `PublicTenantMiddleware` antes da autenticação; o JwtBearer devolve `NoResult` em `/api/v1/public`. A resolução lê `store_slugs`/`order_tracking_tokens` por SQL (leitura aberta pela RLS da 0004), sem `IgnoreQueryFilters` | O tenant ainda não existe na sessão, e o filtro do EF esconderia tudo. A escrita nessas tabelas continua presa ao tenant (`WITH CHECK`) |
+| Token do Turnstile fora do corpo | Header `X-Turnstile-Token` | O token é de uso único: dentro do corpo, um reenvio por resposta perdida com token novo daria `IdempotencyKeyReused` |
+| Carrinho conferido duas vezes | `WebOrderCart` (contra o cardápio público) antes de gravar; `OrderItemResolver` ao gravar | O primeiro devolve o `CartChanged` com o carrinho inteiro recalculado (e barra o que está escondido da página); o segundo é o mesmo caminho do app |
+| Limites de pendentes | `pg_advisory_xact_lock` por `web-order-phone:{tenant}:{telefone}` e `web-order-ip:{tenant}:{hash}`, sempre nessa ordem | Dois envios simultâneos do mesmo cliente passariam juntos pela contagem |
+| Redirecionamento do slug no POST | `308` (não `301`) | O `301` vira GET no navegador e perderia o corpo |
 | Expand/contract da 0003 | O banco aceita pedido aceito sem `accepted_at` e entrega/retirada sem `fulfillment_status` (a API anterior grava assim durante o deploy). O código trata o nulo como "aceito na criação" (`AcceptedAt ?? CreatedAt` no painel) e `PENDING` (atendimento, "Pronto para retirar", `IS DISTINCT FROM` no fechamento). A contração (preencher e apertar os `CHECK`s) fica para a release seguinte (05 §5.17) | 09 §9.4: a migration roda antes do deploy e precisa ser compatível com a versão anterior. O backfill dos pedidos existentes tira o `FORCE` da RLS de `orders` só durante o `UPDATE`, porque o papel de migration não é membro de `almoseis_platform` |
 
 ## 7.14 Exemplo de ponta a ponta: `POST /orders/{id}/payments`

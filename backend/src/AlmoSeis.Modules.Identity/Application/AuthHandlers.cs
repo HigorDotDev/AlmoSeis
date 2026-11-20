@@ -23,6 +23,7 @@ internal sealed class SignUpHandler(
     IBillingPort billing,
     IAuditWriter audit,
     AuthSessionIssuer sessions,
+    IEnumerable<ITenantCreatedListener> listeners,
     IIdGenerator ids,
     TimeProvider time) : ICommandHandler<SignUpCommand, AuthResultDto>
 {
@@ -52,6 +53,10 @@ internal sealed class SignUpHandler(
         db.Add(owner);
 
         await billing.StartTrialAsync(tenantId, ClaimSources(input, user), cancellationToken);
+        foreach (var listener in listeners)
+        {
+            await listener.OnTenantCreatedAsync(new NewTenantInfo(tenantId, newTenant.Name, newTenant.City, now), cancellationToken);
+        }
 
         audit.Add("TenantSignedUp", "TENANT", tenantId, after: new { tenantId, input.Name, termsVersion = command.AcceptedTermsVersion });
         return await sessions.IssueAsync(user, owner, command.InstallationId, null, null, cancellationToken);

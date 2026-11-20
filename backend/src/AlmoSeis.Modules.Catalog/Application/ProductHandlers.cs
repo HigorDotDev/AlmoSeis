@@ -81,7 +81,7 @@ internal sealed class UpdateProductHandler(
         product.Apply(
             new ProductChanges(
                 changes.Kind, changes.Name, changes.Description, changes.Category, changes.DefaultPrice,
-                changes.RequiresPreparation, changes.ImageStorageKey, changes.IsActive, changes.IsAvailable),
+                changes.RequiresPreparation, changes.ImageStorageKey, changes.IsActive, changes.IsAvailable, changes.IsVisibleOnPage),
             kindLocked,
             time.GetUtcNow());
 
@@ -157,6 +157,7 @@ internal static class ProductRules
         p.RequiresPreparation,
         p.IsActive,
         p.IsAvailable,
+        p.IsVisibleOnPage,
     };
 }
 
@@ -164,7 +165,7 @@ internal static class ProductMapping
 {
     public static ProductDto ToDto(Product p, IObjectStorage storage) => new(
         p.Id, p.Version, p.Kind, p.Name, p.Description, p.Category, p.DefaultPrice, p.RequiresPreparation,
-        storage.PublicUrl(p.ImageStorageKey), p.IsActive, p.IsAvailable, p.CreatedAt, p.UpdatedAt);
+        storage.PublicUrl(p.ImageStorageKey), p.IsActive, p.IsAvailable, p.IsVisibleOnPage, p.CreatedAt, p.UpdatedAt);
 }
 
 /// POST /products/{id}/image-upload: URL pré-assinada de PUT direto no R2 (06 §6.5). Nada é gravado aqui: o app envia

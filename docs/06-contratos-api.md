@@ -7,8 +7,8 @@
 | Item | Regra |
 |---|---|
 | Base | `https://{host}/api/v1` (ADR-0035). Todos os caminhos abaixo são relativos a ela |
-| Autenticação | `Authorization: Bearer {accessToken}` em tudo, exceto onde marcado **público** |
-| Tenant | Vem só do token (ADR-0026). Nenhum endpoint recebe `tenantId`, exceto os de dispositivo compartilhado e de admin |
+| Autenticação | `Authorization: Bearer {accessToken}` em tudo, exceto onde marcado **público**. As rotas `/public/*` da página de pedidos **ignoram** qualquer `Authorization` (ADR-0045) |
+| Tenant | Vem só do token (ADR-0026). Nenhum endpoint recebe `tenantId`, exceto os de dispositivo compartilhado e de admin. Nas rotas `/public/*`, vem do `{slug}` ou do `{trackingToken}` resolvido no servidor, com a mesma RLS (ADR-0045, §6.19) |
 | Versão do app | `X-App-Version: 1.4.0` e `X-App-Platform: ANDROID`/`IOS`/`WEB` em toda requisição (ADR-0035). `WEB` é o app do restaurante no navegador (ADR-0053) |
 | Navegador (`WEB`) | Refresh token e `deviceSecret` em cookies `HttpOnly`, nunca no corpo; conferência de `Origin` nas rotas que leem cookie; CORS só para as origens do ambiente (§6.3, "App no navegador") |
 | Idempotência | `Idempotency-Key: {uuid}` nos endpoints marcados **[I]** (ADR-0033) |
@@ -136,7 +136,14 @@ Conflito de versão (`409`) traz o estado atual em `current` (ADR-0034):
 | 423 | `PinLocked` | PIN bloqueado (extensão `lockedUntil`) |
 | 426 | `AppVersionUnsupported` | versão do app abaixo da mínima (extensões `minVersion`, `storeUrl`; em `WEB`, `storeUrl` é sempre `null`) |
 | 428 | `IdempotencyKeyRequired` / `IfMatchRequired` | header obrigatório ausente |
-| 429 | `TooManyRequests` | limite dos endpoints públicos (ADR-0041); header `Retry-After` |
+| 429 | `TooManyRequests` | limite dos endpoints públicos (ADR-0041, ADR-0045); header `Retry-After` |
+| 404 | `StoreNotFound` | `{slug}` da página inexistente (§6.19). Slug antigo não dá `404`: redireciona |
+| 409 | `StoreUnavailable` | envio (ou cotação) com a página fora de `OPEN`. Extensão `storeStatus`: `CLOSED`, `PAUSED` ou `UNAVAILABLE`, nunca o motivo (ADR-0045 item 16) |
+| 409 | `CartChanged` | envio pela página com item indisponível ou fora do cardápio do dia, ou com `expectedTotal` diferente do total recalculado. Extensão `cart` com o carrinho recalculado (ADR-0044 item 21, §6.19) |
+| 422 | `DeliveryUnavailable` | entrega pela página indisponível (pausa de entrega, ou cotação por distância ainda não disponível: até a fatia 4 a página só faz retirada, ADR-0048 item 13) |
+| 403 | `CaptchaFailed` | envio pela página sem o token do Turnstile ou com token inválido, vencido ou repetido (ADR-0045 item 12) |
+| 429 | `TooManyPendingOrders` | o telefone já tem 2 pedidos aguardando aceite no restaurante, ou o IP já tem 3 (ADR-0045 item 13) |
+| 410 | `TrackingExpired` | acompanhamento com mais de 7 dias (ADR-0047 item 4) |
 
 ---
 
@@ -161,6 +168,7 @@ Cada endpoint indica a permissão exigida. Matriz em código (`Permissions.cs` /
 | `customers.manage` | ✓ | ✓ | ✓ | | ✓ |
 | `employees.manage` | ✓ | | | | |
 | `devices.manage`, `settings.manage`, `audit.view` | ✓ | ✓ | | | |
+| `storefront.manage` (página de pedidos: slug, perfil, pausa, endereço, entrega; ADR-0046 item 22) | ✓ | ✓ | | | |
 | `subscription.view` | ✓ | | | | |
 
 Leitura de produtos, tamanhos, cardápios e clientes exige só `orders.view`.
@@ -170,7 +178,7 @@ Leitura de produtos, tamanhos, cardápios e clientes exige só `orders.view`.
 ```json
 {
   "items": [
-    { "role": "OWNER", "name": "Proprietário", "permissions": ["orders.view", "orders.create", "orders.edit", "orders.cancel", "orders.delivery-fee.edit", "orders.accept", "orders.fulfillment.update", "production.view", "production.update", "payments.register", "payments.reverse", "cash.open", "cash.movement", "closing.view", "closing.finalize", "closing.adjust", "menu.manage", "catalog.manage", "customers.manage", "employees.manage", "devices.manage", "settings.manage", "audit.view", "subscription.view"] },
+    { "role": "OWNER", "name": "Proprietário", "permissions": ["orders.view", "orders.create", "orders.edit", "orders.cancel", "orders.delivery-fee.edit", "orders.accept", "orders.fulfillment.update", "production.view", "production.update", "payments.register", "payments.reverse", "cash.open", "cash.movement", "closing.view", "closing.finalize", "closing.adjust", "menu.manage", "catalog.manage", "customers.manage", "employees.manage", "devices.manage", "settings.manage", "storefront.manage", "audit.view", "subscription.view"] },
     { "role": "KITCHEN", "name": "Cozinha", "permissions": ["orders.view", "production.view", "production.update", "orders.fulfillment.update"] }
   ]
 }
@@ -539,7 +547,7 @@ Access-Control-Max-Age: 600
 Vary: Origin
 ```
 
-A página pública do EP-002 (`/public/*`, ADR-0051) terá outra política, sem credenciais e com outra lista.
+A página pública do EP-002 (`/public/*`) tem **outra** política, sem credenciais e com outra lista (`Cors:PublicPageOrigins`, §6.19). As duas listas não se misturam: a origem do app não recebe CORS em `/public/*`, e a origem da página não recebe CORS fora de `/public/*`.
 
 **Desenvolvimento:** o app web em `http://localhost:8082` e a API em `http://localhost:5080` são o mesmo *site* (a porta não conta), então o `SameSite=Strict` deixa o cookie seguir. O Chrome e o Edge aceitam cookies `Secure` e o prefixo `__Secure-` em `http://localhost`.
 
@@ -718,10 +726,13 @@ Convite inexistente, expirado ou já usado → `404 NotFound` (não diferencia, 
   "imageUrl": "https://img.almoseis.app/t/0192d6a0-0000-7000-8000-000000000001/p/0192d6a0-0000-7000-8000-000000000101.jpg",
   "isActive": true,
   "isAvailable": true,
+  "isVisibleOnPage": true,
   "createdAt": "2026-10-27T09:40:00Z",
   "updatedAt": "2026-10-27T09:40:00Z"
 }
 ```
+
+`isVisibleOnPage` (ADR-0044 item 5): bebidas e adicionais com `false` não aparecem na página de pedidos (§6.19). Nasce `true`; muda pelo `PATCH`. Pratos e acompanhamentos seguem o cardápio do dia.
 
 | Método e rota | Permissão | Corpo → resposta |
 |---|---|---|
@@ -994,6 +1005,9 @@ Fiado (`pendingAmount`, `pendingOrderCount` e `pending-orders`) só considera pe
   "tableLabel": null,
   "tabNumber": null,
   "notes": "Entregar até 12h30",
+  "expectedPaymentMethod": null,
+  "changeFor": null,
+  "riskFlag": null,
   "deliveryFee": "5.00",
   "itemsTotal": "50.00",
   "weighingsTotal": "0.00",
@@ -1131,6 +1145,9 @@ Pedido "pagar na entrega/retirada" enviado pela página, aguardando aceite. A ro
   "tableLabel": null,
   "tabNumber": null,
   "notes": null,
+  "expectedPaymentMethod": "CASH",
+  "changeFor": "50.00",
+  "riskFlag": null,
   "deliveryFee": "5.00",
   "itemsTotal": "40.00",
   "weighingsTotal": "0.00",
@@ -1191,6 +1208,9 @@ Pedido "pagar na entrega/retirada" enviado pela página, aguardando aceite. A ro
 - Não aparece na lista padrão, no painel da cozinha, no fechamento nem nas pendências do cliente (RN-206.9). O app lê a faixa "Novos do site" com `GET /orders?acceptanceStatus=AWAITING_ACCEPTANCE` e conta o prazo com `acceptanceDeadline`.
 - Depois do aceite é um pedido comum (edita, recebe pagamento manual, pode ser cancelado pelo ADR-0022).
 - `customer.phoneNumber` não é verificado (ADR-0044): o app mostra "telefone não verificado" nos pedidos `WEB`.
+- Só em pedido `WEB` (`null` nos do app): `expectedPaymentMethod` (`CASH`, `PIX`, `CARD`: a forma que o cliente pretende usar, ADR-0044 item 19; **não** cria pagamento), `changeFor` ("troco para R$ X", só com `CASH`) e `riskFlag` (`CAPTCHA_UNAVAILABLE` quando o anti-robô não respondeu no envio, ADR-0045 item 12: o app pode destacar o pedido).
+- Pedidos do site que não viraram venda (`REJECTED`, `EXPIRED`, `WITHDRAWN`) têm nome, telefone, endereço e observações anonimizados 7 dias depois (ADR-0052 item 3): `customer.name = "Cliente anonimizado"`, `phoneNumber: null`, endereço `"Endereço anonimizado"`. Itens, valores e motivo ficam.
+- A partir da fatia 2 o envio é a rota pública `POST /public/stores/{slug}/orders` (§6.19).
 
 ### `GET /orders` — `orders.view`
 
@@ -1586,7 +1606,7 @@ Erros: `409 OrderNotAccepted`, `409 OrderCanceled`, `409 ProductionNotCompleted`
 }
 ```
 
-Do mais recente para o mais antigo. Inclui itens removidos, pagamentos, estornos, status e cancelamento. Em pedido do site: `WebOrderSubmitted` e `WebOrderWithdrawn` (`origin: "WEB"`, `actor: null`), `OrderAccepted`, `OrderRejected`, `WebOrderExpired` e `WebOrderAutoRejected` (`origin: "SYSTEM"`), e `OrderFulfillmentChanged` (ADR-0046 item 24).
+Do mais recente para o mais antigo. Inclui itens removidos, pagamentos, estornos, status e cancelamento. Em pedido do site: `WebOrderSubmitted` e `WebOrderWithdrawn` (`origin: "WEB"`, `actor: null`), `OrderAccepted`, `OrderRejected`, `WebOrderExpired`, `WebOrderAutoRejected` e `WebOrderAnonymized` (`origin: "SYSTEM"`; a anonimização é a retenção do ADR-0052), e `OrderFulfillmentChanged` (ADR-0046 item 24).
 
 ### Alertas (RF-008)
 
@@ -2113,4 +2133,336 @@ O `ETag` da resposta de pagamento é a **nova versão do pedido**, para o app us
 | `GET /sync/changes`, `GET /operations/{id}` | iguais; o id da operação é a `Idempotency-Key` |
 | — | novos (ADR-0053, web): `GET /auth/shared-device/employees`, `DELETE /auth/shared-device` |
 | — | novos (EP-002, ADR-0046): `POST /orders/{id}/accept`, `POST /orders/{id}/reject`, `PATCH /orders/{id}/fulfillment`; filtro `acceptanceStatus` em `GET /orders` |
+| — | novos (EP-002 fatia 2, ADR-0044/0045/0047): `GET`/`PUT /storefront` (§6.18); `/public/stores/{slug}`, `/public/stores/{slug}/orders`, `/public/stores/{slug}/delivery-quotes`, `/public/tracking/{trackingToken}`, `/public/tracking/{trackingToken}/withdraw` (§6.19) |
 | — | novos: `/business-days`, `/customers`, `/marmita-sizes`, `/production/orders`, `/devices/shared`, `/subscription`, `/roles`, `/audit-logs`, `/admin/*`, `/webhooks/asaas` |
+
+---
+
+## 6.18 Página de pedidos: configuração pelo restaurante (EP-002 F-210; ADR-0044, ADR-0048)
+
+A página nasce **inativa** no autocadastro, com o slug gerado do nome já reservado (ADR-0044 itens 11 e 12). Os tenants anteriores à migration 0004 receberam a mesma coisa (05 §5.17).
+
+### `GET /storefront` — `orders.view`
+
+```json
+{
+  "version": 3,
+  "slug": "marmitaria-da-ana",
+  "previousSlugs": ["marmitaria-ana"],
+  "publicName": "Marmitaria da Ana",
+  "isPageActive": true,
+  "isAcceptingOrders": true,
+  "isDeliveryEnabled": true,
+  "offersDelivery": true,
+  "offersPickup": true,
+  "contactPhone": "+5534999990000",
+  "hoursText": "Seg a sáb, 10h30 às 14h",
+  "address": { "street": "Rua das Flores", "number": "123", "complement": null, "neighborhood": "Centro", "city": "Uberlândia", "state": "MG", "zipCode": "38400000" },
+  "location": null,
+  "delivery": { "feeMode": "DISTANCE", "pricePerKm": "0.80", "minimumFee": "3.00", "maxDistanceKm": "6.0" },
+  "status": "OPEN",
+  "updatedAt": "2026-10-27T09:30:00Z"
+}
+```
+
+- `slug`: o atual. `previousSlugs`: os antigos do mesmo tenant, que redirecionam para o atual (máximo 5, ADR-0044 item 15).
+- `status`: o estado que a página mostra agora (`OPEN`, `CLOSED`, `PAUSED`, `UNAVAILABLE`, §6.19), para o app exibir "Sua página está fechada agora".
+- `location` (latitude/longitude confirmadas no mapa) e `delivery` são da taxa por distância (ADR-0048), usados a partir da fatia 4. Mudar o endereço apaga `location`. Até a fatia 4, a página **só faz retirada**, mesmo com `offersDelivery: true`.
+- `maxDistanceKm`: string com uma casa (`"6.0"`) ou `null`.
+
+### `PUT /storefront` — `storefront.manage` [M]
+
+Substitui a configuração inteira (as chaves rápidas "pausar pedidos" e "pausar entrega" mandam o objeto todo com `isAcceptingOrders`/`isDeliveryEnabled` trocados). Resposta: `200` com o mesmo objeto do `GET`.
+
+```json
+{
+  "slug": "marmitaria-da-ana",
+  "publicName": "Marmitaria da Ana",
+  "isPageActive": true,
+  "isAcceptingOrders": true,
+  "isDeliveryEnabled": true,
+  "offersDelivery": true,
+  "offersPickup": true,
+  "contactPhone": "+5534999990000",
+  "hoursText": "Seg a sáb, 10h30 às 14h",
+  "address": { "street": "Rua das Flores", "number": "123", "complement": null, "neighborhood": "Centro", "city": "Uberlândia", "state": "MG", "zipCode": "38400-000" },
+  "delivery": { "feeMode": "DISTANCE", "pricePerKm": "0.80", "minimumFee": "3.00", "maxDistanceKm": "6.0" }
+}
+```
+
+Regras (`422 ValidationFailed`, com o campo em `errors`):
+
+| Campo | Regra |
+|---|---|
+| `slug` | `a-z`, `0-9` e `-`; 3 a 40; sem `-` no começo, no fim ou repetido; não só números; fora da lista de reservados (`admin`, `pedidos`, `restaurantes`…, ADR-0044 item 16) e de palavras ofensivas; livre (nem atual nem antigo de outro tenant). Maiúsculas viram minúsculas. Trocar guarda o anterior (redireciona); voltar a um antigo do próprio tenant o reativa; depois de 5 trocas, só pelo suporte |
+| `isPageActive: true` | exige `address` com rua, número, bairro, cidade e UF, e pelo menos um tamanho de marmita ativo (ADR-0044 item 11) |
+| `offersDelivery`, `offersPickup` | pelo menos um verdadeiro |
+| `publicName` | 2 a 80 |
+| `contactPhone` | E.164 ou `null` |
+| `address.state` / `address.zipCode` | UF com 2 letras / CEP com 8 dígitos (com ou sem hífen) |
+| `delivery.pricePerKm` / `minimumFee` / `maxDistanceKm` | `> 0` ou `null` / `≥ 0` / `"0.1"` a `"999.9"` ou `null` |
+
+Auditoria `StorefrontUpdated` (sem telefone de contato nem endereço). `If-Match` antigo → `409 VersionConflict` com o objeto atual em `current`.
+
+---
+
+## 6.19 Página de pedidos: rotas públicas (EP-002 F-201 a F-204, F-208, F-212; ADR-0044, ADR-0045, ADR-0047, ADR-0052)
+
+Rotas **anônimas**, sem `Authorization` (se vier, é ignorado) e sem `X-App-Version`. O tenant é resolvido no servidor pelo `{slug}` ou pelo `{trackingToken}`, e a partir daí valem o query filter e a RLS do tenant (ADR-0045 itens 3 a 6). Dinheiro, enums e datas seguem §6.0.
+
+| Rota | Limite (ADR-0045 item 11) |
+|---|---|
+| `GET /public/stores/{slug}` | `public-read`: 120/min por IP. O servidor da página (ADR-0051) com `X-Web-Renderer-Key` correto fica fora do limite |
+| `POST /public/stores/{slug}/orders` [I] | `public-order`: 5/min e 20/h por IP |
+| `POST /public/stores/{slug}/delivery-quotes` | `public-quote`: 10/min e 60/dia por IP; 300/dia por slug |
+| `GET /public/tracking/{trackingToken}` | `public-tracking`: 60/min por IP |
+| `POST /public/tracking/{trackingToken}/withdraw` | `public-order` |
+
+Excesso → `429 TooManyRequests` com `Retry-After`.
+
+**Slug:** inexistente → `404 StoreNotFound`. Slug antigo (ou com maiúsculas) → `301` (GET) ou `308` (POST, preserva método e corpo) com `Location` no slug atual, mantendo o resto do caminho e a query:
+
+```text
+GET /api/v1/public/stores/marmitaria-ana HTTP/1.1
+
+HTTP/1.1 301 Moved Permanently
+Location: /api/v1/public/stores/marmitaria-da-ana
+```
+
+**CORS** (`Cors:PublicPageOrigins`, separado do app do restaurante, ADR-0053 §4.6):
+
+| Item | Valor |
+|---|---|
+| Origens | `Cors:PublicPageOrigins` por ambiente, com as mesmas regras de formato de `RestaurantAppOrigins` (§6.3). Development: `http://localhost:3000`. Homologação/produção: domínio da página (a definir, ADR-0051) |
+| Credenciais | **nenhuma** (sem `Access-Control-Allow-Credentials`; a página não tem cookie nem sessão) |
+| Métodos | `GET`, `POST` |
+| Headers permitidos | `Content-Type`, `Idempotency-Key`, `X-Turnstile-Token`, `If-None-Match` |
+| Headers expostos | `ETag`, `Location`, `Retry-After`, `Idempotent-Replayed` |
+| `Access-Control-Max-Age` | `600` |
+| Rotas | só `/api/v1/public/*`, inclusive nas respostas de erro |
+
+### `GET /public/stores/{slug}` — público
+
+Perfil, estado e cardápio do dia. Estado calculado a cada requisição (ADR-0044 item 6), nesta ordem:
+
+| `status` | Condição | Cardápio |
+|---|---|---|
+| `UNAVAILABLE` | página inativa, ou assinatura `SUSPENDED`/`CANCELED` (o motivo não aparece) | não; só `slug`, `status`, `name` e `limits` |
+| `CLOSED` | sem expediente aberto | não |
+| `PAUSED` | `isAcceptingOrders = false` | sim (para consulta; o envio é recusado) |
+| `OPEN` | os demais casos | sim |
+
+```json
+{
+  "slug": "marmitaria-da-ana",
+  "status": "OPEN",
+  "name": "Marmitaria da Ana",
+  "address": { "street": "Rua das Flores", "number": "123", "complement": null, "neighborhood": "Centro", "city": "Uberlândia", "state": "MG" },
+  "contactPhone": "+5534999990000",
+  "hoursText": "Seg a sáb, 10h30 às 14h",
+  "pickupAvailable": true,
+  "deliveryAvailable": false,
+  "deliveryRule": null,
+  "privacy": { "controllerName": "Marmitaria da Ana", "controllerPhone": "+5534999990000", "operatorName": "AlmoSeis", "thirdParties": ["ANTI_BOT"] },
+  "businessDate": "2026-10-27",
+  "menu": {
+    "marmitaSizes": [
+      { "id": "0192d6a0-0000-7000-8000-000000000201", "name": "P", "price": "16.00" },
+      { "id": "0192d6a0-0000-7000-8000-000000000202", "name": "M", "price": "20.00" }
+    ],
+    "mainDishes": [
+      { "productId": "0192d6a0-0000-7000-8000-000000000101", "name": "Frango grelhado", "description": "Peito de frango grelhado com ervas", "imageUrl": null, "isAvailable": true },
+      { "productId": "0192d6a0-0000-7000-8000-000000000102", "name": "Costela", "description": null, "imageUrl": null, "isAvailable": false }
+    ],
+    "sideDishes": [
+      { "productId": "0192d6a0-0000-7000-8000-000000000111", "name": "Arroz", "description": null, "imageUrl": null, "isAvailable": true },
+      { "productId": "0192d6a0-0000-7000-8000-000000000112", "name": "Feijão", "description": null, "imageUrl": null, "isAvailable": true }
+    ],
+    "addons": [
+      { "productId": "0192d6a0-0000-7000-8000-000000000131", "name": "Ovo frito", "description": null, "imageUrl": null, "price": "2.00", "isAvailable": true }
+    ],
+    "beverages": [
+      { "productId": "0192d6a0-0000-7000-8000-000000000121", "name": "Coca-Cola 350ml", "description": null, "imageUrl": null, "price": "6.00", "isAvailable": true }
+    ]
+  },
+  "limits": { "maxMarmitas": 20, "maxLines": 30, "maxQuantityPerLine": 20, "notesMaxLength": 200 }
+}
+```
+
+- `menu`: o `DAILY` de `MARMITA` da `businessDate` (ADR-0038) + tamanhos ativos + adicionais e bebidas ativos com `isVisibleOnPage`. `isAvailable: false` → "Acabou" (desabilitado). Sem cardápio publicado → `menu: null`. PF e quilo nunca aparecem.
+- `pickupAvailable` / `deliveryAvailable`: o que a página oferece agora. **Até a fatia 4, `deliveryAvailable` é sempre `false`** (sem cotação por distância não há taxa, ADR-0048 item 13). `deliveryRule` (`{ "pricePerKm": "0.80", "minimumFee": "3.00", "maxDistanceKm": "6.0" }`) aparece junto com a entrega.
+- `privacy` (ADR-0052 item 1): dados variáveis do aviso "Seus dados são usados por **{controllerName}** para preparar e entregar o pedido". O texto completo é da página (revisão jurídica). `thirdParties`: `ANTI_BOT` (Cloudflare Turnstile, quando ligado); `MAPS` entra com a fatia 4 e `PAYMENTS` com a Fase 2.
+- `Cache-Control: no-cache`: o servidor da página revalida a cada uso (pausa e "Acabou" aparecem em até 30 s, RF-202/RF-205).
+
+### `POST /public/stores/{slug}/orders` — público [I]
+
+Headers: `Idempotency-Key: {uuid}` (obrigatório, gerado quando o cliente toca em "Enviar pedido" e reaproveitado em todo reenvio) e `X-Turnstile-Token` (o token do Turnstile; fica **fora** do hash da idempotência porque é de uso único: depois de um **erro**, gere um token novo e reenvie com a mesma chave). Corpo até 32 KB.
+
+```json
+{
+  "fulfillmentType": "PICKUP",
+  "customerName": "Carla Souza",
+  "customerPhone": "(34) 98888-7777",
+  "deliveryAddress": null,
+  "deliveryQuoteId": null,
+  "expectedPaymentMethod": "CASH",
+  "changeFor": "50.00",
+  "notes": "Sem talher",
+  "items": [
+    {
+      "itemKind": "MARMITA",
+      "marmitaSizeId": "0192d6a0-0000-7000-8000-000000000202",
+      "productId": null,
+      "quantity": 2,
+      "mainDishProductIds": ["0192d6a0-0000-7000-8000-000000000101"],
+      "sideDishProductIds": ["0192d6a0-0000-7000-8000-000000000111", "0192d6a0-0000-7000-8000-000000000112"],
+      "addons": [{ "productId": "0192d6a0-0000-7000-8000-000000000131", "quantity": 1 }],
+      "notes": "Sem cebola"
+    },
+    { "itemKind": "BEVERAGE", "marmitaSizeId": null, "productId": "0192d6a0-0000-7000-8000-000000000121", "quantity": 1, "mainDishProductIds": null, "sideDishProductIds": null, "addons": null, "notes": null }
+  ],
+  "expectedTotal": "50.00",
+  "website": null
+}
+```
+
+→ `201 Created`, `Location: /api/v1/public/tracking/{trackingToken}`:
+
+```json
+{
+  "trackingToken": "q7Hc2mVxR0aLpT9wZk3s1A",
+  "trackingExpiresAt": "2026-11-03T12:00:00Z",
+  "acceptanceStatus": "AWAITING_ACCEPTANCE",
+  "acceptanceDeadline": "2026-10-27T12:10:00Z",
+  "itemsTotal": "50.00",
+  "deliveryFee": "0.00",
+  "totalAmount": "50.00"
+}
+```
+
+- **Preço sempre do servidor** (ADR-0044 item 21): `itemsTotal` = Σ (tamanho + adicionais) × quantidade + bebidas = 2 × (20,00 + 2,00) + 6,00 = **50,00**. O corpo não tem preço; campos de preço enviados são ignorados.
+- `trackingToken`: 128 bits aleatórios em base64url (22 caracteres). O servidor guarda só o SHA-256; o token aparece **só aqui** (e na repetição idempotente desta resposta). A página guarda no `localStorage` e monta `/{slug}/pedido/{trackingToken}` (ADR-0047 itens 1, 2 e 10).
+- A resposta não tem nome, telefone nem endereço: o corpo fica guardado no registro de idempotência por 72 h (ADR-0052 item 5).
+- O pedido entra no app como pedido do site `AWAITING_ACCEPTANCE` (§6.9 "Pedido do site"), com `customerPhone` normalizado em E.164 e passa pelo aceite (`POST /orders/{id}/accept`).
+- `customerPhone` aceita os formatos comuns ("(34) 98888-7777", "34988887777", "+55 34 98888-7777", DDD com zero) e é normalizado: celular com 9 dígitos começando por 9, fixo com 8 começando por 2 a 5.
+- Reenvio com a mesma chave e o mesmo corpo → a mesma resposta + `Idempotent-Replayed: true` (escopo `(tenant, key)`, sem usuário). Mesma chave com corpo diferente → `422 IdempotencyKeyReused`. A página **não** usa `GET /operations/{key}`.
+
+Ordem das checagens e erros:
+
+| # | Situação | Resposta |
+|---|---|---|
+| 1 | formato: nome 2–80; telefone com DDD; `fulfillmentType` `PICKUP`/`DELIVERY`; endereço só (e obrigatório) na entrega; `notes` e `items[].notes` até 200; 1 a 30 linhas; só `MARMITA` e `BEVERAGE`; quantidade 1–20 por linha; marmita com tamanho e pelo menos 1 prato; **pelo menos 1 marmita** (pedido só de bebidas não é aceito); **até 20 marmitas** somadas; `changeFor` só com `CASH` | `422 ValidationFailed` |
+| 2 | campo-isca `website` preenchido | `400 MalformedRequest`, sem detalhes |
+| 3 | página fora de `OPEN` | `409 StoreUnavailable` (`storeStatus`) |
+| 4 | Turnstile ausente ou inválido | `403 CaptchaFailed`. Cloudflare sem resposta em 3 s → o pedido é aceito com `riskFlag: "CAPTCHA_UNAVAILABLE"` |
+| 5 | `DELIVERY` | `422 DeliveryUnavailable` (até a fatia 4) |
+| 6 | `PICKUP` com a retirada desligada | `422 ValidationFailed` em `fulfillmentType` |
+| 7 | `expectedPaymentMethod` fora das formas habilitadas | `422 PaymentMethodDisabled` |
+| 8 | o telefone já tem 2 pedidos aguardando aceite, ou o IP já tem 3 | `429 TooManyPendingOrders` |
+| 9 | sem cardápio do dia publicado | `404 MenuNotFound` |
+| 10 | item fora do cardápio, indisponível ou escondido, ou `expectedTotal` diferente do recalculado | `409 CartChanged` |
+| 11 | `changeFor` menor que o total | `422 ValidationFailed` em `changeFor` |
+
+`409 CartChanged` traz o carrinho recalculado (linhas na ordem de `items`; indisponível → `available: false` e sem valores; o total soma só as disponíveis). A página mostra as diferenças e o cliente confirma de novo:
+
+```json
+{
+  "type": "urn:almoseis:error:cart-changed",
+  "title": "Seu pedido mudou. Confira os itens e os valores.",
+  "status": 409,
+  "errorCode": "CartChanged",
+  "traceId": "00-6f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e-6f1c2d3e4f5a6b7c-01",
+  "cart": {
+    "items": [
+      { "index": 0, "name": "Marmita M", "available": false, "unitPrice": null, "lineTotal": null },
+      { "index": 1, "name": "Coca-Cola 350ml", "available": true, "unitPrice": "6.00", "lineTotal": "6.00" }
+    ],
+    "unavailableProductIds": ["0192d6a0-0000-7000-8000-000000000102"],
+    "itemsTotal": "6.00",
+    "deliveryFee": "0.00",
+    "totalAmount": "6.00"
+  }
+}
+```
+
+### `POST /public/stores/{slug}/delivery-quotes` — público
+
+Ponto de extensão da taxa por distância (ADR-0048 item 8). **Nesta fatia** responde `409 StoreUnavailable` (página fora de `OPEN`) ou `422 DeliveryUnavailable`. Formato que entra na fatia 4:
+
+```json
+{ "address": { "street": "Rua das Palmeiras", "number": "45", "complement": "Casa 2", "neighborhood": "Centro", "city": "Uberlândia", "zipCode": "38400100", "reference": null } }
+```
+
+```json
+{ "quoteId": "0192d6a0-0000-7000-8000-000000000e01", "formattedAddress": "Rua das Palmeiras, 45 - Centro, Uberlândia - MG", "distanceKm": "4.5", "deliveryFee": "3.60", "expiresAt": "2026-10-27T12:15:00Z" }
+```
+
+### `GET /public/tracking/{trackingToken}` — público
+
+```json
+{
+  "version": 3,
+  "store": {
+    "slug": "marmitaria-da-ana",
+    "name": "Marmitaria da Ana",
+    "contactPhone": "+5534999990000",
+    "address": { "street": "Rua das Flores", "number": "123", "complement": null, "neighborhood": "Centro", "city": "Uberlândia", "state": "MG" }
+  },
+  "orderNumber": 13,
+  "submittedAt": "2026-10-27T12:00:00Z",
+  "status": "IN_PREPARATION",
+  "acceptanceStatus": "ACCEPTED",
+  "acceptanceDeadline": "2026-10-27T12:10:00Z",
+  "estimatedReadyMinutes": 30,
+  "canWithdraw": false,
+  "timeline": [
+    { "step": "SUBMITTED", "at": "2026-10-27T12:00:00Z" },
+    { "step": "ACCEPTED", "at": "2026-10-27T12:02:00Z" },
+    { "step": "IN_PREPARATION", "at": "2026-10-27T12:05:00Z" }
+  ],
+  "rejection": null,
+  "fulfillmentType": "PICKUP",
+  "customerFirstName": "Carla",
+  "deliveryAddress": null,
+  "items": [
+    {
+      "itemKind": "MARMITA", "name": "Marmita M", "composition": "Frango grelhado · Arroz, Feijão", "quantity": 2,
+      "unitPrice": "20.00", "lineTotal": "40.00", "notes": "Sem cebola",
+      "addons": [{ "name": "Ovo frito", "quantity": 1, "unitPrice": "2.00", "lineTotal": "4.00" }]
+    },
+    { "itemKind": "BEVERAGE", "name": "Coca-Cola 350ml", "composition": null, "quantity": 1, "unitPrice": "6.00", "lineTotal": "6.00", "notes": null, "addons": [] }
+  ],
+  "itemsTotal": "50.00",
+  "deliveryFee": "0.00",
+  "deliveryDistanceKm": null,
+  "totalAmount": "50.00",
+  "expectedPaymentMethod": "CASH",
+  "changeFor": "50.00",
+  "changedByStore": false,
+  "trackingExpiresAt": "2026-11-03T12:00:00Z"
+}
+```
+
+- `status` (ADR-0047 item 7): `AWAITING_PAYMENT` (Fase 2), `AWAITING_ACCEPTANCE`, `REJECTED`, `EXPIRED`, `WITHDRAWN`, `CONFIRMED` (aceito, produção `OPEN`), `IN_PREPARATION`, `READY_FOR_DELIVERY`, `READY_FOR_PICKUP`, `OUT_FOR_DELIVERY`, `DELIVERED`, `PICKED_UP`, `CANCELED`. Um pedido que volta de `COMPLETED` para `IN_PROGRESS` volta a `IN_PREPARATION`. Prazo de aceite vencido antes de o job rodar já aparece como `EXPIRED`.
+- `timeline[].step`: `SUBMITTED`, `ACCEPTED`, `IN_PREPARATION`, `READY`, `OUT_FOR_DELIVERY`, `DELIVERED`, `PICKED_UP`, `REJECTED`, `EXPIRED`, `WITHDRAWN`, `CANCELED`, em ordem de horário.
+- `rejection`: `{ "reasonCode": "ITEM_UNAVAILABLE", "message": "A costela acabou." }`; em `SUSPECTED_PRANK`, `message: null` (ADR-0046 item 12). `BUSINESS_DAY_CLOSED` na recusa do fechamento.
+- `canWithdraw`: `true` só em `AWAITING_ACCEPTANCE`.
+- `changedByStore`: o restaurante alterou o pedido depois do aceite ("O restaurante alterou seu pedido", com o total atualizado).
+- `deliveryAddress` (entrega): só `{ "street", "number" }`. **Nunca** aparecem telefone, sobrenome, complemento, referência, funcionários, outros pedidos ou saldo de fiado (ADR-0047 itens 5 e 6). `deliveryDistanceKm` entra com a fatia 4.
+- `ETag: "{version}"`. A página consulta a cada 20 s com `If-None-Match`; sem mudança → `304 Not Modified` (ADR-0047 item 8).
+- Toda resposta de `/public/tracking/*` (inclusive erros) leva `Cache-Control: private, no-store`, `Referrer-Policy: no-referrer` e `X-Robots-Tag: noindex` (item 9).
+- Token inventado, malformado ou de pedido apagado → `404 NotFound`, sem nada do restaurante. Mais de 7 dias → `410 TrackingExpired` (o registro é apagado pelo job de retenção, e depois disso o mesmo token dá `404`).
+
+### `POST /public/tracking/{trackingToken}/withdraw` — público
+
+Sem corpo. Desistência enquanto `AWAITING_ACCEPTANCE` (ADR-0046 item 17) → `200` com o acompanhamento (`status: "WITHDRAWN"`). Já aceito, recusado ou desistido → `409 OrderNotAwaitingAcceptance` (extensão `acceptanceStatus`); prazo vencido → `409 WebOrderExpired`. Auditoria `WebOrderWithdrawn` com `origin: "WEB"`, sem ator; o app recebe `OrderRejected` (§6.14) com `acceptanceStatus: "WITHDRAWN"`.
+
+### Configuração (API)
+
+| Chave | Uso | Desenvolvimento / testes |
+|---|---|---|
+| `Cors:PublicPageOrigins` | origens da página | `["http://localhost:3000"]` |
+| `Turnstile:Enabled`, `Turnstile:SecretKey`, `Turnstile:TimeoutSeconds` (3) | Cloudflare Turnstile. A chave secreta vem do Key Vault; `Enabled` sem chave impede a API de subir | dev: chave secreta de **teste** oficial `1x0000000000000000000000000000000AA` (sempre passa); testes: desligado, e ligado com `siteverify` simulado no teste dedicado |
+| `PublicPage:IpHashSecret` | segredo do sal diário do hash do IP (Key Vault). Vazio → sal aleatório por processo | vazio |
+| `PublicPage:RendererKey` | `X-Web-Renderer-Key` do servidor da página (Key Vault). Vazio → sem isenção | vazio |
+| `WebOrders:RetentionJobEnabled`, `RetentionIntervalMinutes` (60) | job de retenção do ADR-0052 | testes: desligado, chamado por `RunOnceAsync` |

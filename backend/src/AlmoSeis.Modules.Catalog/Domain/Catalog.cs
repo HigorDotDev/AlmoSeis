@@ -23,6 +23,9 @@ internal sealed class Product : AggregateRoot, ITenantOwned, ISyncTracked
     public string? ImageStorageKey { get; private set; }
     public bool IsActive { get; private set; } = true;
     public bool IsAvailable { get; private set; } = true;
+
+    /// Bebidas e adicionais podem ser escondidos da página de pedidos (ADR-0044 item 5). Pratos seguem o cardápio do dia.
+    public bool IsVisibleOnPage { get; private set; } = true;
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
@@ -74,6 +77,7 @@ internal sealed class Product : AggregateRoot, ITenantOwned, ISyncTracked
         ImageStorageKey = changes.ImageStorageKey.GetValueOr(ImageStorageKey);
         IsActive = changes.IsActive.GetValueOr(IsActive);
         IsAvailable = changes.IsAvailable.GetValueOr(IsAvailable);
+        IsVisibleOnPage = changes.IsVisibleOnPage.GetValueOr(IsVisibleOnPage);
 
         EnsurePriceMatchesKind();
 
@@ -105,7 +109,7 @@ internal sealed class Product : AggregateRoot, ITenantOwned, ISyncTracked
     }
 
     private object Snapshot() =>
-        (Kind, Name, Description, Category, DefaultPrice, RequiresPreparation, ImageStorageKey, IsActive, IsAvailable);
+        (Kind, Name, Description, Category, DefaultPrice, RequiresPreparation, ImageStorageKey, IsActive, IsAvailable, IsVisibleOnPage);
 
     private static string? Clean(string? text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
 }
@@ -120,7 +124,8 @@ internal sealed record ProductChanges(
     Optional<bool> RequiresPreparation,
     Optional<string?> ImageStorageKey,
     Optional<bool> IsActive,
-    Optional<bool> IsAvailable);
+    Optional<bool> IsAvailable,
+    Optional<bool> IsVisibleOnPage);
 
 /// Tamanho de marmita (P/M/G) com o preço da marmita (ADR-0020).
 internal sealed class MarmitaSize : AggregateRoot, ITenantOwned, ISyncTracked

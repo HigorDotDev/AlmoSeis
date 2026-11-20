@@ -17,8 +17,12 @@ public sealed class IdempotentAttribute : Attribute, IFilterFactory
 {
     public bool IsReusable => false;
 
+    /// Rota pública (ADR-0045 item 10): o `endpoint` gravado é o modelo da rota, não o caminho, para o reenvio depois de
+    /// uma troca de slug (redirecionamento 308) continuar sendo a mesma operação. O escopo continua `(tenant, key)`.
+    public bool Public { get; init; }
+
     public IFilterMetadata CreateInstance(IServiceProvider serviceProvider) =>
-        ActivatorUtilities.CreateInstance<IdempotencyFilter>(serviceProvider);
+        ActivatorUtilities.CreateInstance<IdempotencyFilter>(serviceProvider, Public);
 }
 
 /// 07 §7.4. Abre a transação antes da ação (o decorator transacional a reutiliza), registra a chave,
@@ -28,7 +32,8 @@ internal sealed class IdempotencyFilter(
     AppDbContext db,
     IIdempotencyStore store,
     ISecretHasher hasher,
-    IOptions<JsonOptions> json) : IAsyncActionFilter
+    IOptions<JsonOptions> json,
+    bool isPublic) : IAsyncActionFilter
 {
     public const string KeyHeader = "Idempotency-Key";
     public const string ReplayedHeader = "Idempotent-Replayed";
@@ -48,7 +53,9 @@ internal sealed class IdempotencyFilter(
         }
 
         var cancellationToken = http.RequestAborted;
-        var endpoint = $"{http.Request.Method} {http.Request.Path}";
+        var endpoint = isPublic && context.ActionDescriptor.AttributeRouteInfo?.Template is { } template
+            ? $"{http.Request.Method} /{template}"
+            : $"{http.Request.Method} {http.Request.Path}";
 
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
 

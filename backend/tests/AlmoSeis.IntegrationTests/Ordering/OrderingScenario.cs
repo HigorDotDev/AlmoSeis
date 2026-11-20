@@ -171,8 +171,8 @@ public sealed class OrderingScenario
     public async Task<JsonElement> CreateOrderAsync(object body, HttpClient? client = null) =>
         await (await (client ?? Client).PostIdempotentAsync("/api/v1/orders", body, Guid.NewGuid())).ExpectAsync(HttpStatusCode.Created, Api);
 
-    /// Pedido "pagar na entrega/retirada" da página (ADR-0046). A rota pública entra na fatia 2: aqui o envio usa o
-    /// caso de uso interno, no contexto do tenant e sem funcionário, como a rota pública fará.
+    /// Pedido "pagar na entrega/retirada" da página (ADR-0046) pelo caso de uso interno (a rota pública está em
+    /// PublicStorefrontFlowTests), no contexto do tenant e sem funcionário.
     /// Entrega: 2 marmitas M (40,00) + 5,00 de taxa = 45,00. Retirada: 40,00.
     public async Task<Guid> SubmitWebOrderAsync(bool delivery = true, int quantity = 2, string? phone = "+5534988887777", string name = "Carla Souza")
     {

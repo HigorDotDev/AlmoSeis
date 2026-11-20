@@ -122,3 +122,13 @@ public interface ITenantSettingsReader
 {
     Task<TenantOperationalSettings> GetAsync(CancellationToken cancellationToken);
 }
+
+/// Estabelecimento recém-criado no autocadastro (ADR-0018).
+public sealed record NewTenantInfo(Guid TenantId, string Name, string City, DateTimeOffset CreatedAt);
+
+/// Declarada aqui e implementada pelos módulos acima do Identity que preparam o tenant novo na **mesma transação** do
+/// autocadastro (ex.: a página de pedidos nasce inativa com o slug reservado, ADR-0044 item 11). Sessão já no tenant.
+public interface ITenantCreatedListener
+{
+    Task OnTenantCreatedAsync(NewTenantInfo tenant, CancellationToken cancellationToken);
+}

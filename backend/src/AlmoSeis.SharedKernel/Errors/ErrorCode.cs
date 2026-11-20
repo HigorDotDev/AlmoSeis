@@ -74,6 +74,15 @@ public static class ErrorCodes
     public static readonly ErrorCode IfMatchRequired = new("IfMatchRequired", 428, "Envie o header If-Match.");
     public static readonly ErrorCode TooManyRequests = new("TooManyRequests", 429, "Muitas tentativas.");
 
+    // ---------- Página de pedidos (EP-002, ADR-0044/0045/0047) ----------
+    public static readonly ErrorCode StoreNotFound = new("StoreNotFound", 404, "Restaurante não encontrado.");
+    public static readonly ErrorCode StoreUnavailable = new("StoreUnavailable", 409, "O restaurante não está recebendo pedidos pela página agora.");
+    public static readonly ErrorCode CartChanged = new("CartChanged", 409, "Seu pedido mudou. Confira os itens e os valores.");
+    public static readonly ErrorCode DeliveryUnavailable = new("DeliveryUnavailable", 422, "A entrega pela página não está disponível agora. Você pode retirar no local.");
+    public static readonly ErrorCode CaptchaFailed = new("CaptchaFailed", 403, "Não conseguimos confirmar que você não é um robô. Tente de novo.");
+    public static readonly ErrorCode TooManyPendingOrders = new("TooManyPendingOrders", 429, "Você já tem pedidos aguardando o restaurante.");
+    public static readonly ErrorCode TrackingExpired = new("TrackingExpired", 410, "Este acompanhamento expirou.");
+
     public static IReadOnlyList<ErrorCode> All { get; } =
     [
         MalformedRequest, Unauthenticated, InvalidCredentials, InvalidRefreshToken, InvalidDeviceSecret,
@@ -86,5 +95,6 @@ public static class ErrorCodes
         SyncCursorExpired, ValidationFailed, IdempotencyKeyReused, PaymentExceedsBalance, TotalBelowPaidAmount,
         PaymentMethodDisabled, ProductUnavailable, KiloPriceNotConfigured, JustificationRequired, PinLocked,
         AppVersionUnsupported, IdempotencyKeyRequired, IfMatchRequired, TooManyRequests,
+        StoreNotFound, StoreUnavailable, CartChanged, DeliveryUnavailable, CaptchaFailed, TooManyPendingOrders, TrackingExpired,
     ];
 }

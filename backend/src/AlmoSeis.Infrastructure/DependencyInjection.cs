@@ -59,6 +59,14 @@ public static class DependencyInjection
         services.AddSingleton<IJwtTokenIssuer, JwtTokenIssuer>();
         services.AddSingleton<ISecretHasher, Sha256SecretHasher>();
 
+        // Página de pedidos (ADR-0045): Turnstile e hash do IP.
+        services.AddOptions<TurnstileOptions>().Bind(configuration.GetSection(TurnstileOptions.Section))
+            .Validate(o => !o.Enabled || !string.IsNullOrWhiteSpace(o.SecretKey), "Turnstile:SecretKey é obrigatório com Turnstile:Enabled.")
+            .ValidateOnStart();
+        services.AddHttpClient<ITurnstileVerifier, TurnstileVerifier>();
+        services.AddOptions<PublicPageOptions>().Bind(configuration.GetSection(PublicPageOptions.Section));
+        services.AddSingleton<IClientIpHasher, ClientIpHasher>();
+
         return services;
     }
 

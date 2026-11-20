@@ -49,6 +49,9 @@ public static class Permissions
     public const string EmployeesManage = "employees.manage";
     public const string DevicesManage = "devices.manage";
     public const string SettingsManage = "settings.manage";
+
+    /// Página de pedidos: perfil, slug, pausa, endereço e entrega (ADR-0046 item 22, ADR-0044).
+    public const string StorefrontManage = "storefront.manage";
     public const string AuditView = "audit.view";
     public const string SubscriptionView = "subscription.view";
 
@@ -60,7 +63,7 @@ public static class Permissions
         Cash.Open, Cash.Movement,
         Closing.View, Closing.Finalize, Closing.Adjust,
         MenuManage, CatalogManage, CustomersManage,
-        EmployeesManage, DevicesManage, SettingsManage, AuditView, SubscriptionView,
+        EmployeesManage, DevicesManage, SettingsManage, StorefrontManage, AuditView, SubscriptionView,
     ];
 }
 

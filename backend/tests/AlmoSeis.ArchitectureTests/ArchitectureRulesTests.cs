@@ -158,6 +158,46 @@ public sealed class ArchitectureRulesTests
         offenders.ShouldBeEmpty("Leia cookie só por WebSession.RefreshToken/DeviceSecret (ADR-0053 §3.4, 07 §7.12).");
     }
 
+    /// ADR-0045 item 7: os controllers públicos (`AlmoSeis.Api.Controllers.Public`, rotas `/api/v1/public/*`) só chamam
+    /// handlers marcados com `IPublicHandler`, e todo handler público existe só para eles.
+    [Fact]
+    public void Rule9_public_controllers_only_call_public_handlers()
+    {
+        var handlerInterfaces = new[] { typeof(AlmoSeis.SharedKernel.Application.ICommandHandler<,>), typeof(AlmoSeis.SharedKernel.Application.IQueryHandler<,>) };
+        bool IsHandler(Type t) => t.IsGenericType && handlerInterfaces.Contains(t.GetGenericTypeDefinition());
+
+        var implementations = ModuleAssemblies.SelectMany(a => a.GetTypes())
+            .Where(t => t.IsClass && !t.IsAbstract && !t.IsGenericTypeDefinition)
+            .SelectMany(t => t.GetInterfaces().Where(IsHandler).Select(i => (Service: i, Implementation: t)))
+            .ToList();
+
+        var publicControllers = typeof(Program).Assembly.GetTypes()
+            .Where(t => t.Namespace == "AlmoSeis.Api.Controllers.Public" && t.Name.EndsWith("Controller", StringComparison.Ordinal))
+            .ToList();
+        publicControllers.ShouldNotBeEmpty();
+
+        var used = publicControllers
+            .SelectMany(c => c.GetMethods().SelectMany(m => m.GetParameters()).Concat(c.GetConstructors().SelectMany(k => k.GetParameters())))
+            .Select(p => p.ParameterType)
+            .Where(IsHandler)
+            .Distinct()
+            .ToList();
+        used.ShouldNotBeEmpty();
+
+        var offenders = used
+            .SelectMany(service => implementations.Where(i => i.Service == service).Select(i => i.Implementation)
+                .DefaultIfEmpty(null).Select(impl => (service, impl)))
+            .Where(x => x.impl is null || !typeof(AlmoSeis.SharedKernel.Application.IPublicHandler).IsAssignableFrom(x.impl))
+            .Select(x => $"{x.service.Name}<{string.Join(",", x.service.GetGenericArguments().Select(g => g.Name))}> → {x.impl?.Name ?? "sem implementação"}")
+            .ToList();
+        offenders.ShouldBeEmpty("Controller público só chama handler IPublicHandler (ADR-0045 item 7).");
+
+        var orphan = implementations.Where(i => typeof(AlmoSeis.SharedKernel.Application.IPublicHandler).IsAssignableFrom(i.Implementation) && !used.Contains(i.Service))
+            .Select(i => i.Implementation.Name)
+            .ToList();
+        orphan.ShouldBeEmpty("Handler público fora dos controllers públicos.");
+    }
+
     private static string Failing(NetArchTest.Rules.TestResult result) =>
         result.IsSuccessful ? string.Empty : "Violações: " + string.Join(", ", result.FailingTypeNames ?? []);
 

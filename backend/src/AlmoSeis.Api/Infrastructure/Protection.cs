@@ -74,7 +74,15 @@ internal static class RateLimitPolicies
                 Limit(http => IsPin(http) ? $"pin:{http.Items[InstallationKey] as string ?? InstallationFromPath(http) ?? Ip(http)}" : null, 30, TimeSpan.FromMinutes(1)),
                 Limit(http => Starts(http, "/api/v1/invitations") ? $"inv-min:{Ip(http)}" : null, 10, TimeSpan.FromMinutes(1)),
                 Limit(http => Starts(http, "/api/v1/invitations") ? $"inv-day:{Ip(http)}" : null, 50, TimeSpan.FromDays(1)),
-                Limit(http => Starts(http, "/webhooks/asaas") ? $"webhook:{Ip(http)}" : null, 120, TimeSpan.FromMinutes(1)));
+                Limit(http => Starts(http, "/webhooks/asaas") ? $"webhook:{Ip(http)}" : null, 120, TimeSpan.FromMinutes(1)),
+                // Página de pedidos (ADR-0045 item 11). O servidor da página (X-Web-Renderer-Key) fica fora do limite de leitura.
+                Limit(http => IsPublicRead(http) && !PublicRoutes.IsRenderer(http) ? $"public-read:{Ip(http)}" : null, 120, TimeSpan.FromMinutes(1)),
+                Limit(http => IsPublicQuote(http) ? $"public-quote-min:{Ip(http)}" : null, 10, TimeSpan.FromMinutes(1)),
+                Limit(http => IsPublicQuote(http) ? $"public-quote-day:{Ip(http)}" : null, 60, TimeSpan.FromDays(1)),
+                Limit(http => IsPublicQuote(http) ? $"public-quote-store:{StoreSlug(http)}" : null, 300, TimeSpan.FromDays(1)),
+                Limit(http => IsPublicOrder(http) ? $"public-order-min:{Ip(http)}" : null, 5, TimeSpan.FromMinutes(1)),
+                Limit(http => IsPublicOrder(http) ? $"public-order-hour:{Ip(http)}" : null, 20, TimeSpan.FromHours(1)),
+                Limit(http => IsPublicTracking(http) ? $"public-tracking:{Ip(http)}" : null, 60, TimeSpan.FromMinutes(1)));
 
             o.OnRejected = async (context, cancellationToken) =>
             {
@@ -115,6 +123,23 @@ internal static class RateLimitPolicies
         });
 
     private static bool IsAuth(HttpContext http) => AuthPaths.Any(p => Starts(http, p));
+
+    private static bool IsPublicRead(HttpContext http) => HttpMethods.IsGet(http.Request.Method) && Starts(http, PublicRoutes.Stores);
+
+    private static bool IsPublicQuote(HttpContext http) =>
+        HttpMethods.IsPost(http.Request.Method) && Starts(http, PublicRoutes.Stores) && Ends(http, "/delivery-quotes");
+
+    private static bool IsPublicOrder(HttpContext http) =>
+        HttpMethods.IsPost(http.Request.Method)
+        && ((Starts(http, PublicRoutes.Stores) && Ends(http, "/orders")) || (Starts(http, PublicRoutes.Tracking) && Ends(http, "/withdraw")));
+
+    private static bool IsPublicTracking(HttpContext http) => HttpMethods.IsGet(http.Request.Method) && Starts(http, PublicRoutes.Tracking);
+
+    private static bool Ends(HttpContext http, string suffix) =>
+        http.Request.Path.Value!.TrimEnd('/').EndsWith(suffix, StringComparison.OrdinalIgnoreCase);
+
+    private static string StoreSlug(HttpContext http) =>
+        http.Request.Path.Value!.Split('/', StringSplitOptions.RemoveEmptyEntries) is [_, _, _, _, var slug, ..] ? slug.ToLowerInvariant() : "unknown";
 
     private static bool IsPin(HttpContext http) =>
         Starts(http, "/api/v1/auth/pin-login")

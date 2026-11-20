@@ -49,13 +49,32 @@ internal sealed class CatalogReader(AppDbContext db, IObjectStorage storage) : I
             p => p.Id,
             p => new CatalogProduct(
                 p.Id, p.Kind, p.Name, p.Description, p.DefaultPrice, p.RequiresPreparation,
-                storage.PublicUrl(p.ImageStorageKey), p.IsActive, p.IsAvailable));
+                storage.PublicUrl(p.ImageStorageKey), p.IsActive, p.IsAvailable, p.IsVisibleOnPage));
     }
+
+    public async Task<IReadOnlyList<CatalogProduct>> ListActiveAsync(IReadOnlyCollection<ProductKind> kinds, CancellationToken cancellationToken)
+    {
+        var rows = await db.Set<Product>().AsNoTracking()
+            .Where(p => p.IsActive && kinds.Contains(p.Kind))
+            .OrderBy(p => p.Name).ThenBy(p => p.Id)
+            .ToListAsync(cancellationToken);
+        return rows.Select(p => new CatalogProduct(
+                p.Id, p.Kind, p.Name, p.Description, p.DefaultPrice, p.RequiresPreparation,
+                storage.PublicUrl(p.ImageStorageKey), p.IsActive, p.IsAvailable, p.IsVisibleOnPage))
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<CatalogMarmitaSize>> ListActiveMarmitaSizesAsync(CancellationToken cancellationToken) =>
+        await db.Set<MarmitaSize>().AsNoTracking()
+            .Where(s => s.IsActive)
+            .OrderBy(s => s.SortOrder).ThenBy(s => s.Name)
+            .Select(s => new CatalogMarmitaSize(s.Id, s.Name, s.Price, s.IsActive, s.SortOrder))
+            .ToListAsync(cancellationToken);
 
     public async Task<CatalogMarmitaSize?> GetMarmitaSizeAsync(Guid marmitaSizeId, CancellationToken cancellationToken) =>
         await db.Set<MarmitaSize>().AsNoTracking()
             .Where(s => s.Id == marmitaSizeId)
-            .Select(s => new CatalogMarmitaSize(s.Id, s.Name, s.Price, s.IsActive))
+            .Select(s => new CatalogMarmitaSize(s.Id, s.Name, s.Price, s.IsActive, s.SortOrder))
             .SingleOrDefaultAsync(cancellationToken);
 }
 

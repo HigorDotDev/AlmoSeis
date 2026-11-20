@@ -43,6 +43,13 @@ public static class AuthenticationSetup
                     OnTokenValidated = EmployeeAccessValidator.ValidateAsync,
                     OnMessageReceived = ctx =>
                     {
+                        // Rotas públicas ignoram qualquer Authorization recebido (ADR-0045 item 2): o tenant vem do slug.
+                        if (PublicRoutes.IsPublic(ctx.HttpContext))
+                        {
+                            ctx.NoResult();
+                            return Task.CompletedTask;
+                        }
+
                         // SignalR envia o token na query string (06 §6.14).
                         if (ctx.Request.Path.StartsWithSegments("/hubs") && ctx.Request.Query.TryGetValue("access_token", out var token))
                         {

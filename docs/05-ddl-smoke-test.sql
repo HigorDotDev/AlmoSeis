@@ -261,6 +261,49 @@ DO $$ BEGIN
   RAISE NOTICE 'ok: aceite e recusa coerentes';
 END $$;
 
+-- ===== Página de pedidos: perfil, slug, acompanhamento, LGPD (ADR-0044/0045/0047/0052, migration 0004) =====
+INSERT INTO storefront_settings (tenant_id, public_name, updated_at) VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'Marmitaria A', now());
+INSERT INTO store_slugs (slug, tenant_id, is_current, created_at) VALUES ('marmitaria-a', 'aaaaaaaa-0000-0000-0000-000000000001', true, now());
+INSERT INTO order_tracking_tokens (token_hash, tenant_id, order_id, created_at, expires_at)
+VALUES (repeat('a', 64), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c04', now(), now() + interval '7 days');
+INSERT INTO web_order_intakes (order_id, tenant_id, ip_hash, created_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000c04', 'aaaaaaaa-0000-0000-0000-000000000001', repeat('b', 64), now());
+
+DO $$ BEGIN
+  UPDATE storefront_settings SET is_page_active = true WHERE tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001';
+  RAISE EXCEPTION 'FALHOU: pagina ativa sem endereco aceita';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: pagina ativa exige endereco'; END $$;
+
+DO $$ BEGIN
+  INSERT INTO store_slugs (slug, tenant_id, is_current, created_at) VALUES ('marmitaria-a-2', 'aaaaaaaa-0000-0000-0000-000000000001', true, now());
+  RAISE EXCEPTION 'FALHOU: dois slugs atuais no mesmo tenant';
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'ok: um slug atual por tenant'; END $$;
+
+DO $$ BEGIN
+  INSERT INTO store_slugs (slug, tenant_id, is_current, replaced_at, created_at)
+  VALUES ('Marmitaria--A', 'aaaaaaaa-0000-0000-0000-000000000001', false, now(), now());
+  RAISE EXCEPTION 'FALHOU: slug fora do formato aceito';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: formato do slug'; END $$;
+
+DO $$ BEGIN
+  UPDATE orders SET expected_payment_method = 'PIX', change_for = 50.00 WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c04';
+  RAISE EXCEPTION 'FALHOU: troco em Pix aceito';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: troco so em dinheiro'; END $$;
+
+DO $$ BEGIN
+  UPDATE orders SET expected_payment_method = 'CASH' WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c01';
+  RAISE EXCEPTION 'FALHOU: forma prevista em pedido do app aceita';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: campos da pagina so em pedido WEB'; END $$;
+
+-- Idempotência anônima da página: user_id nulo, escopo (tenant, key)
+INSERT INTO idempotency_records (id, tenant_id, key, user_id, endpoint, request_hash, status, created_at, expires_at)
+VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', gen_random_uuid(), NULL,
+        'POST /api/v1/public/stores/{slug}/orders', repeat('c', 64), 'IN_PROGRESS', now(), now() + interval '72 hours');
+DO $$ BEGIN
+  IF (SELECT count(*) FROM idempotency_records WHERE user_id IS NULL) <> 1 THEN RAISE EXCEPTION 'FALHOU: idempotencia anonima'; END IF;
+  RAISE NOTICE 'ok: idempotencia anonima da pagina';
+END $$;
+
 -- ===== Tenant B =====
 SELECT set_config('app.tenant_id', 'bbbbbbbb-0000-0000-0000-000000000002', false),
        set_config('app.user_id',   'bbbbbbbb-0000-0000-0000-0000000000b2', false);
@@ -295,6 +338,33 @@ DO $$ BEGIN
           'MARMITA', 'APP', 'PICKUP', 'x', 1, 0, 1, 'OPEN', now(), 'PENDING', now(), 'aaaaaaaa-0000-0000-0000-0000000000e1', now(), now());
   RAISE EXCEPTION 'FALHOU: tenant B gravou com tenant_id de A';
 EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'ok: WITH CHECK impede gravar em outro tenant'; END $$;
+
+-- Página: slug e token têm leitura aberta (a resolução vem antes do tenant); perfil e hash do IP ficam isolados
+DO $$ BEGIN
+  IF (SELECT count(*) FROM store_slugs WHERE slug = 'marmitaria-a') <> 1 THEN RAISE EXCEPTION 'FALHOU: slug de A nao resolvido'; END IF;
+  IF (SELECT count(*) FROM order_tracking_tokens WHERE token_hash = repeat('a', 64)) <> 1 THEN RAISE EXCEPTION 'FALHOU: token nao resolvido'; END IF;
+  IF (SELECT count(*) FROM storefront_settings) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve o perfil de A'; END IF;
+  IF (SELECT count(*) FROM web_order_intakes) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve o IP de A'; END IF;
+  RAISE NOTICE 'ok: slug e token resolviveis; perfil e IP isolados';
+END $$;
+
+DO $$ BEGIN
+  INSERT INTO store_slugs (slug, tenant_id, is_current, replaced_at, created_at)
+  VALUES ('invasao-a', 'aaaaaaaa-0000-0000-0000-000000000001', false, now(), now());
+  RAISE EXCEPTION 'FALHOU: tenant B gravou slug de A';
+EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'ok: tenant B nao grava slug de A'; END $$;
+
+DO $$ BEGIN
+  UPDATE store_slugs SET is_current = false, replaced_at = now() WHERE slug = 'marmitaria-a';
+  IF FOUND THEN RAISE EXCEPTION 'FALHOU: tenant B alterou slug de A'; END IF;
+  RAISE NOTICE 'ok: tenant B nao altera slug de A';
+END $$;
+
+DO $$ BEGIN
+  INSERT INTO order_tracking_tokens (token_hash, tenant_id, order_id, created_at, expires_at)
+  VALUES (repeat('d', 64), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c03', now(), now() + interval '7 days');
+  RAISE EXCEPTION 'FALHOU: tenant B gravou token de A';
+EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'ok: tenant B nao grava token de A'; END $$;
 
 -- ===== Login: sem tenant ativo, o usuário A enxerga só os próprios vínculos =====
 SELECT set_config('app.tenant_id', '', false), set_config('app.user_id', 'aaaaaaaa-0000-0000-0000-0000000000a1', false);

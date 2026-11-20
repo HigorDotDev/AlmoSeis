@@ -9,7 +9,8 @@ namespace AlmoSeis.Api.Infrastructure;
 /// Fora do bloqueio: leituras, /auth, /admin e /webhooks. Suspenso ainda pode finalizar o fechamento em aberto.
 internal sealed class SubscriptionWriteGuardFilter(ITenantContext tenant, ISubscriptionAccess subscriptions) : IAsyncActionFilter
 {
-    private static readonly string[] OpenPrefixes = ["/api/v1/auth", "/api/v1/admin", "/webhooks"];
+    /// `/api/v1/public`: a página responde `409 StoreUnavailable` sem dizer o motivo (ADR-0045 item 16), no handler.
+    private static readonly string[] OpenPrefixes = ["/api/v1/auth", "/api/v1/admin", "/webhooks", "/api/v1/public"];
 
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {

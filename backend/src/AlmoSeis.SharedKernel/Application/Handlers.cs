@@ -12,6 +12,10 @@ public interface IQueryHandler<in TQuery, TResult>
     Task<TResult> HandleAsync(TQuery query, CancellationToken cancellationToken);
 }
 
+/// Caso de uso exposto pelas rotas públicas `/api/v1/public/*` (ADR-0045 item 7). Só handlers marcados podem ser
+/// chamados pelos controllers públicos (regra de arquitetura 9, 07 §7.12): o tenant vem do slug ou do token, nunca do JWT.
+public interface IPublicHandler;
+
 /// DTO de recurso versionado: o filtro de ETag escreve `ETag: "{Version}"`.
 public interface IVersionedDto
 {

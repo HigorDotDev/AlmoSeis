@@ -32,6 +32,14 @@ public static class OrderingModule
         services.AddScoped<IAwaitingWebOrdersRejector, AwaitingWebOrdersRejector>();
         services.AddSingleton<WebOrderExpiryJob>();
         services.AddHostedService(sp => sp.GetRequiredService<WebOrderExpiryJob>());
+
+        // Página de pedidos: envio, acompanhamento e retenção (ADR-0044, ADR-0045, ADR-0047, ADR-0052).
+        services.AddScoped<WebOrderSubmitter>();
+        services.AddScoped<WebOrderWithdrawal>();
+        services.AddScoped<TrackedOrderLoader>();
+        services.AddScoped<ITrackingTokenResolver, TrackingTokenResolver>();
+        services.AddSingleton<WebOrderRetentionJob>();
+        services.AddHostedService(sp => sp.GetRequiredService<WebOrderRetentionJob>());
         // O Payments registra a implementação real; até lá, pedidos sem pagamentos.
         services.TryAddScoped<IOrderPaymentsReader, NoOrderPayments>();
 

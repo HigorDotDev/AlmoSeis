@@ -25,6 +25,7 @@ public sealed record ProductDto(
     string? ImageUrl,
     bool IsActive,
     bool IsAvailable,
+    bool IsVisibleOnPage,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt) : IVersionedDto;
 
@@ -50,7 +51,8 @@ public sealed record UpdateProductRequest(
     Optional<bool> RequiresPreparation,
     Optional<string?> ImageStorageKey,
     Optional<bool> IsActive,
-    Optional<bool> IsAvailable);
+    Optional<bool> IsAvailable,
+    Optional<bool> IsVisibleOnPage = default);
 
 public sealed record UpdateProductCommand(Guid ProductId, UpdateProductRequest Changes);
 
@@ -84,9 +86,10 @@ public sealed record CatalogProduct(
     bool RequiresPreparation,
     string? ImageUrl,
     bool IsActive,
-    bool IsAvailable);
+    bool IsAvailable,
+    bool IsVisibleOnPage = true);
 
-public sealed record CatalogMarmitaSize(Guid Id, string Name, Money Price, bool IsActive);
+public sealed record CatalogMarmitaSize(Guid Id, string Name, Money Price, bool IsActive, int SortOrder = 0);
 
 /// Leitura do catálogo por outros módulos (Menu, Ordering), sempre no tenant corrente.
 public interface ICatalogReader
@@ -94,6 +97,12 @@ public interface ICatalogReader
     Task<IReadOnlyDictionary<Guid, CatalogProduct>> GetProductsAsync(IReadOnlyCollection<Guid> productIds, CancellationToken cancellationToken);
 
     Task<CatalogMarmitaSize?> GetMarmitaSizeAsync(Guid marmitaSizeId, CancellationToken cancellationToken);
+
+    /// Página de pedidos (ADR-0044 item 5): produtos ativos dos tipos pedidos, na ordem do nome.
+    Task<IReadOnlyList<CatalogProduct>> ListActiveAsync(IReadOnlyCollection<ProductKind> kinds, CancellationToken cancellationToken);
+
+    /// Tamanhos ativos, na ordem de `sortOrder`.
+    Task<IReadOnlyList<CatalogMarmitaSize>> ListActiveMarmitaSizesAsync(CancellationToken cancellationToken);
 }
 
 /// Implementado pelos módulos que referenciam produtos (Menu, Ordering). Produto em uso não muda de `kind`.

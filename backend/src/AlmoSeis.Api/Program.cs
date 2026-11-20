@@ -9,6 +9,7 @@ using AlmoSeis.Modules.Identity;
 using AlmoSeis.Modules.Menu;
 using AlmoSeis.Modules.Ordering;
 using AlmoSeis.Modules.Payments;
+using AlmoSeis.Modules.Storefront;
 using AlmoSeis.Modules.Sync;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,6 +20,7 @@ builder.Services.AddIdentityModule();
 builder.Services.AddCatalogModule();
 builder.Services.AddMenuModule();
 builder.Services.AddClosingModule();
+builder.Services.AddStorefrontModule();
 builder.Services.AddOrderingModule();
 builder.Services.AddPaymentsModule();
 builder.Services.AddSyncModule();
@@ -34,6 +36,7 @@ builder.Services.AddScoped<ValidationFilter>();
 builder.Services.AddScoped<SubscriptionWriteGuardFilter>();
 builder.Services.AddSingleton<WebSessionCookieFilter>();
 builder.Services.AddRestaurantAppCors();
+builder.Services.AddPublicPageCors();
 builder.Services.AddAlmoSeisForwardedHeaders();
 builder.Services
     .AddControllers(o =>
@@ -66,11 +69,16 @@ if (!app.Environment.IsDevelopment())
 }
 
 // CORS logo depois do tratador de erros: o preflight responde aqui, e os erros também levam os headers (ADR-0053 §4).
-app.UseCors(RestaurantAppCorsOptions.Policy);
+// Duas políticas que não se misturam: a página pública (sem credenciais) só em /api/v1/public; o app do restaurante no resto.
+app.UseWhen(PublicRoutes.IsPublic, branch => branch.UseCors(PublicPageCorsOptions.Policy));
+app.UseWhen(http => !PublicRoutes.IsPublic(http), branch => branch.UseCors(RestaurantAppCorsOptions.Policy));
 app.UseMiddleware<HubOriginMiddleware>();
 app.UseMiddleware<AppVersionMiddleware>();
 app.UseMiddleware<RateLimitKeyMiddleware>();
 app.UseRateLimiter();
+// Rotas públicas: tenant pelo slug ou pelo token, antes da autenticação (que as ignora, ADR-0045).
+app.UseMiddleware<TrackingHeadersMiddleware>();
+app.UseMiddleware<PublicTenantMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 

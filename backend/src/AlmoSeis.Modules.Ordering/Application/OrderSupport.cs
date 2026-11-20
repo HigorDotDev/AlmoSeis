@@ -321,6 +321,7 @@ internal sealed class OrderDtoBuilder(IEmployeeDirectory employees, IOrderPaymen
         return new OrderDto(
             order.Id, order.Version, order.OrderNumber, order.BusinessDayId, order.BusinessDate, order.OrderType, order.Origin,
             order.FulfillmentType, customer, order.DeliveryAddress, order.TableLabel, order.TabNumber, order.Notes,
+            order.ExpectedPaymentMethod, order.ChangeFor, order.RiskFlag,
             order.DeliveryFee, order.ItemsTotal, order.WeighingsTotal, order.TotalAmount, order.PaidAmount, order.Balance, order.IsPaid,
             order.ProductionStatus, order.ProductionStatusChangedAt, order.CancellationStatus, cancellation,
             order.AcceptanceStatus, order.AcceptanceDeadline, order.AcceptedAt, MaybeAuthor(order.AcceptedByEmployeeId), order.EstimatedReadyMinutes,

@@ -64,6 +64,16 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     public DateTimeOffset? DeliveredAt { get; private set; }
     public DateTimeOffset? PickedUpAt { get; private set; }
 
+    /// Pedido da página (ADR-0044 item 19): forma prevista e "troco para". Só informação para o entregador.
+    public ExpectedPaymentMethod? ExpectedPaymentMethod { get; private set; }
+    public Money? ChangeFor { get; private set; }
+
+    /// `CAPTCHA_UNAVAILABLE`: o Turnstile não respondeu no envio (ADR-0045 item 12).
+    public WebOrderRiskFlag? RiskFlag { get; private set; }
+
+    /// Anonimização do pedido da página que não virou venda, 7 dias depois (ADR-0052 item 3).
+    public DateTimeOffset? AnonymizedAt { get; private set; }
+
     /// Nulo só em pedido da página (`Origin = WEB`).
     public Guid? CreatedByEmployeeId { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
@@ -156,7 +166,7 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     /// autor. Espera o aceite até `deadline`. Pertence ao expediente aberto no envio (item 5).
     public static Order SubmitFromWeb(
         Guid id, Guid tenantId, NewOrder data, Guid businessDayId, DateOnly businessDate, DateTimeOffset deadline,
-        Func<Guid> newId, DateTimeOffset now)
+        Func<Guid> newId, DateTimeOffset now, WebOrderExtras? extras = null)
     {
         if (data.OrderType != OrderType.Marmita)
         {
@@ -201,17 +211,68 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
             CancellationStatus = CancellationStatus.Active,
             AcceptanceStatus = AcceptanceStatus.AwaitingAcceptance,
             AcceptanceDeadline = deadline,
+            ExpectedPaymentMethod = extras?.ExpectedPaymentMethod,
+            ChangeFor = extras?.ChangeFor,
+            RiskFlag = extras?.RiskFlag,
             CreatedByEmployeeId = null,
             CreatedAt = now,
             UpdatedAt = now,
         };
 
         order.AddInitialLines(data, by: null, newId, now);
+        order.EnsureChangeFor();
         order.Raise(new OrderAwaitingAcceptance(
             id, order.FulfillmentType, order.Items.Where(i => i.ItemKind == OrderItemKind.Marmita).Sum(i => i.Quantity),
             order.TotalAmount, deadline, now));
         return order;
     }
+
+    /// "Troco para R$ X" só em dinheiro e de pelo menos o total (ADR-0044 item 19).
+    private void EnsureChangeFor()
+    {
+        if (ChangeFor is not { } change)
+        {
+            return;
+        }
+
+        if (ExpectedPaymentMethod != Contracts.ExpectedPaymentMethod.Cash)
+        {
+            throw BusinessException.Validation("changeFor", "Troco só para pagamento em dinheiro.");
+        }
+
+        if (change < TotalAmount)
+        {
+            throw BusinessException.Validation("changeFor", $"O valor para troco precisa ser de pelo menos R$ {TotalAmount}.");
+        }
+    }
+
+    /// Pedido da página que não virou venda (`REJECTED`, `EXPIRED`, `WITHDRAWN`), 7 dias depois (ADR-0052 item 3): nome,
+    /// telefone, endereço e observações saem; itens, valores e motivo ficam (métricas de recusa). Devolve false se não há
+    /// o que anonimizar.
+    public bool AnonymizeNotAccepted(DateTimeOffset now)
+    {
+        if (Origin != OrderOrigin.Web || AnonymizedAt is not null
+            || AcceptanceStatus is not (AcceptanceStatus.Rejected or AcceptanceStatus.Expired or AcceptanceStatus.Withdrawn))
+        {
+            return false;
+        }
+
+        CustomerName = AnonymizedCustomerName;
+        CustomerPhone = null;
+        DeliveryAddress = DeliveryAddress is null ? null : new DeliveryAddressDto(AnonymizedAddressStreet, null, null, null, null);
+        Notes = null;
+        ChangeFor = null;
+        foreach (var item in _items)
+        {
+            item.ClearNotes();
+        }
+
+        AnonymizedAt = now;
+        Changed(now);
+        return true;
+    }
+
+    public const string AnonymizedCustomerName = "Cliente anonimizado";
 
     /// Vencido pelo job ou com o prazo já passado, antes de o job rodar (ADR-0046 item 16).
     public bool HasAcceptanceExpired(DateTimeOffset now) =>
@@ -956,6 +1017,8 @@ internal sealed class OrderItem : Entity, ITenantOwned
     /// Adicional filho: `UnitPrice × Quantity × quantidade do pai` (04 §4.7).
     internal void Reprice(int parentQuantity) => LineTotal = UnitPrice * (Quantity * parentQuantity);
 
+    internal void ClearNotes() => Notes = null;
+
     internal void Change(int quantity, string? notes, int parentQuantity)
     {
         Quantity = quantity;
@@ -1083,6 +1146,9 @@ internal sealed record NewItem(
     IReadOnlyList<NewItem> Addons);
 
 internal sealed record NewWeighing(Grams Grams, Money PricePerKg);
+
+/// Dados do pedido da página fora do `NewOrder` (ADR-0044 item 19, ADR-0045 item 12).
+internal sealed record WebOrderExtras(ExpectedPaymentMethod? ExpectedPaymentMethod, Money? ChangeFor, WebOrderRiskFlag? RiskFlag);
 
 internal sealed record NewOrder(
     OrderType OrderType,

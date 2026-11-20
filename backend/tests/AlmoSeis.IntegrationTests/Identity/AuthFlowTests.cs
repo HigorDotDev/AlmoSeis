@@ -26,7 +26,7 @@ public sealed class AuthFlowTests(PostgresFixture db) : IDisposable
 
         var me = result.GetProperty("me");
         me.GetProperty("employee").GetProperty("roles").EnumerateArray().Select(r => r.GetString()).ShouldBe(["OWNER"]);
-        me.GetProperty("permissions").GetArrayLength().ShouldBe(24);
+        me.GetProperty("permissions").GetArrayLength().ShouldBe(25);
         me.GetProperty("memberships").GetArrayLength().ShouldBe(1);
 
         var subscription = me.GetProperty("subscription");

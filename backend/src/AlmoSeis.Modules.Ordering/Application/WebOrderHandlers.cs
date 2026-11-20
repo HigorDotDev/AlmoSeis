@@ -27,6 +27,11 @@ public sealed class WebOrderOptions
 
     public int ExpiryIntervalSeconds { get; set; } = 30;
 
+    /// Retenção da página (ADR-0052): anonimização dos não aceitos, tokens vencidos e hash do IP.
+    public bool RetentionJobEnabled { get; set; } = true;
+
+    public int RetentionIntervalMinutes { get; set; } = 60;
+
     public TimeSpan AcceptanceWindow => TimeSpan.FromMinutes(AcceptanceMinutes);
 }
 
@@ -167,32 +172,40 @@ internal sealed class ExpireWebOrderHandler(
     }
 }
 
-/// Desistência do cliente (ADR-0046 item 17). Exposta pela página de acompanhamento nas fatias 2/3 (ADR-0047);
-/// por enquanto só pelo backend (e pelos testes).
+/// Desistência do cliente (ADR-0046 item 17). A página chama pela rota de acompanhamento
+/// (`WithdrawWebOrderByTrackingHandler`); este comando interno é o mesmo caso de uso, usado pelos testes.
 internal sealed record WithdrawWebOrderCommand(Guid OrderId);
 
-internal sealed class WithdrawWebOrderHandler(
-    AppDbContext db,
-    IBusinessDayReader businessDays,
-    IAuditWriter audit,
-    TimeProvider time) : ICommandHandler<WithdrawWebOrderCommand, bool>
+internal sealed class WithdrawWebOrderHandler(WebOrderWithdrawal withdrawal) : ICommandHandler<WithdrawWebOrderCommand, bool>
 {
     public async Task<bool> HandleAsync(WithdrawWebOrderCommand command, CancellationToken cancellationToken)
     {
+        await withdrawal.WithdrawAsync(command.OrderId, cancellationToken);
+        return true;
+    }
+}
+
+/// Desistência (ADR-0046 item 17): `WITHDRAWN` com auditoria `WEB`, sem ator. Prazo vencido → `WebOrderExpired`; já
+/// aceito, recusado ou desistido → `OrderNotAwaitingAcceptance`.
+internal sealed class WebOrderWithdrawal(AppDbContext db, IBusinessDayReader businessDays, IAuditWriter audit, TimeProvider time)
+{
+    public async Task<Order> WithdrawAsync(Guid orderId, CancellationToken cancellationToken)
+    {
+        // FOR SHARE no expediente, como toda escrita de venda: a finalização do fechamento não corre ao mesmo tempo.
         await businessDays.GetOpenAsync(cancellationToken);
-        var order = await db.Set<Order>().SingleOrDefaultAsync(o => o.Id == command.OrderId, cancellationToken)
-            ?? throw new NotFoundException("ORDER", command.OrderId);
+        var order = await OrderRules.LoadAsync(db, orderId, cancellationToken);
         var before = UpperSnakeEnumConverter<AcceptanceStatus>.ToText(order.AcceptanceStatus);
         order.Withdraw(time.GetUtcNow());
 
         audit.Add("WebOrderWithdrawn", order.SyncEntityType, order.Id, order.Id,
             before: new { acceptanceStatus = before }, after: new { acceptanceStatus = "WITHDRAWN" }, origin: AuditOrigins.Web);
-        return true;
+        return order;
     }
 }
 
-/// Envio do pedido "pagar na entrega/retirada" pela página (ADR-0046, ADR-0044). A rota pública entra na fatia 2;
-/// por enquanto é o caminho interno usado pelos testes. Tenant do contexto (`InitializeForSystem`), sem funcionário.
+/// Envio do pedido "pagar na entrega/retirada" (ADR-0046, ADR-0044). A rota pública (`PlaceWebOrderHandler`) usa o
+/// `WebOrderSubmitter` direto, depois das validações da página; este comando interno é o mesmo caso de uso, usado
+/// pelos testes. Tenant do contexto, sem funcionário.
 internal sealed record SubmitWebOrderCommand(
     FulfillmentType FulfillmentType,
     string CustomerName,
@@ -200,9 +213,18 @@ internal sealed record SubmitWebOrderCommand(
     DeliveryAddressDto? DeliveryAddress,
     Money DeliveryFee,
     string? Notes,
-    IReadOnlyList<OrderItemInput> Items);
+    IReadOnlyList<OrderItemInput> Items,
+    ExpectedPaymentMethod? ExpectedPaymentMethod = null,
+    Money? ChangeFor = null,
+    WebOrderRiskFlag? RiskFlag = null);
 
-internal sealed class SubmitWebOrderHandler(
+internal sealed class SubmitWebOrderHandler(WebOrderSubmitter submitter) : ICommandHandler<SubmitWebOrderCommand, Guid>
+{
+    public async Task<Guid> HandleAsync(SubmitWebOrderCommand command, CancellationToken cancellationToken) =>
+        (await submitter.SubmitAsync(command, cancellationToken)).Id;
+}
+
+internal sealed class WebOrderSubmitter(
     AppDbContext db,
     ITenantContext tenant,
     IIdGenerator ids,
@@ -210,9 +232,9 @@ internal sealed class SubmitWebOrderHandler(
     OrderItemResolver items,
     IAuditWriter audit,
     IOptions<WebOrderOptions> options,
-    TimeProvider time) : ICommandHandler<SubmitWebOrderCommand, Guid>
+    TimeProvider time)
 {
-    public async Task<Guid> HandleAsync(SubmitWebOrderCommand command, CancellationToken cancellationToken)
+    public async Task<Order> SubmitAsync(SubmitWebOrderCommand command, CancellationToken cancellationToken)
     {
         var day = await businessDays.GetOpenAsync(cancellationToken) ?? throw new BusinessException(ErrorCodes.BusinessDayRequired);
         var resolved = await items.ResolveAsync(command.Items, day.BusinessDate, cancellationToken);
@@ -223,7 +245,8 @@ internal sealed class SubmitWebOrderHandler(
             new NewOrder(
                 OrderType.Marmita, command.FulfillmentType, null, command.CustomerName, command.CustomerPhone, command.DeliveryAddress,
                 command.DeliveryFee, null, null, command.Notes, resolved, []),
-            day.Id, day.BusinessDate, now + options.Value.AcceptanceWindow, ids.New, now);
+            day.Id, day.BusinessDate, now + options.Value.AcceptanceWindow, ids.New, now,
+            new WebOrderExtras(command.ExpectedPaymentMethod, command.ChangeFor, command.RiskFlag));
         db.Add(order);
 
         // Sem nome, telefone nem endereço (ADR-0024).
@@ -234,8 +257,9 @@ internal sealed class SubmitWebOrderHandler(
             itemCount = order.Items.Count,
             totalAmount = order.TotalAmount.ToString(),
             order.AcceptanceDeadline,
+            riskFlag = order.RiskFlag is { } risk ? UpperSnakeEnumConverter<WebOrderRiskFlag>.ToText(risk) : null,
         }, origin: AuditOrigins.Web);
-        return order.Id;
+        return order;
     }
 }
 

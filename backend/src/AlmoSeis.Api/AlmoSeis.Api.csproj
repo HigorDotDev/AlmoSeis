@@ -17,6 +17,7 @@
     <ProjectReference Include="..\AlmoSeis.Modules.Ordering\AlmoSeis.Modules.Ordering.csproj" />
     <ProjectReference Include="..\AlmoSeis.Modules.Payments\AlmoSeis.Modules.Payments.csproj" />
     <ProjectReference Include="..\AlmoSeis.Modules.Closing\AlmoSeis.Modules.Closing.csproj" />
+    <ProjectReference Include="..\AlmoSeis.Modules.Storefront\AlmoSeis.Modules.Storefront.csproj" />
     <ProjectReference Include="..\AlmoSeis.Modules.Audit\AlmoSeis.Modules.Audit.csproj" />
     <ProjectReference Include="..\AlmoSeis.Modules.Sync\AlmoSeis.Modules.Sync.csproj" />
   </ItemGroup>

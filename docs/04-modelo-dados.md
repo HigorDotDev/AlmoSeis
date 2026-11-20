@@ -225,6 +225,7 @@ Aparelho registrado como compartilhado (ADR-0027).
 | ImageStorageKey | string? | chave no R2 (ADR-0037); a URL é derivada |
 | IsActive | bool | desativado = some dos cadastros, mas o histórico permanece (RN-002.6) |
 | IsAvailable | bool | falta momentânea de bebida ou adicional (pratos usam a disponibilidade do cardápio) |
+| IsVisibleOnPage | bool | padrão `true`. Bebida ou adicional com `false` não aparece na página de pedidos (ADR-0044 item 5) |
 | CreatedAt, UpdatedAt | | |
 
 ### MarmitaSize [T][V][S]
@@ -296,6 +297,10 @@ Aparelho registrado como compartilhado (ADR-0027).
 | TableLabel | string(10)? | mesa (PF/KILO) |
 | TabNumber | string(10)? | número da comanda física (ADR-0023) |
 | Notes | string(300)? | |
+| ExpectedPaymentMethod | enum `CASH`, `PIX`, `CARD`? | só `WEB`: forma que o cliente pretende usar (ADR-0044 item 19). Não cria `Payment` |
+| ChangeFor | Money? | só `WEB` e `CASH`: "troco para R$ X", ≥ total no envio |
+| RiskFlag | enum `CAPTCHA_UNAVAILABLE`? | só `WEB`: o anti-robô não respondeu no envio (ADR-0045 item 12) |
+| AnonymizedAt | DateTimeOffset? | pedido `WEB` não aceito anonimizado 7 dias depois (nome, telefone, endereço e observações; ADR-0052 item 3) |
 | DeliveryFee | Money | 0 se não for `DELIVERY` |
 | ItemsTotal | Money | Σ `OrderItem.LineTotal` ativos |
 | WeighingsTotal | Money | Σ `WeighingEntry.Amount` ativas |
@@ -546,6 +551,41 @@ O ajuste **não** altera o `DailyClosing` relacionado nem o caixa físico. Apare
 | Vínculo | `TenantEmployee`, `TenantEmployeeRole` | `tenant_id = app.tenant_id` **OU** `user_id = app.user_id`. Permite listar os estabelecimentos do próprio usuário no login e na troca de tenant (ADR-0026, item 9) |
 | Identidade | `User`, `RefreshToken` | sem RLS de tenant; acesso só pelo módulo Identity |
 | Plataforma | `TrialClaim`, `BillingWebhookEvent` | sem RLS; acesso só pelos módulos Billing e Admin com o papel `almoseis_platform` |
+| Resolução pública | `StoreSlug`, `OrderTrackingToken` | leitura aberta ao papel da aplicação (o slug é público; o token está em hash), escrita só no tenant da sessão (ADR-0045 itens 4 e 5) |
+
+## 4.14 Página de pedidos (EP-002; ADR-0044, ADR-0045, ADR-0047, ADR-0048, ADR-0052)
+
+### StorefrontSettings [T][V] — 1:1 com Tenant
+
+| Campo | Tipo | Regra |
+|---|---|---|
+| PublicName | string(80) | padrão: `Tenant.Name` |
+| IsPageActive | bool | nasce `false`. Ativar exige endereço completo (rua, número, bairro, cidade, UF) e um `MarmitaSize` ativo |
+| IsAcceptingOrders | bool | pausa rápida: `false` → página `PAUSED` |
+| IsDeliveryEnabled | bool | pausa da entrega (só retirada) |
+| OffersDelivery, OffersPickup | bool | pelo menos um |
+| ContactPhone | string(16)? | E.164 |
+| HoursText | string(120)? | informativo |
+| Address* | Street(120), Number(10), Complement(60), Neighborhood(60), City(80), State(2), ZipCode(8) | endereço do restaurante |
+| Latitude, Longitude | decimal(9,6)? | ponto confirmado no mapa (fatia 4); apagado quando o endereço muda |
+| DeliveryFeeMode | enum `DISTANCE`, `FIXED` | ADR-0048 (fatia 4) |
+| PricePerKm | decimal(10,2)? | > 0 |
+| MinimumDeliveryFee | Money | ≥ 0 |
+| MaxDeliveryDistanceKm | decimal(4,1)? | > 0 |
+
+Estado da página (derivado, ADR-0044 item 6): `UNAVAILABLE` (inativa ou assinatura sem escrita) → `CLOSED` (sem expediente aberto) → `PAUSED` → `OPEN`.
+
+### StoreSlug (plataforma)
+
+`Slug` string(40) **único global** (PK), `TenantId`, `IsCurrent` (um por tenant), `CreatedAt`, `ReplacedAt` (nulo ⇔ atual), `BlockedUntil` (quarentena de 12 meses depois da anonimização do tenant). Formato `a-z0-9-`, 3 a 40, sem `-` nas pontas nem repetido, não só números, fora dos reservados. Máximo de 5 antigos por tenant; antigo redireciona.
+
+### OrderTrackingToken (plataforma)
+
+`TokenHash` (SHA-256, PK), `TenantId`, `OrderId` (único), `CreatedAt`, `ExpiresAt` (+ 7 dias). O token em claro (128 bits, base64url) só aparece na resposta do envio. Apagado pelo job de retenção depois de vencer.
+
+### WebOrderIntake [T]
+
+`OrderId` (PK), `IpHash` (HMAC-SHA-256 com sal diário), `CreatedAt`. Limite de 3 pedidos aguardando aceite por IP; apagado em 7 dias.
 
 ## 4.13 Mapeamento épico → modelo
 

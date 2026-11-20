@@ -95,6 +95,23 @@ internal sealed class OrderingModelConfiguration : IModuleModelConfiguration
             b.HasKey(x => new { x.OrderChangeEventId, x.TenantEmployeeId });
         });
 
+        // Página de pedidos (05 §5.17, 0004). Relações "de ordenação": o pedido é inserido antes (07 §7.13).
+        modelBuilder.Entity<OrderTrackingToken>(b =>
+        {
+            b.ToTable("order_tracking_tokens");
+            b.HasKey(x => x.TokenHash);
+            b.Property(x => x.TokenHash).HasMaxLength(64).IsFixedLength();
+            b.HasOne<Order>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<WebOrderIntake>(b =>
+        {
+            b.ToTable("web_order_intakes");
+            b.HasKey(x => x.OrderId);
+            b.Property(x => x.IpHash).HasMaxLength(64).IsFixedLength();
+            b.HasOne<Order>().WithOne().HasForeignKey<WebOrderIntake>(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
         // business_days é do Closing; aqui só a leitura de "expediente aberto" para a regra de alerta pendente.
         modelBuilder.Entity<OpenBusinessDayRow>(b =>
         {

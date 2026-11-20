@@ -56,7 +56,9 @@ public sealed class IdempotencyRecord : ITenantOwned
     public Guid Id { get; init; }
     public Guid TenantId { get; init; }
     public Guid Key { get; init; }
-    public Guid UserId { get; init; }
+
+    /// Nulo no envio anônimo pela página (ADR-0045 item 10).
+    public Guid? UserId { get; init; }
     public required string Endpoint { get; init; }
     public required string RequestHash { get; init; }
     public required string Status { get; set; }

@@ -19,6 +19,8 @@ public sealed class ApiFactory(PostgresFixture db, Action<IServiceCollection>? s
 
     public const string WebOrigin = "http://localhost:8082";
 
+    public const string PublicPageOrigin = "http://localhost:3000";
+
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     /// Erros logados pela API durante o teste: anexados às falhas para diagnóstico.
@@ -39,6 +41,10 @@ public sealed class ApiFactory(PostgresFixture db, Action<IServiceCollection>? s
             ["Cors:RestaurantAppOrigins:0"] = WebOrigin,
             // O job de expiração (ADR-0046) roda só quando o teste chama RunOnceAsync.
             ["WebOrders:ExpiryJobEnabled"] = "false",
+            // Página de pedidos (ADR-0045): CORS próprio, retenção só por RunOnceAsync, Turnstile ligado só no teste dedicado.
+            ["Cors:PublicPageOrigins:0"] = PublicPageOrigin,
+            ["WebOrders:RetentionJobEnabled"] = "false",
+            ["Turnstile:Enabled"] = "false",
         }));
         if (services is not null)
         {

@@ -52,7 +52,8 @@ internal sealed class IdempotencyStore(
     public async Task<IdempotencyBegin> TryBeginAsync(Guid key, string endpoint, string requestHash, CancellationToken cancellationToken)
     {
         var tenantId = tenant.TenantId ?? throw new InvalidOperationException("Idempotência exige tenant.");
-        var userId = tenant.UserId ?? throw new InvalidOperationException("Idempotência exige usuário.");
+        // Página de pedidos: anônima, com escopo (tenant, key) e user_id nulo (ADR-0045 item 10).
+        Guid? userId = tenant.IsAnonymous ? null : tenant.UserId ?? throw new InvalidOperationException("Idempotência exige usuário.");
         var now = time.GetUtcNow();
         var lockTimeout = $"{options.Value.LockTimeoutSeconds}s";
 
@@ -84,7 +85,7 @@ internal sealed class IdempotencyStore(
         var existing = await db.Set<IdempotencyRecord>().AsNoTracking()
             .SingleAsync(r => r.Key == key, cancellationToken);
 
-        // Outro usuário, outra rota ou outro corpo: a chave não pode ser reaproveitada.
+        // Outro usuário (ou anônimo × autenticado), outra rota ou outro corpo: a chave não pode ser reaproveitada.
         if (existing.UserId != userId || existing.Endpoint != endpoint || existing.RequestHash != requestHash)
         {
             throw new BusinessException(ErrorCodes.IdempotencyKeyReused);

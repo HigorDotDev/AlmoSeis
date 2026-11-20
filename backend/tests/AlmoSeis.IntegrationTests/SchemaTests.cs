@@ -26,8 +26,8 @@ public sealed class SchemaTests(PostgresFixture db)
         await using var reader = await command.ExecuteReaderAsync(Ct);
         await reader.ReadAsync(Ct);
 
-        reader.GetInt64(0).ShouldBe(36, "tabelas de 05-ddl.md");
-        reader.GetInt64(1).ShouldBe(65, "políticas de RLS de 05 §5.12");
+        reader.GetInt64(0).ShouldBe(40, "tabelas de 05-ddl.md");
+        reader.GetInt64(1).ShouldBe(76, "políticas de RLS de 05 §5.12 e §5.17");
     }
 
     /// O mesmo teste de fumaça do 05 §5.16, agora sobre o schema criado pela migration.
@@ -50,7 +50,7 @@ public sealed class SchemaTests(PostgresFixture db)
 
         await transaction.RollbackAsync(Ct); // não deixa dados para os outros testes
 
-        notices.Count(n => n.StartsWith("ok:", StringComparison.Ordinal)).ShouldBe(31, string.Join(" | ", notices));
+        notices.Count(n => n.StartsWith("ok:", StringComparison.Ordinal)).ShouldBe(41, string.Join(" | ", notices));
     }
 
     /// 0003 (ADR-0046) num banco com pedidos: o backfill roda com a RLS `FORCE` de `orders` (o banco vazio dos outros
@@ -118,6 +118,68 @@ public sealed class SchemaTests(PostgresFixture db)
             reader.GetString(1).ShouldBe("PENDING");
             reader.GetInt64(2).ShouldBe(1);
             reader.GetBoolean(3).ShouldBeTrue("o FORCE da RLS volta depois do backfill");
+        }
+
+        NpgsqlConnection.ClearAllPools();
+        await db.ExecuteAsSuperuserAsync($"DROP DATABASE {database} WITH (FORCE)");
+    }
+
+    /// 0004 (ADR-0044) num banco com tenants: cada um ganha a página inativa e o slug do nome (colisão → `-{cidade}`,
+    /// depois `-2`; reservado → acrescenta a cidade), lendo `tenants` com a RLS `FORCE`, que volta no fim.
+    [Fact]
+    public async Task Migration_0004_backfills_storefront_and_slugs()
+    {
+        var database = "almoseis_slugs_" + Guid.NewGuid().ToString("N")[..8];
+        await db.ExecuteAsSuperuserAsync($"CREATE DATABASE {database} OWNER almoseis_migrator");
+        var superuser = new NpgsqlConnectionStringBuilder(db.SuperuserConnectionString) { Database = database }.ConnectionString;
+        var migrator = new NpgsqlConnectionStringBuilder(db.ConnectionStringFor("almoseis_migrator_login", PostgresFixture.MigratorPassword))
+        {
+            Database = database,
+        }.ConnectionString;
+
+        var options = new DbContextOptionsBuilder<AppDbContext>();
+        options.UseAlmoSeisNpgsql(migrator);
+        await using (var context = new AppDbContext(options.Options, new TenantContext(), Array.Empty<IModuleModelConfiguration>()))
+        {
+            await context.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>().MigrateAsync("20261120000000_WebOrderAcceptance", Ct);
+        }
+
+        await using (var connection = new NpgsqlConnection(superuser))
+        {
+            await connection.OpenAsync(Ct);
+            await using var seed = new NpgsqlCommand(
+                """
+                INSERT INTO users (id, full_name, email, normalized_email, password_hash, security_stamp, concurrency_stamp, created_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000a1', 'Dona A', 'a@x.com', 'A@X.COM', 'h', 's', 'c', now());
+                INSERT INTO tenants (id, name, document_type, document_number, city, state, terms_version, terms_accepted_at, terms_accepted_by_user_id, created_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'Marmitaria da Zélia', 'CNPJ', '11222333000181', 'Uberlândia', 'MG', '2026-10', now(), 'aaaaaaaa-0000-0000-0000-0000000000a1', now() - interval '3 days'),
+                       ('aaaaaaaa-0000-0000-0000-000000000002', 'Marmitaria da Zélia', 'CNPJ', '11222333000182', 'Uberlândia', 'MG', '2026-10', now(), 'aaaaaaaa-0000-0000-0000-0000000000a1', now() - interval '2 days'),
+                       ('aaaaaaaa-0000-0000-0000-000000000003', 'Marmitaria da Zélia', 'CNPJ', '11222333000183', 'Uberlândia', 'MG', '2026-10', now(), 'aaaaaaaa-0000-0000-0000-0000000000a1', now() - interval '1 day'),
+                       ('aaaaaaaa-0000-0000-0000-000000000004', 'Admin', 'CNPJ', '11222333000184', 'Araguari', 'MG', '2026-10', now(), 'aaaaaaaa-0000-0000-0000-0000000000a1', now());
+                """, connection);
+            await seed.ExecuteNonQueryAsync(Ct);
+        }
+
+        await using (var context = new AppDbContext(options.Options, new TenantContext(), Array.Empty<IModuleModelConfiguration>()))
+        {
+            await context.Database.MigrateAsync(Ct);
+        }
+
+        await using (var connection = new NpgsqlConnection(superuser))
+        {
+            await connection.OpenAsync(Ct);
+            await using var check = new NpgsqlCommand(
+                """
+                SELECT string_agg(slug, ',' ORDER BY tenant_id),
+                       (SELECT count(*) FROM storefront_settings WHERE NOT is_page_active AND public_name IN ('Marmitaria da Zélia', 'Admin')),
+                       (SELECT relforcerowsecurity FROM pg_class WHERE relname = 'tenants')
+                  FROM store_slugs WHERE is_current
+                """, connection);
+            await using var reader = await check.ExecuteReaderAsync(Ct);
+            await reader.ReadAsync(Ct);
+            reader.GetString(0).ShouldBe("marmitaria-da-zelia,marmitaria-da-zelia-uberlandia,marmitaria-da-zelia-2,admin-araguari");
+            reader.GetInt64(1).ShouldBe(4);
+            reader.GetBoolean(2).ShouldBeTrue("o FORCE da RLS de tenants volta depois do preenchimento");
         }
 
         NpgsqlConnection.ClearAllPools();
