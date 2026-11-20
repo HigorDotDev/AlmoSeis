@@ -42,7 +42,7 @@ import { useCanWrite, useSession } from '@/stores/session';
 import { orderLabel } from '../components';
 import { isDispatched } from '../fulfillment';
 import { summarizeOrder, useCancelOrder, useOrder, useRemoveItem, useRemoveWeighing, useUpdateItem } from '../hooks';
-import { AcceptanceCountdown, acceptanceOutcomeText, AcceptRejectActions, FulfillmentActions, PhoneLine } from '../webOrderComponents';
+import { AcceptanceCountdown, acceptanceOutcomeText, AcceptRejectActions, FulfillmentActions, PhoneLine, WebOrderPaymentInfo } from '../webOrderComponents';
 import { orderNumberLabel } from '../webOrders';
 
 /** 08 §8.9 `orders/[id]`. */
@@ -99,6 +99,7 @@ function OrderHeader({ order: o, pending }: { order: Order; pending: boolean }) 
         {pending ? <SyncStatePill state="unknown" /> : null}
       </Row>
       {o.notes ? <Text>Obs.: {o.notes}</Text> : null}
+      {o.origin === 'WEB' ? <WebOrderPaymentInfo order={o} /> : null}
       {canceled && o.cancellation ? <Banner tone="danger" text={`Cancelado por ${o.cancellation.canceledBy.displayName}: ${o.cancellation.reason}`} /> : null}
       {o.pendingAlertCount > 0 ? (
         <Banner tone="warning" text="Este pedido mudou." action={{ label: 'Ver mudanças', onPress: () => router.push(`/orders/${o.id}/alerts`) }} />

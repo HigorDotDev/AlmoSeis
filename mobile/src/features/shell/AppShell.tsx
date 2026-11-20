@@ -103,6 +103,8 @@ const GROUPS: { title: string; entries: MenuEntry[] }[] = [
     entries: [
       { label: 'Cardápio do dia', icon: 'today-outline', href: '/menu/menus/today', permission: 'menu.manage' },
       { label: 'Clientes', icon: 'person-circle-outline', href: '/menu/customers', permission: 'orders.view' },
+      // EP-002 F-210: ver e compartilhar com `orders.view`; alterar com `storefront.manage`.
+      { label: 'Página de pedidos', icon: 'globe-outline', href: '/menu/storefront', permission: 'orders.view' },
       { label: 'Rascunhos e pendências', icon: 'document-text-outline', href: '/menu/drafts' },
     ],
   },

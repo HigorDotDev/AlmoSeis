@@ -37,8 +37,10 @@ import { fulfillmentActions, type FulfillmentAction, type FulfillmentInput } fro
 import { summarizeOrder, useAcceptOrder, useAwaitingOrders, useOrder, useRejectOrder, useSetFulfillment } from './hooks';
 import {
   acceptanceConflictText,
+  CAPTCHA_UNAVAILABLE_TEXT,
   countdown,
   ESTIMATED_MINUTES,
+  expectedPaymentText,
   orderNumberLabel,
   REJECT_MESSAGE_MAX,
   REJECT_REASONS,
@@ -168,6 +170,37 @@ export function WebOrderDetails({ order: o }: { order: Order }) {
       ) : null}
       {o.customer?.phoneNumber ? <PhoneLine phone={o.customer.phoneNumber} unverified={o.origin === 'WEB'} /> : null}
       {o.notes ? <Text style={{ color: c.danger, fontWeight: '600' }}>Obs.: {o.notes}</Text> : null}
+      <WebOrderPaymentInfo order={o} />
+    </View>
+  );
+}
+
+/**
+ * Forma de pagamento escolhida na página ("Vai pagar em dinheiro, troco para R$ 50,00") e o aviso discreto de
+ * `riskFlag` (ADR-0044 item 19, ADR-0045 item 12). A forma é só intenção: nada é dado como pago.
+ */
+export function WebOrderPaymentInfo({ order: o }: { order: Pick<Order, 'expectedPaymentMethod' | 'changeFor' | 'riskFlag'> }) {
+  const c = useColors();
+  const payment = expectedPaymentText(o);
+  if (!payment && o.riskFlag !== 'CAPTCHA_UNAVAILABLE') return null;
+  return (
+    <View style={{ gap: 2 }}>
+      {payment ? (
+        <Row gap={space.xs}>
+          <Ionicons name={o.expectedPaymentMethod === 'CASH' ? 'cash-outline' : o.expectedPaymentMethod === 'PIX' ? 'qr-code-outline' : 'card-outline'} size={16} color={c.text} />
+          <Text variant="small" testID="expected-payment" style={{ fontWeight: '600', flexShrink: 1 }}>
+            {payment}
+          </Text>
+        </Row>
+      ) : null}
+      {o.riskFlag === 'CAPTCHA_UNAVAILABLE' ? (
+        <Row gap={space.xs}>
+          <Ionicons name="shield-outline" size={16} color={c.warning} />
+          <Text variant="small" testID="risk-flag" style={{ color: c.warning, flexShrink: 1 }}>
+            {CAPTCHA_UNAVAILABLE_TEXT}
+          </Text>
+        </Row>
+      ) : null}
     </View>
   );
 }

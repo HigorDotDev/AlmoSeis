@@ -3,7 +3,7 @@ import Constants from 'expo-constants';
 
 import type { Platform as ApiPlatform } from '@/api/types';
 
-export { REQUEST_TIMEOUT_MS, TERMS_VERSION } from './configShared';
+export { PUBLIC_PAGE_BASE_URL, REQUEST_TIMEOUT_MS, TERMS_VERSION } from './configShared';
 
 /**
  * A API precisa ser do mesmo *site* do app web para o cookie `SameSite=Strict` seguir (ADR-0053 §2). No

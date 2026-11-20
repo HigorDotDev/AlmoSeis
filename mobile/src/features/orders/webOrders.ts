@@ -1,5 +1,6 @@
 /** Pedidos do site (ADR-0046), sem React: prazo, conflito de aceite, validação da recusa. */
 import type { EstimatedReadyMinutes, Order, RejectionReasonCode } from '@/api/types';
+import { formatBRL } from '@/lib/money';
 
 export const ESTIMATED_MINUTES: EstimatedReadyMinutes[] = [15, 30, 45, 60];
 
@@ -69,3 +70,23 @@ export function rejectionMessageError(reason: RejectReason | null, message: stri
   if (text.length > REJECT_MESSAGE_MAX) return `No máximo ${REJECT_MESSAGE_MAX} caracteres.`;
   return null;
 }
+
+/**
+ * Forma de pagamento que o cliente escolheu na página (ADR-0044 item 19). É só intenção: não cria pagamento, e o
+ * recebimento continua pelo "Receber". `null` em pedido do app.
+ */
+export function expectedPaymentText(o: Pick<Order, 'expectedPaymentMethod' | 'changeFor'>): string | null {
+  switch (o.expectedPaymentMethod) {
+    case 'CASH':
+      return o.changeFor ? `Vai pagar em dinheiro, troco para ${formatBRL(o.changeFor)}` : 'Vai pagar em dinheiro';
+    case 'PIX':
+      return 'Vai pagar com Pix';
+    case 'CARD':
+      return 'Vai pagar com cartão';
+    default:
+      return null;
+  }
+}
+
+/** ADR-0045 item 12: o anti-robô não respondeu no envio; o pedido entrou, mas merece um olhar a mais. */
+export const CAPTCHA_UNAVAILABLE_TEXT = 'Verificação anti-robô indisponível no envio';

@@ -9,6 +9,8 @@ export const qk = {
   settings: ['settings'] as const,
   tenant: ['tenant'] as const,
   subscription: ['subscription'] as const,
+  /** `GET /storefront` (página de pedidos, 06 §6.18). Fora do feed: sem invalidação por evento. */
+  storefront: ['storefront'] as const,
   roles: ['roles'] as const,
   products: (f: { kind?: ProductKind; includeInactive?: boolean } = {}) => ['products', f] as const,
   product: (id: string) => ['products', 'detail', id] as const,

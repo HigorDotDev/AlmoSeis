@@ -66,6 +66,7 @@ export function ProductsScreen() {
                 {p.defaultPrice ? formatBRL(p.defaultPrice) : 'Sem preço'}
                 {p.category ? ` · ${p.category}` : ''}
                 {!p.isActive ? ' · inativo' : ''}
+                {!p.isVisibleOnPage && (p.kind === 'BEVERAGE' || p.kind === 'ADDON') ? ' · fora da página' : ''}
               </Text>
             </View>
             {canManage && p.isActive ? (
@@ -103,6 +104,9 @@ function ProductForm({ product, initialKind, returnTo }: { product: Product | nu
   const [category, setCategory] = useState(product?.category ?? '');
   const [price, setPrice] = useState<string>(product?.defaultPrice ?? '0.00');
   const [kitchen, setKitchen] = useState(product?.requiresPreparation ?? (initialKind === 'MAIN_DISH' || initialKind === 'SIDE_DISH'));
+  const [onPage, setOnPage] = useState(product?.isVisibleOnPage ?? true);
+  // ADR-0044 item 5: só bebidas e adicionais têm a chave; pratos e acompanhamentos seguem o cardápio do dia.
+  const pageToggle = kind === 'BEVERAGE' || kind === 'ADDON';
   const [deactivate, setDeactivate] = useState(false);
   const priceRequired = kind === 'BEVERAGE' || kind === 'ADDON';
   const error = create.error ?? update.error ?? upload.error;
@@ -111,7 +115,19 @@ function ProductForm({ product, initialKind, returnTo }: { product: Product | nu
     const defaultPrice = toCents(price) > 0 ? price : null;
     if (product) {
       update.mutate(
-        { id: product.id, version: product.version, body: { name: name.trim(), description: description.trim() || null, category: category.trim() || null, defaultPrice, requiresPreparation: kitchen, ...(kind !== product.kind ? { kind } : {}) } },
+        {
+          id: product.id,
+          version: product.version,
+          body: {
+            name: name.trim(),
+            description: description.trim() || null,
+            category: category.trim() || null,
+            defaultPrice,
+            requiresPreparation: kitchen,
+            ...(kind !== product.kind ? { kind } : {}),
+            ...(pageToggle && onPage !== product.isVisibleOnPage ? { isVisibleOnPage: onPage } : {}),
+          },
+        },
         { onSuccess: () => router.back() },
       );
     } else {
@@ -156,6 +172,22 @@ function ProductForm({ product, initialKind, returnTo }: { product: Product | nu
         <Text style={{ flex: 1 }}>Vai para a cozinha?</Text>
         <Switch value={kitchen} onValueChange={setKitchen} disabled={!canManage} accessibilityLabel="Vai para a cozinha" />
       </Row>
+      {product && pageToggle ? (
+        <Row style={{ justifyContent: 'space-between' }}>
+          <View style={{ flex: 1 }}>
+            <Text>Aparece na página</Text>
+            <Text variant="small" muted>
+              Desligado, o cliente não vê este item na página de pedidos. No app continua igual.
+            </Text>
+          </View>
+          <Switch value={onPage} onValueChange={setOnPage} disabled={!canManage} accessibilityLabel="Aparece na página" />
+        </Row>
+      ) : null}
+      {product && !pageToggle ? (
+        <Text variant="small" muted>
+          Na página de pedidos, pratos e acompanhamentos aparecem quando estão no cardápio do dia.
+        </Text>
+      ) : null}
 
       {product ? (
         <Card>

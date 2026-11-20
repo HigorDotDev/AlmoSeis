@@ -67,6 +67,9 @@ const webOrder: Order = {
   tableLabel: null,
   tabNumber: null,
   notes: null,
+  expectedPaymentMethod: 'CASH',
+  changeFor: '50.00',
+  riskFlag: null,
   deliveryFee: '5.00',
   itemsTotal: '40.00',
   weighingsTotal: '0.00',
@@ -210,6 +213,8 @@ describe('faixa "Novos do site" (ADR-0046 item 21)', () => {
     expect(await screen.findByText('2× Marmita M')).toBeTruthy();
     expect(screen.getByText(/Rua das Palmeiras, 45, Casa 2, Centro/)).toBeTruthy();
     expect(screen.getByText(/telefone não verificado/)).toBeTruthy();
+    expect(screen.getByText('Vai pagar em dinheiro, troco para R$ 50,00')).toBeTruthy();
+    expect(screen.queryByText('Verificação anti-robô indisponível no envio')).toBeNull();
     expect(screen.getByText('Aceitar')).toBeTruthy();
     expect(screen.getByText('Recusar')).toBeTruthy();
   });

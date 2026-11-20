@@ -25,6 +25,7 @@ const product = (id: string, kind: Product['kind'], defaultPrice: string | null,
   imageUrl: null,
   isActive: true,
   isAvailable: true,
+  isVisibleOnPage: true,
   createdAt: '',
   updatedAt: '',
 });

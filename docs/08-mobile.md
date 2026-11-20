@@ -15,7 +15,7 @@
 | Banco local | `expo-sqlite` (rascunhos, operações pendentes, metadados de sync) |
 | Segredos | `expo-secure-store` (tokens, `deviceSecret`) |
 | Tempo real | `@microsoft/signalr` |
-| Outros | `expo-keep-awake`, `expo-audio` (aviso sonoro), `expo-image`, `expo-network`, `expo-application`, `expo-crypto` (`randomUUID`), `@shopify/flash-list` |
+| Outros | `expo-keep-awake`, `expo-audio` (aviso sonoro), `expo-image`, `expo-network`, `expo-application`, `expo-crypto` (`randomUUID`), `@shopify/flash-list`, `qrcode-generator` (QR da página de pedidos, JavaScript puro) |
 | Testes | Jest + React Native Testing Library; fluxos E2E com Maestro em emulador (homolog) |
 
 **Aparelho de referência** (RNF-001): Android de entrada, 2 GB de RAM, tela de 5,5", rede 4G instável. Toda tela de lista usa `FlashList`, imagens passam pelo `expo-image` com cache em disco, e nenhuma tela carrega mais de 100 itens sem paginação.
@@ -51,9 +51,10 @@ mobile/
         menus/today.tsx  menus/weekly.tsx  menus/history.tsx  menus/[id].tsx
         customers/index.tsx  customers/[id].tsx
         pricing.tsx  payment-methods.tsx  audit.tsx  settings.tsx  subscription.tsx  drafts.tsx  devices.tsx
+        storefront.tsx                 # página de pedidos (EP-002 F-210)
   src/
     api/          client.ts  errors.ts  headers.ts  endpoints/*.ts (um arquivo por recurso do 06)
-    features/     auth/ orders/ production/ payments/ closing/ menu/ catalog/ customers/ employees/ sync/ realtime/ drafts/
+    features/     auth/ orders/ production/ payments/ closing/ menu/ catalog/ customers/ employees/ sync/ realtime/ drafts/ storefront/
                   (cada uma com hooks/, components/, schemas.ts)
     components/ui/   design system (§8.10)
     db/           schema.ts  migrations.ts  draftsRepo.ts  pendingOpsRepo.ts  metaRepo.ts
@@ -108,6 +109,7 @@ Os tipos (`Order`, `OrderSummary`, `Payment`…) ficam em `src/api/types.ts`, **
 | `['orders', id, 'alerts' \| 'history' \| 'payments']` | detalhes | 30 s |
 | `['customers', 'search', termo]`, `['customers', id]`, `['customers', id, 'pending']` | clientes | 1 min |
 | `['closing', 'summary', businessDayId]`, `['closing', 'history', filtros]`, `['closing', id]`, `['closing', 'monthly', mês]` | fechamento | 15 s / 5 min |
+| `['storefront']` | `GET /storefront` (página de pedidos, 06 §6.18). Fora do feed e sem evento: nenhum `entityType` a invalida; a resposta do `PUT` (ou o `current` do `409`) substitui o cache | 1 min |
 
 **Persistência:** o cache persiste em SQLite (RN-014.2) com `maxAge` de 24 h, chaveado por `tenantId`. Trocar de tenant ou sair limpa o cache. Os dados persistidos aparecem com o selo "dados de HH:mm" quando estão offline (RN-014.5).
 
@@ -331,6 +333,7 @@ A aba inicial é a primeira visível. O app lembra a última aba usada por apare
 | Cardápio semanal | `menu/menus/weekly` | `menu.manage` |
 | Histórico e reutilização de cardápios | `menu/menus/history` | `menu.manage` |
 | Clientes | `menu/customers` | `orders.view` |
+| Página de pedidos | `menu/storefront` (EP-002 F-210) | ver e compartilhar: `orders.view`; alterar: `storefront.manage` |
 | Configuração de preços | `menu/pricing` (preço do quilo, taxa de entrega) | `settings.manage` |
 | Formas de pagamento | `menu/payment-methods` | `settings.manage` |
 | Histórico de operações | `menu/audit` | `audit.view` |
@@ -362,6 +365,7 @@ Convenções:
 - **Faixa "Novos do site"** (`NewWebOrdersSection`, ADR-0046 item 21, EP-002 RF-206). Sem pedidos aguardando, não ocupa espaço. Visível para `orders.view`; os botões só com `orders.accept` (sem ela: "Aguardando o balcão aceitar."). Um `WebOrderCard` por pedido:
   - selo "Site", entrega/retirada e a **contagem regressiva** até `acceptanceDeadline` ("Aceite em 9:41"; âmbar nos 3 min finais; "Prazo esgotado" no zero). A contagem usa o relógio do aparelho e é só aviso: os botões não somem no zero, quem decide é o servidor (`409 WebOrderExpired`);
   - cliente e total em destaque; itens, endereço, telefone com "telefone não verificado" (ADR-0044) e observação, lidos de `GET /orders/{id}` (a lista só traz `itemCount`);
+  - a forma de pagamento que o cliente escolheu (`expectedPaymentMethod`/`changeFor`, ADR-0044 item 19, EP-002 fatia 2): "Vai pagar em dinheiro, troco para R$ 50,00", "Vai pagar em dinheiro", "Vai pagar com Pix", "Vai pagar com cartão". É só intenção: **não** é pagamento e não muda o `PaymentBadge`; o recebimento continua pelo "Receber". Com `riskFlag = CAPTCHA_UNAVAILABLE` (ADR-0045 item 12), a linha discreta em âmbar "Verificação anti-robô indisponível no envio" (`WebOrderPaymentInfo`, também no detalhe);
   - **"Aceitar"** → Confirma ("Aceitar pedido do site?", cliente, atendimento, total) com o tempo estimado opcional em chips (*Sem estimativa / 15 / 30 / 45 / 60 min*, "o cliente vê") → `POST /orders/{id}/accept` [I][M] com `If-Match` = versão mais nova entre lista e detalhe. Sucesso: toast "Pedido do site aceito: #15", e o pedido sai da faixa e entra na lista (e na cozinha, pelo `OrderCreated`);
   - **"Recusar"** → Confirma de perigo com o motivo em chips (Item acabou, Fora da área de entrega, Muitos pedidos agora, Estamos fechando, Pedido suspeito, Outro motivo), a mensagem (opcional, 5–200 caracteres; obrigatória em "Outro"), a faixa "O cliente verá esta mensagem." e a prévia do que o cliente lê (em "Pedido suspeito", o texto não é mostrado) → `POST /orders/{id}/reject` [M];
   - `409 VersionConflict`: o `current` vira o texto do toast ("Já aceito por Bruno.", "Já recusado por Carla.", "O prazo acabou, o pedido expirou.", "O cliente desistiu deste pedido.") e nada é gravado; `409 WebOrderExpired` → "O prazo acabou, o pedido expirou."; `409 OrderNotAwaitingAcceptance` → texto pela extensão `acceptanceStatus`. Em todos, a faixa e o detalhe são recarregados;
@@ -422,7 +426,7 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 
 ### Detalhe do pedido — `orders/[id]`
 
-- **Cabeçalho:** "#12 · Marmita · Entrega" ("Pedido do site · Marmita · Entrega" enquanto não há número), cliente/mesa, telefone ("telefone não verificado" em pedido `WEB`), "por Ana" ou "pelo site" (`createdBy: null`), `SiteBadge`, `ProductionBadge`, `PaymentBadge` (só em pedido aceito) e `FulfillmentBadge` lado a lado, com formas e cores distintas (RNF-001).
+- **Cabeçalho:** "#12 · Marmita · Entrega" ("Pedido do site · Marmita · Entrega" enquanto não há número), cliente/mesa, telefone ("telefone não verificado" em pedido `WEB`), a forma de pagamento esperada e o aviso de anti-robô do pedido `WEB` (os mesmos da faixa), "por Ana" ou "pelo site" (`createdBy: null`), `SiteBadge`, `ProductionBadge`, `PaymentBadge` (só em pedido aceito) e `FulfillmentBadge` lado a lado, com formas e cores distintas (RNF-001).
 - **Aceite (pedido do site, ADR-0046):** aguardando → card "Aguardando aceite" com a contagem e "Aceitar"/"Recusar" (os mesmos da faixa); aceito → faixa "Pedido do site aceito por Bruno às 12:03 · pronto em ~30 min"; recusado, expirado ou desistência → faixa com o desfecho ("Recusado por Carla: Item acabou — "A costela acabou."", "Ninguém aceitou no prazo", "O cliente desistiu") e "Não é venda". **Enquanto não é `ACCEPTED`, nenhuma escrita aparece** (itens, receber, editar, cancelar): o servidor responde `409 OrderNotAccepted` (item 4); só "Histórico" fica no menu.
 - **Atendimento** (entrega/retirada aceitas e ativas, pedidos do site **e** do app, uso opcional, ADR-0046 itens 18 e 20): card com o status ("Pendente", "Pronto para retirar" — derivado de `isReadyForPickup` —, "Saiu para entrega · 12:15", "Entregue", "Retirado") e os botões de `features/orders/fulfillment.ts`:
   - entrega: "Saiu para entrega" → "Entregue"; com saída, também "Voltou sem entregar"; entregue: "Desfazer "Entregue"" (correção);
@@ -511,7 +515,7 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 | Rota | Lista / formulário | API |
 |---|---|---|
 | `menu/products` | Abas Pratos / Acompanhamentos / Bebidas / Adicionais; busca; toggle de disponibilidade na própria linha (`PATCH` [M]) | `GET/POST/PATCH /products` |
-| `menu/products/new`, `[id]` | Nome, tipo (bloqueado após venda), categoria, preço (regras por tipo, ADR-0020), "vai para a cozinha?", foto (câmera/galeria → `expo-image-manipulator` reduz para 1024 px JPEG 80% → `image-upload` → `PUT` no R2 → `PATCH imageStorageKey`) | |
+| `menu/products/new`, `[id]` | Nome, tipo (bloqueado após venda), categoria, preço (regras por tipo, ADR-0020), "vai para a cozinha?", **"Aparece na página"** (`isVisibleOnPage`, só na edição de bebida e adicional, ADR-0044 item 5: vai no `PATCH`; o `POST` não tem o campo e o produto nasce visível; pratos e acompanhamentos mostram a nota "aparecem quando estão no cardápio do dia"; na lista, "· fora da página"), foto (câmera/galeria → `expo-image-manipulator` reduz para 1024 px JPEG 80% → `image-upload` → `PUT` no R2 → `PATCH imageStorageKey`) | |
 | `menu/sizes` | Tamanhos P/M/G com preço e ordem | `/marmita-sizes` |
 | `menu/menus/today` | Duas abas (Marmita / PF): itens do dia em seções Pratos e Acompanhamentos; "+ Adicionar do catálogo"; **"+ Novo prato"** abre `products/new` em modal e volta com o prato já incluído (RN-002.4/3.7); toggle "acabou" (`PATCH /menus/{id}/items/{itemId}`); preço de PF editável | `GET /menus/current`, `PUT …/items`, `POST /menus` |
 | `menu/menus/weekly` | 7 dias × 2 tipos; cada célula abre o editor do modelo | `GET /menus?kind=WEEKLY_TEMPLATE`, `POST /menus` |
@@ -526,6 +530,16 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 | `menu/subscription` | Situação, dias restantes e texto de orientação. **Sem preço, plano ou link** (ADR-0017) | `GET /subscription` |
 | `menu/drafts` | Rascunhos (continuar / descartar) e pendências (verificar / reenviar / descartar com confirmação) | SQLite + `GET /operations/{key}` |
 | `menu/settings` | Som de pedidos, tamanho da fonte da cozinha, modo compartilhado, versão do app | local |
+| `menu/storefront` | **Página de pedidos** (EP-002 F-210, RF-205, US-208/US-209). Ver abaixo | `GET/PUT /storefront` [M] |
+
+**`menu/storefront` — Página de pedidos** (`features/storefront`, ADR-0044, ADR-0048; tela de gestão, §8.5 exceção):
+
+- **Estado** (`status` do `GET`) num `Banner`: Aberta / Pausada / Fechada agora (sem expediente; atalho "Abrir expediente" com `cash.open`) / Desativada (página inativa) / Indisponível (página ativa, mas a assinatura não permite: texto de orientação, sem preço, ADR-0017).
+- **Chaves rápidas** (só com `storefront.manage`): "Página ativa" e "Pausar pedidos pelo site". Cada uma passa por `confirmAction` e manda o **objeto inteiro do servidor** com só a chave trocada (`isPageActive` / `isAcceptingOrders`), com `If-Match`. Travadas enquanto o formulário tem alteração não salva ("Salve ou desfaça as alterações abaixo…"), para nunca gravar edição pela metade. Ativar sem endereço completo ou sem tamanho de marmita ativo volta `422` em `isPageActive`; a mensagem do servidor aparece logo abaixo das chaves. "Pausar entrega" (`isDeliveryEnabled`) não aparece até a fatia 4: vai sempre com o valor do servidor.
+- **Link** `{EXPO_PUBLIC_PUBLIC_PAGE_BASE_URL}/{slug}` (padrão `http://localhost:3000` só em `__DEV__`; fora dele, sem a variável, a tela diz que o endereço não está configurado e não mostra link nem QR: o domínio é lacuna do ADR-0051 item 8). "Compartilhar link" (`lib/share.ts`: `Share` no celular; `share.web.ts`: `navigator.share`, senão copia e mostra "Link copiado"). "Mostrar QR code": `QrCode` (`qrcode-generator`, JavaScript puro, sem módulo nativo e sem novo build do Dev Client), preto no branco com margem de 4 módulos, inclusive no tema escuro; na web, "Imprimir QR code" abre uma folha com nome, QR (SVG) e link (`printQr.web.ts`); no celular, a orientação é mostrar no balcão ou tirar um print.
+- **Formulário** (um "Salvar" para tudo, `PUT /storefront` [M] com o objeto inteiro): slug (normalizado ao digitar: minúsculas, sem acento, espaço vira hífen; formato conferido na tela, reservados e em uso só o servidor sabe), com a prévia do link e os links antigos (`previousSlugs`); trocar o slug pede confirmação ("o antigo continua levando para a página; depois de 5 trocas, só pelo suporte"); nome público; telefone de contato (máscara BR → E.164); horário (texto livre, "só informativo"); endereço (rua, número, complemento, bairro, cidade, UF, CEP com máscara); "Retirada no balcão". "Entrega" e os campos da taxa (preço por km, taxa mínima, raio) aparecem **desabilitados** com "Disponível em breve: taxa por distância" e vão no corpo com os valores do servidor. Erros `422` aparecem no campo (`errors` com as chaves `slug`, `publicName`, `contactPhone`, `address.state`…).
+- **Conflito:** as mutações ficam no componente da tela, fora do formulário (que remonta a cada versão), para o aviso sobreviver à recarga. `409 VersionConflict` → o `current` entra no cache, o formulário volta com o que está no servidor e a faixa diz "Outra pessoa alterou a página enquanto você editava. Nada foi gravado…". Nunca reenvia sozinho.
+- **Modo leitura** (só `orders.view`, ou assinatura em somente leitura): estado, link, compartilhar e QR; campos travados, sem chaves e sem "Salvar".
 
 ---
 
@@ -596,6 +610,7 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 | Hooks (RNTL + fetch simulado) | `useCriticalMutation`: sucesso, 4xx, 409 com `current`, timeout → `UNKNOWN` → `/operations` `COMPLETED`/`NOT_FOUND`; `syncEngine` com `410`; refresh single-flight com 3 requisições paralelas recebendo `401` |
 | Componentes (RNTL) | `ConfirmDialog` (cancelar não chama a API), `MoneyInput`, `PermissionGate`, `OrderCard` com os dois badges |
 | Pedidos do site (ADR-0046) | `webOrders.test.ts`: botões de atendimento por tipo/status/permissão, "Concluir e marcar", `isDispatched`, contagem regressiva, texto do conflito pelo `current`, validação da recusa, título da aba, avisos do fechamento, mensagens dos `errorCode`s novos. `webOrderFlow.test.tsx` (fetch simulado, exemplos literais do 06): faixa com prazo, itens, endereço e "telefone não verificado"; cozinha sem botões; aceite com `If-Match` + `Idempotency-Key` + tempo estimado; `409` "Já aceito por Bruno"; `WebOrderExpired`; rede caindo → pendência `UNKNOWN` e nenhum reenvio; recusa com motivo, "Outro" obrigatório e sem `Idempotency-Key`; "Concluir e marcar saída" com `completeProduction`; `ProductionNotCompleted`; selos "Site"/atendimento no `OrderCard`; "Pronto para retirar"; fechamento com os pedidos do site |
+| Página de pedidos (EP-002 F-210) | `storefront.test.tsx` (fetch simulado, exemplo do 06 §6.18): slug normalizado e formato; chave rápida com o objeto inteiro e só a chave trocada; corpo do formulário (E.164, UF, vazios → `null`, taxa intocada); textos do estado; QR com os padrões de posição; ativar sem endereço → `PUT` com `If-Match` e o motivo do `422` na tela; pausar → `isAcceptingOrders: false` e "Pausada"; `409` → aviso, formulário recarregado, sem reenvio; chaves travadas com edição pendente; modo leitura com compartilhar; `share.web.ts` (copiar sem `navigator.share`, fechar a folha não copia); `isVisibleOnPage` no `PATCH` da bebida; "Vai pagar…" e o aviso de `riskFlag` |
 | E2E (Maestro, emulador Android de entrada) | 1) cadastro → abrir expediente → marmita com bebida → receber em dinheiro com troco → fechar com diferença e justificativa; 2) desligar a rede no meio do "Receber" → religar → app resolve sem duplicar; 3) PIN no aparelho compartilhado + inatividade |
 
 Critério de pronto do mobile (`docs/02-padroes.md` §2.6): fluxos E2E 1 e 2 passando em homolog antes de cada release para as lojas.
@@ -666,6 +681,8 @@ O mesmo `mobile/` roda no navegador do computador do balcão (Chrome e Edge no W
 | `features/shell/tabTitle.ts` | `tabTitle.web.ts` | com a aba oculta, `document.title` = "(2) Novos do site · AlmoSeis": quantos pedidos do site **aguardam aceite agora** (a mesma consulta da faixa, `['orders', 'list', 'awaiting']`, mantida em dia pelos eventos com a aba oculta). Aceito em outro computador ou expirado, o número cai; volta ao título normal quando a aba vem para a frente (EP-002 fatia 1, 2026-11-20). O som do pedido do site é o mesmo do pedido novo (§8.6) |
 | `features/update/upgradeHandler.ts` + `UpdateRequiredScreen.tsx` | `*.web.ts(x)` | `426`: grava os rascunhos no debounce (`flushAllDrafts`) e recarrega a página **uma vez** (marca `almoseis.reloadedFor426` na `sessionStorage`, vale 10 min); se persistir, "Estamos atualizando o AlmoSeis. Tente de novo em alguns minutos." com "Recarregar", sem link de loja |
 | `lib/keyboard.ts` | `keyboard.web.ts` | `useKeyDown`: `Enter` confirma o `ConfirmDialog` (exceto com o foco num botão, que já trata a tecla); tecla segurada (`repeat`) é ignorada; PIN aceita dígitos, `Backspace` e `Enter`. `Esc` fecha diálogos e *sheets* pelo `onRequestClose` do `Modal` do react-native-web. O peso do quilo já é um `TextInput` |
+| `lib/share.ts` | `share.web.ts` | "Compartilhar link" da página de pedidos: no celular, `Share.share`; na web, `navigator.share` quando existe (fechar a folha não copia), senão `navigator.clipboard.writeText` e o aviso "Link copiado". Tipos em `share.types.ts` |
+| `features/storefront/printQr.ts` | `printQr.web.ts` | "Imprimir QR code" só na web (`canPrintQr`): janela com nome, QR em SVG e link + `window.print()`; janela bloqueada → aviso. No celular não há impressão (exigiria módulo nativo). Tipos em `printQr.types.ts`, QR em `qrMatrix.ts` |
 | `lib/confirm.ts` | `confirm.web.ts` | `confirmAction`: pergunta de sim/não antes de ação destrutiva (encerrar sessão, descartar pendência). No celular, `Alert.alert`; na web, `window.confirm`, porque o `Alert` do react-native-web não faz nada. Uma regra de lint proíbe importar `Alert` de `react-native` fora de `lib/confirm.ts` |
 
 ### Sem arquivo `.web`

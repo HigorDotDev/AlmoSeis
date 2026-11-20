@@ -24,6 +24,7 @@ export function MoneyInput({
   autoFocus,
   testID,
   allowZero = true,
+  editable = true,
 }: {
   label: string;
   value: MoneyString | null;
@@ -32,6 +33,7 @@ export function MoneyInput({
   autoFocus?: boolean;
   testID?: string;
   allowZero?: boolean;
+  editable?: boolean;
 }) {
   const c = useColors();
   const cents = value === null ? 0 : toCents(value);
@@ -45,6 +47,7 @@ export function MoneyInput({
         accessibilityLabel={label}
         keyboardType="number-pad"
         autoFocus={autoFocus}
+        editable={editable}
         value={cents === 0 && !allowZero ? '' : formatBRL(cents)}
         onChangeText={(text) => onChange(fromCents(digitsToCents(text)))}
         style={{
@@ -57,6 +60,7 @@ export function MoneyInput({
           backgroundColor: c.surface,
           fontSize: font.xl,
           fontWeight: '700',
+          opacity: editable ? 1 : 0.5,
         }}
       />
       {error ? (

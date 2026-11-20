@@ -53,6 +53,7 @@ export type Permission =
   | 'employees.manage'
   | 'devices.manage'
   | 'settings.manage'
+  | 'storefront.manage'
   | 'audit.view'
   | 'subscription.view';
 
@@ -242,6 +243,8 @@ export interface Product {
   imageUrl: string | null;
   isActive: boolean;
   isAvailable: boolean;
+  /** ADR-0044 item 5: bebidas e adicionais com `false` não aparecem na página de pedidos. Nasce `true`. */
+  isVisibleOnPage: boolean;
   createdAt: Instant;
   updatedAt: Instant;
 }
@@ -264,6 +267,7 @@ export type UpdateProductBody = Partial<{
   requiresPreparation: boolean;
   isActive: boolean;
   isAvailable: boolean;
+  isVisibleOnPage: boolean;
   imageStorageKey: string | null;
 }>;
 
@@ -430,6 +434,7 @@ export type CancellationStatus = 'ACTIVE' | 'CANCELED';
 export type ItemKind = 'MARMITA' | 'PF' | 'BEVERAGE' | 'ADDON';
 /** `APP`: criado no app; `WEB`: página de pedidos (EP-002, ADR-0046). */
 export type OrderOrigin = 'APP' | 'WEB';
+export type WebOrderRiskFlag = 'CAPTCHA_UNAVAILABLE';
 /** ADR-0046 item 1. `AWAITING_PAYMENT` é reservado à Fase 2. */
 export type AcceptanceStatus = 'AWAITING_PAYMENT' | 'AWAITING_ACCEPTANCE' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED' | 'WITHDRAWN';
 /** ADR-0046 item 2: só em `DELIVERY`/`PICKUP` aceitos. */
@@ -508,6 +513,12 @@ export interface Order {
   tableLabel: string | null;
   tabNumber: string | null;
   notes: string | null;
+  /** Só em pedido `WEB` (`null` nos do app): a forma que o cliente pretende usar. **Não** cria pagamento (ADR-0044 item 19). */
+  expectedPaymentMethod: PaymentMethod | null;
+  /** "Troco para R$ X", só com `CASH`. */
+  changeFor: MoneyString | null;
+  /** `CAPTCHA_UNAVAILABLE`: o anti-robô não respondeu no envio (ADR-0045 item 12). */
+  riskFlag: WebOrderRiskFlag | null;
   deliveryFee: MoneyString;
   itemsTotal: MoneyString;
   weighingsTotal: MoneyString;
@@ -906,3 +917,51 @@ export interface RealtimeEnvelope {
   actorEmployeeId: Uuid | null;
   data: Record<string, unknown> | null;
 }
+
+// ---------------------------------------------------------------- 6.18 Página de pedidos (EP-002 F-210)
+
+/** Estado que a página mostra agora (06 §6.19), calculado no servidor. */
+export type StoreStatus = 'OPEN' | 'CLOSED' | 'PAUSED' | 'UNAVAILABLE';
+
+export type DeliveryFeeMode = 'DISTANCE' | 'FIXED';
+
+/** Endereço do restaurante na página: todos os campos podem vir nulos (página nasce sem endereço). */
+export interface StorefrontAddress {
+  street: string | null;
+  number: string | null;
+  complement: string | null;
+  neighborhood: string | null;
+  city: string | null;
+  state: string | null;
+  zipCode: string | null;
+}
+
+/** Regra da taxa por distância (ADR-0048), usada a partir da fatia 4. `maxDistanceKm` com uma casa ("6.0"). */
+export interface StorefrontDelivery {
+  feeMode: DeliveryFeeMode;
+  pricePerKm: MoneyString | null;
+  minimumFee: MoneyString;
+  maxDistanceKm: string | null;
+}
+
+export interface Storefront {
+  version: number;
+  slug: string;
+  previousSlugs: string[];
+  publicName: string;
+  isPageActive: boolean;
+  isAcceptingOrders: boolean;
+  isDeliveryEnabled: boolean;
+  offersDelivery: boolean;
+  offersPickup: boolean;
+  contactPhone: string | null;
+  hoursText: string | null;
+  address: StorefrontAddress;
+  location: { latitude: number; longitude: number } | null;
+  delivery: StorefrontDelivery;
+  status: StoreStatus;
+  updatedAt: Instant;
+}
+
+/** `PUT /storefront` [M]: substitui a configuração inteira (06 §6.18). */
+export type UpdateStorefrontBody = Omit<Storefront, 'version' | 'previousSlugs' | 'location' | 'status' | 'updatedAt'>;
