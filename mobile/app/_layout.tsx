@@ -2,15 +2,15 @@
 import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
 import { MutationCache, QueryClient } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
-import { router, Stack } from 'expo-router';
+import { DarkTheme, DefaultTheme, router, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { configureApiClient } from '@/api/client';
 import { isApiError } from '@/api/errors';
-import { Toaster, useColors } from '@/components/ui';
+import { Toaster, useColorMode, useColors } from '@/components/ui';
 import { draftsRepo } from '@/db/draftsRepo';
 import { queryCacheStorage } from '@/db/kvStorage';
 import { openLocalDb } from '@/db/migrations';
@@ -63,6 +63,12 @@ export default function RootLayout() {
   const upgradeRequired = useSession((s) => s.upgradeRequired);
   const reconnecting = useSession((s) => s.reconnecting);
   const c = useColors();
+  const mode = useColorMode();
+  // Fundo das abas e das telas do navegador segue o tema escolhido no aparelho, não só o do sistema.
+  const navTheme = useMemo(() => {
+    const base = mode === 'dark' ? DarkTheme : DefaultTheme;
+    return { ...base, colors: { ...base.colors, background: c.bg, card: c.surface, text: c.text, border: c.border, primary: c.primary } };
+  }, [mode, c]);
 
   useEffect(() => {
     void (async () => {
@@ -93,9 +99,11 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <PersistQueryClientProvider client={queryClient} persistOptions={{ persister, maxAge: DAY, buster: tenantId }}>
-        <StatusBar style="auto" />
-        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: c.bg } }} />
-        <Toaster />
+        <ThemeProvider value={navTheme}>
+          <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
+          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: c.bg } }} />
+          <Toaster />
+        </ThemeProvider>
       </PersistQueryClientProvider>
     </SafeAreaProvider>
   );

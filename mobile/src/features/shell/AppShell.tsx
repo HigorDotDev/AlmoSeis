@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Pressable, View } from 'react-native';
 
 import type { Permission } from '@/api/types';
-import { Banner, BottomSheet, IconButton, Row, Text, TOUCH, radius, space, useColors, type IconName } from '@/components/ui';
+import { Banner, BottomSheet, IconButton, Row, Text, TOUCH, radius, space, useColorMode, useColors, type IconName } from '@/components/ui';
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { useSettings } from '@/features/session/hooks';
 import { draftsRepo } from '@/db/draftsRepo';
@@ -14,6 +14,7 @@ import { pendingOpsRepo } from '@/db/pendingOpsRepo';
 import { confirmAction } from '@/lib/confirm';
 import { formatBusinessDate } from '@/lib/dates';
 import { usePendingOps } from '@/stores/pendingOps';
+import { usePreferences } from '@/stores/preferences';
 import { hasPermission, useSession } from '@/stores/session';
 
 /** Cabeçalho das telas empilhadas (o recuo do topo já vem do layout, junto da ConnectivityBar). */
@@ -37,6 +38,8 @@ export function AppHeader() {
   const sharedDevice = useSession((s) => s.sharedDevice);
   const signOut = useSession((s) => s.signOut);
   const day = useCurrentBusinessDay();
+  const mode = useColorMode();
+  const setThemeMode = usePreferences((s) => s.setThemeMode);
   const [menuOpen, setMenuOpen] = useState(false);
   if (!me) return null;
   const open = !!day.data;
@@ -58,6 +61,12 @@ export function AppHeader() {
             {dayText}
           </Text>
         </View>
+        {/* Escolha guardada no aparelho; vale para todos que usam este aparelho ou navegador. */}
+        <IconButton
+          icon={mode === 'dark' ? 'sunny-outline' : 'moon-outline'}
+          label={mode === 'dark' ? 'Usar tema claro' : 'Usar tema escuro'}
+          onPress={() => setThemeMode(mode === 'dark' ? 'light' : 'dark')}
+        />
         {sharedDevice ? (
           <Pressable
             onPress={() => void signOut('idle')}

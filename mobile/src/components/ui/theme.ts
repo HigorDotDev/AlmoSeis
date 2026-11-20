@@ -1,6 +1,8 @@
 /** Tokens de cor claro/escuro com contraste AA (08 §8.11; proposta em docs/10-ux.md §10.4). */
 import { useColorScheme } from 'react-native';
 
+import { usePreferences } from '@/stores/preferences';
+
 const light = {
   bg: '#F6F5F2',
   surface: '#FFFFFF',
@@ -52,8 +54,16 @@ const dark: typeof light = {
 
 export type Colors = typeof light;
 
+/** Tema em uso: a escolha do aparelho (botão no cabeçalho) ou, em `system`, o do sistema. */
+export function useColorMode(): 'light' | 'dark' {
+  const system = useColorScheme();
+  const mode = usePreferences((s) => s.themeMode);
+  if (mode !== 'system') return mode;
+  return system === 'dark' ? 'dark' : 'light';
+}
+
 export function useColors(): Colors {
-  return useColorScheme() === 'dark' ? dark : light;
+  return useColorMode() === 'dark' ? dark : light;
 }
 
 export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const;
