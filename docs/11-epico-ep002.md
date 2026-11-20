@@ -341,6 +341,8 @@ O mesmo app do restaurante (`mobile/`, Expo Router) roda no navegador do computa
 | App do restaurante na web (`mobile/` exportado para web) | Novo alvo de build, PWA em `app.{dominio}` (Azure Static Web Apps, a confirmar), arquivos `.web.ts` para sessão, banco local, som e tela ligada (ADR-0053) |
 | API — autenticação e CORS | Refresh e `deviceSecret` em cookie para `X-App-Platform: WEB`, checagem de `Origin`, política CORS do app do restaurante separada da página pública (ADR-0053) |
 
+Implementação da página (fatia 3: perfil, cardápio, carrinho, envio, acompanhamento e aviso de privacidade): projeto [`web/`](../web/README.md).
+
 ---
 
 # 6. Impacto nos documentos (trabalho dos outros agentes)
