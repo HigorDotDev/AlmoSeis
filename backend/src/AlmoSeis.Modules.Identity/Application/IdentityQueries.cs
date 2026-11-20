@@ -82,6 +82,13 @@ internal sealed class EmployeeDirectory(AppDbContext db) : IEmployeeDirectory
             .Where(d => ids.Contains(d.Id))
             .ToDictionaryAsync(d => d.Id, d => d.Name, cancellationToken);
     }
+
+    /// SQL e não LINQ: o filtro de tenant do EF esconderia os outros estabelecimentos; a RLS de vínculo libera as linhas
+    /// do próprio usuário (`app.user_id`), sem `IgnoreQueryFilters`.
+    public async Task<int> CountActiveMembershipsAsync(Guid userId, CancellationToken cancellationToken) =>
+        (await db.Database
+            .SqlQuery<int>($"SELECT count(*)::int AS \"Value\" FROM tenant_employees WHERE user_id = {userId} AND status = 'ACTIVE'")
+            .ToListAsync(cancellationToken)).Single();
 }
 
 internal sealed class PlatformAdminCheck(AppDbContext db) : IPlatformAdminCheck

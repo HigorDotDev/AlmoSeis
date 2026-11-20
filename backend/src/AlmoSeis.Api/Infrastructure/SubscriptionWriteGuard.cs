@@ -10,7 +10,8 @@ namespace AlmoSeis.Api.Infrastructure;
 internal sealed class SubscriptionWriteGuardFilter(ITenantContext tenant, ISubscriptionAccess subscriptions) : IAsyncActionFilter
 {
     /// `/api/v1/public`: a página responde `409 StoreUnavailable` sem dizer o motivo (ADR-0045 item 16), no handler.
-    private static readonly string[] OpenPrefixes = ["/api/v1/auth", "/api/v1/admin", "/webhooks", "/api/v1/public"];
+    /// `/api/v1/devices/push-token`: configuração do aparelho, não escrita do estabelecimento (ADR-0049).
+    private static readonly string[] OpenPrefixes = ["/api/v1/auth", "/api/v1/admin", "/webhooks", "/api/v1/public", "/api/v1/devices/push-token"];
 
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {

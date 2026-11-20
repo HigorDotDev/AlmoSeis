@@ -45,6 +45,9 @@ public sealed class OutboxMessage : ITenantOwned
     public required string Payload { get; init; }
     public long? Seq { get; init; }
     public DateTimeOffset OccurredAt { get; init; }
+
+    /// Entrega agendada ou nova tentativa com espera (migration 0006). Nulo = na hora.
+    public DateTimeOffset? AvailableAt { get; set; }
     public DateTimeOffset? ProcessedAt { get; set; }
     public int Attempts { get; set; }
     public string? LastError { get; set; }

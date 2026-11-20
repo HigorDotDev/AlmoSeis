@@ -1,5 +1,6 @@
 using AlmoSeis.Api.Infrastructure;
 using AlmoSeis.Modules.Identity.Contracts;
+using AlmoSeis.Modules.Notifications.Contracts;
 using AlmoSeis.SharedKernel.Application;
 using AlmoSeis.SharedKernel.Errors;
 using AlmoSeis.SharedKernel.Security;
@@ -55,4 +56,26 @@ public sealed class DevicesController : ControllerBase
         tenantId is { } id
             ? Ok(await handler.HandleAsync(new ListPinEmployeesQuery(id, installationId, deviceSecret), cancellationToken))
             : throw new BusinessException(ErrorCodes.InvalidDeviceSecret);
+}
+
+/// Registro do aparelho para o push dos pedidos do site (06 §6.3, ADR-0049 item 4). Qualquer perfil autenticado: quem
+/// recebe é decidido no envio, pelas permissões atuais (`orders.accept`). Fora do bloqueio da assinatura, como `/auth`.
+[ApiController]
+[Route("api/v1/devices/push-token")]
+[Authorize]
+public sealed class PushTokenController : ControllerBase
+{
+    [HttpPut]
+    public async Task<ActionResult<PushRegistrationDto>> Register(
+        [FromBody] RegisterPushTokenCommand command,
+        [FromServices] ICommandHandler<RegisterPushTokenCommand, PushRegistrationDto> handler, CancellationToken cancellationToken) =>
+        Ok(await handler.HandleAsync(command, cancellationToken));
+
+    [HttpDelete]
+    public async Task<IActionResult> Remove(
+        [FromServices] ICommandHandler<RemovePushTokenCommand, bool> handler, CancellationToken cancellationToken)
+    {
+        await handler.HandleAsync(new RemovePushTokenCommand(), cancellationToken);
+        return NoContent();
+    }
 }

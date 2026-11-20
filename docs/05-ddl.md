@@ -54,7 +54,7 @@ O interceptor de conexão do EF (ADR-0026) executa a cada abertura de conexão:
 SELECT set_config('app.tenant_id', @tenantId, false), set_config('app.user_id', @userId, false);
 ```
 
-Na devolução da conexão ao pool, as variáveis são limpas (`RESET app.tenant_id; RESET app.user_id; RESET app.invitation_code`).
+Na devolução da conexão ao pool, as variáveis são limpas (`RESET app.tenant_id; RESET app.user_id; RESET app.invitation_code`). `app.push_token` (0006) é definida só dentro da transação do `PUT /devices/push-token` (`set_config(..., true)`).
 
 ```sql
 CREATE OR REPLACE FUNCTION app_tenant_id() RETURNS uuid
@@ -1047,10 +1047,12 @@ Cada entidade [S] alterada na transação recebe seu próprio `seq`, porque a PK
 | Página ativa só com endereço (ADR-0044 item 11) | `ck_storefront_settings_active_address` (0004) |
 | Slug e token resolvíveis antes do tenant, gravados só pelo próprio tenant (ADR-0045) | políticas `public_lookup`/`tenant_insert`/`tenant_update` (0004) |
 | Troco só em dinheiro; campos da página só em pedido `WEB` (ADR-0044 item 19) | `ck_orders_change_for`, `ck_orders_web_fields` (0004) |
+| Um registro de push por instalação e tenant; um token em um registro só; push nunca cruza tenants (ADR-0049 item 4) | `ux_push_registrations_installation`, `ux_push_registrations_token`, RLS + `push_token_owner_*` (0006) |
+| Push enviado uma vez por mensagem do outbox e aparelho (ADR-0049 item 8) | PK de `push_deliveries`, `ck_push_deliveries_ticket` (0006) |
 
 ## 5.16 Validação
 
-O script foi validado em 2026-10-27 num PostgreSQL 16 (Docker): os blocos `sql` deste documento aplicados do zero (36 tabelas e 65 políticas na `0001`; 40 e 76 com as alterações até a `0004`; 42 e 80 até a `0005`) e depois o teste de fumaça [`05-ddl-smoke-test.sql`](05-ddl-smoke-test.sql), que roda como `almoseis_app`/`almoseis_platform` e confere 45 regras (22 da `0001`, 9 da `0003`, 10 da `0004`, 4 da `0005`): isolamento entre dois tenants, plataforma do aparelho compartilhado, login, convite por código, totais, cancelamento, troco, estorno, conciliação, imutabilidade, casos com `NULL` e, desde a `0003`, o pedido da página (sem número, sem produção e sem autor enquanto aguarda aceite; recusa coerente; atendimento só em entrega) e, desde a `0004`, a página de pedidos (endereço para ativar, slug atual único e no formato, troco só em dinheiro, campos da página só em `WEB`, idempotência anônima, slug e token resolvíveis por outro tenant mas nunca gravados por ele, perfil e hash do IP isolados) e, desde a `0005`, a taxa por distância (cotação por distância completa, confirmação do ponto só com ponto, origem da taxa só em entrega, cotação e cache isolados). Toda mudança neste documento deve repetir os dois passos:
+O script foi validado em 2026-10-27 num PostgreSQL 16 (Docker): os blocos `sql` deste documento aplicados do zero (36 tabelas e 65 políticas na `0001`; 40 e 76 com as alterações até a `0004`; 42 e 80 até a `0005`; 44 e 86 até a `0006`) e depois o teste de fumaça [`05-ddl-smoke-test.sql`](05-ddl-smoke-test.sql), que roda como `almoseis_app`/`almoseis_platform` e confere 50 regras (22 da `0001`, 9 da `0003`, 10 da `0004`, 4 da `0005`, 5 da `0006`): isolamento entre dois tenants, plataforma do aparelho compartilhado, login, convite por código, totais, cancelamento, troco, estorno, conciliação, imutabilidade, casos com `NULL` e, desde a `0003`, o pedido da página (sem número, sem produção e sem autor enquanto aguarda aceite; recusa coerente; atendimento só em entrega) e, desde a `0004`, a página de pedidos (endereço para ativar, slug atual único e no formato, troco só em dinheiro, campos da página só em `WEB`, idempotência anônima, slug e token resolvíveis por outro tenant mas nunca gravados por ele, perfil e hash do IP isolados) e, desde a `0005`, a taxa por distância (cotação por distância completa, confirmação do ponto só com ponto, origem da taxa só em entrega, cotação e cache isolados) e, desde a `0006`, o push (token no formato do Expo e único, entrega com ticket ou erro, registro e entregas isolados, só quem comprova o token tira o aparelho do outro tenant). Toda mudança neste documento deve repetir os dois passos:
 
 ```text
 docker run -d --name almoseis-ddl-test -e POSTGRES_PASSWORD=test postgres:16
@@ -1484,4 +1486,101 @@ GRANT SELECT ON delivery_quotes, geocode_cache_entries TO almoseis_app, almoseis
 GRANT INSERT ON delivery_quotes, geocode_cache_entries TO almoseis_app;
 GRANT UPDATE ON geocode_cache_entries TO almoseis_app;
 GRANT DELETE ON delivery_quotes, geocode_cache_entries TO almoseis_platform;
+```
+
+### 0006_PushNotifications — 2026-11-20 (ADR-0049, ADR-0046 item 15, ADR-0052)
+
+Push para pedidos da página (EP-002 fatia 5, F-209):
+
+- **`push_registrations`** [T] (ADR-0049 item 4): o token do Expo de uma instalação no estabelecimento, ligado ao funcionário da sessão (`tenant_employee_id`) e, no login por PIN, ao aparelho compartilhado (`shared_device_id`; vale o último funcionário que entrou). Um registro por instalação e tenant (`ux_push_registrations_installation`) e **um registro por token em todo o sistema** (`ux_push_registrations_token`): o aparelho que troca de estabelecimento sem logout sai do anterior quando registra o token no novo. `web_orders_enabled` é a opção "Avisar pedidos do site com o app fechado" (item 6); `show_tenant_name`, calculado a cada registro, põe o nome do estabelecimento no título quando o usuário tem mais de um vínculo (item 3); `updated_at` é o último registro feito pelo app, e o job apaga o que está sem uso há 30 dias. `platform` aceita `WEB`, reservado para o Web Push (Q-26): a API ainda recusa. Logout (fora do aparelho compartilhado), troca de estabelecimento, `AccessRevoked`, revogação do aparelho e `DeviceNotRegistered` apagam o registro, por isso o papel da aplicação tem `DELETE`.
+- **Política `push_token_owner`**: a sessão que comprova ter o token (`app.push_token`, definido só dentro da transação do `PUT /devices/push-token`) enxerga e apaga os registros com **esse** token em outros tenants, sem enxergar nenhum outro. Não há política de `INSERT`/`UPDATE` além da de tenant: ninguém grava registro em outro estabelecimento.
+- **`push_deliveries`** [T] (ADR-0049 item 8, ADR-0031): um push por mensagem do outbox (`event_id`) e registro. É a deduplicação do reenvio (entrega pelo menos uma vez) e guarda o ticket da Expo para a conferência do recibo depois de 15 min, ou o erro do ticket. Sem token nem conteúdo (ADR-0052 item 7). Apagada em 7 dias pelo job, no papel de plataforma.
+- **`outbox_messages.available_at`**: entrega agendada (o lembrete aos 3 min, ADR-0046 item 15) e espera entre tentativas de um consumidor interno. Nulo = na hora.
+
+```sql
+-- Token que a sessão comprovou ter (PUT /devices/push-token): só dentro da transação (ADR-0049 item 4)
+CREATE OR REPLACE FUNCTION app_push_token() RETURNS text
+  LANGUAGE sql STABLE
+  AS $$ SELECT NULLIF(current_setting('app.push_token', true), '') $$;
+
+-- Aparelho que recebe push dos pedidos da página (ADR-0049 itens 4 a 6)
+CREATE TABLE push_registrations (
+  id                  uuid          PRIMARY KEY,
+  tenant_id           uuid          NOT NULL REFERENCES tenants (id),
+  installation_id     varchar(64)   NOT NULL,
+  tenant_employee_id  uuid          NOT NULL,
+  shared_device_id    uuid,
+  platform            text          NOT NULL CHECK (platform IN ('ANDROID', 'IOS', 'WEB')),  -- WEB: reservado (Q-26)
+  expo_push_token     varchar(200)  NOT NULL CHECK (expo_push_token ~ '^Expo(nent)?PushToken\[[A-Za-z0-9_-]{8,180}\]$'),
+  web_orders_enabled  boolean       NOT NULL DEFAULT true,
+  show_tenant_name    boolean       NOT NULL DEFAULT false,
+  created_at          timestamptz   NOT NULL,
+  updated_at          timestamptz   NOT NULL,
+  CONSTRAINT ux_push_registrations_installation UNIQUE (tenant_id, installation_id),
+  CONSTRAINT ux_push_registrations_token UNIQUE (expo_push_token),
+  CONSTRAINT fk_push_registrations_employee FOREIGN KEY (tenant_id, tenant_employee_id)
+    REFERENCES tenant_employees (tenant_id, id),
+  CONSTRAINT fk_push_registrations_shared_device FOREIGN KEY (tenant_id, shared_device_id)
+    REFERENCES shared_devices (tenant_id, id)
+);
+CREATE INDEX ix_push_registrations_employee ON push_registrations (tenant_employee_id);
+CREATE INDEX ix_push_registrations_shared_device ON push_registrations (shared_device_id) WHERE shared_device_id IS NOT NULL;
+-- Limpeza dos registros sem uso há 30 dias (job de plataforma)
+CREATE INDEX ix_push_registrations_updated ON push_registrations (updated_at);
+
+-- Push enviado por mensagem do outbox e registro: deduplicação e ticket para o recibo (ADR-0049 item 8)
+CREATE TABLE push_deliveries (
+  event_id            uuid          NOT NULL,
+  registration_id     uuid          NOT NULL,  -- sem FK: o registro pode ser apagado (DeviceNotRegistered)
+  tenant_id           uuid          NOT NULL REFERENCES tenants (id),
+  order_id            uuid          NOT NULL,
+  kind                text          NOT NULL CHECK (kind IN ('WEB_ORDER_AWAITING_ACCEPTANCE', 'WEB_ORDER_REMINDER')),
+  ticket_id           varchar(64),
+  error               varchar(40),
+  sent_at             timestamptz   NOT NULL,
+  receipt_checked_at  timestamptz,
+  receipt_error       varchar(40),
+  PRIMARY KEY (event_id, registration_id),
+  CONSTRAINT ck_push_deliveries_ticket CHECK ((ticket_id IS NULL) <> (error IS NULL)),
+  CONSTRAINT ck_push_deliveries_receipt CHECK (
+        (receipt_checked_at IS NULL OR ticket_id IS NOT NULL)
+    AND (receipt_error IS NULL OR receipt_checked_at IS NOT NULL)),
+  CONSTRAINT fk_push_deliveries_order FOREIGN KEY (tenant_id, order_id) REFERENCES orders (tenant_id, id)
+);
+-- Recibos a conferir (job, todos os tenants) e retenção de 7 dias
+CREATE INDEX ix_push_deliveries_receipt ON push_deliveries (sent_at) WHERE ticket_id IS NOT NULL AND receipt_checked_at IS NULL;
+CREATE INDEX ix_push_deliveries_sent ON push_deliveries (sent_at);
+
+-- Outbox: entrega agendada e espera entre tentativas de um consumidor interno (lembrete do push, ADR-0046 item 15)
+ALTER TABLE outbox_messages ADD COLUMN available_at timestamptz;
+
+-- RLS: tabelas de tenant
+DO $$
+DECLARE
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['push_registrations', 'push_deliveries'] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format(
+      'CREATE POLICY tenant_isolation ON %I TO almoseis_app '
+      'USING (tenant_id = app_tenant_id()) WITH CHECK (tenant_id = app_tenant_id())', t);
+    EXECUTE format(
+      'CREATE POLICY platform_access ON %I TO almoseis_platform USING (true) WITH CHECK (true)', t);
+  END LOOP;
+END $$;
+
+-- O mesmo token em outro tenant: quem comprova ter o token o enxerga e apaga (o aparelho trocou de estabelecimento)
+CREATE POLICY push_token_owner_select ON push_registrations FOR SELECT TO almoseis_app
+  USING (expo_push_token = app_push_token());
+CREATE POLICY push_token_owner_delete ON push_registrations FOR DELETE TO almoseis_app
+  USING (expo_push_token = app_push_token());
+
+-- Grants (tabelas novas). A coluna nova do outbox segue os grants da tabela.
+GRANT EXECUTE ON FUNCTION app_push_token() TO almoseis_app, almoseis_platform;
+GRANT SELECT ON push_registrations, push_deliveries TO almoseis_app, almoseis_platform;
+GRANT INSERT, UPDATE, DELETE ON push_registrations TO almoseis_app;
+GRANT INSERT, UPDATE ON push_deliveries TO almoseis_app;
+-- Limpeza (ADR-0049 item 4, ADR-0052 item 5): registro sem uso há 30 dias e entregas com mais de 7 dias
+GRANT DELETE ON push_registrations, push_deliveries TO almoseis_platform;
 ```

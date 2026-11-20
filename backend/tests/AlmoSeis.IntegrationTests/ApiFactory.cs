@@ -48,6 +48,9 @@ public sealed class ApiFactory(PostgresFixture db, Action<IServiceCollection>? s
             // Taxa por distância (ADR-0048): provedor determinístico, sem rede; retenção só por RunOnceAsync.
             ["Maps:Provider"] = "Fake",
             ["Maps:RetentionJobEnabled"] = "false",
+            // Push (ADR-0049): sem rede; manutenção (recibos e limpeza) só por RunOnceAsync.
+            ["Push:Provider"] = "Fake",
+            ["Push:MaintenanceJobEnabled"] = "false",
         }));
         if (services is not null)
         {
@@ -186,7 +189,7 @@ public static class ApiScenarios
 
     /// Funcionário com outro perfil no estabelecimento de `owner`: um usuário de outro autocadastro ganha
     /// vínculo direto no banco (o fluxo de convite ainda não existe) e entra escolhendo esse tenant.
-    public static async Task<string> EmployeeTokenAsync(this ApiFactory factory, PostgresFixture db, JsonElement owner, string role)
+    public static async Task<string> EmployeeTokenAsync(this ApiFactory factory, PostgresFixture db, JsonElement owner, string role, string installationId = "inst_func")
     {
         var email = $"func.{Guid.NewGuid():N}@example.com";
         var other = await factory.SignUpAsync(SignUpBody(email: email));
@@ -213,7 +216,7 @@ public static class ApiScenarios
 
         var login = await factory.CreateClient().PostAsJsonAsync(
             "/api/v1/auth/login",
-            new { login = email, password = "S3nha-forte!", installationId = "inst_func", preferredTenantId = tenantId },
+            new { login = email, password = "S3nha-forte!", installationId, preferredTenantId = tenantId },
             TestContext.Current.CancellationToken);
         return (await login.ExpectAsync(HttpStatusCode.OK, factory)).AccessToken();
     }

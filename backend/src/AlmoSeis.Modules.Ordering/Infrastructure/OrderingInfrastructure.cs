@@ -245,6 +245,44 @@ internal sealed class OrderAwaitingAcceptanceMapper(ITenantContext tenant) : Int
     }
 }
 
+/// Push do pedido do site (ADR-0049 itens 2 e 8): o aviso na hora e o lembrete agendado (ADR-0046 item 15), mensagens
+/// internas do outbox na mesma transação do envio. O lembrete só existe se cair antes do prazo de aceite; o consumidor
+/// ainda confere, na hora de enviar, se o pedido continua aguardando.
+internal sealed class WebOrderPushMapper(ITenantContext tenant, Microsoft.Extensions.Options.IOptions<AlmoSeis.Modules.Ordering.Application.WebOrderOptions> options)
+    : IntegrationEventMapper<OrderAwaitingAcceptance>
+{
+    protected override IEnumerable<IntegrationEnvelope> Map(OrderAwaitingAcceptance e)
+    {
+        var fulfillmentType = UpperSnakeEnumConverter<FulfillmentType>.ToText(e.FulfillmentType);
+        yield return new IntegrationEnvelope(WebOrderPushMessage.EventType, "ORDER", e.OrderId, tenant.EmployeeId, new
+        {
+            kind = WebOrderPushMessage.AwaitingAcceptance,
+            fulfillmentType,
+            marmitaCount = e.MarmitaCount,
+        });
+
+        if (options.Value.ReminderMinutes > 0 && e.OccurredAt.AddMinutes(options.Value.ReminderMinutes) is var remindAt && remindAt < e.AcceptanceDeadline)
+        {
+            yield return new IntegrationEnvelope(WebOrderPushMessage.EventType, "ORDER", e.OrderId, tenant.EmployeeId, new
+            {
+                kind = WebOrderPushMessage.Reminder,
+                fulfillmentType,
+                marmitaCount = e.MarmitaCount,
+            }, remindAt);
+        }
+    }
+}
+
+/// Para o push (Notifications): o aceite ainda está em aberto?
+internal sealed class WebOrderAcceptanceReader(AppDbContext db) : IWebOrderAcceptanceReader
+{
+    public async Task<WebOrderAcceptanceState?> GetAsync(Guid orderId, CancellationToken cancellationToken) =>
+        await db.Set<Order>().AsNoTracking()
+            .Where(o => o.Id == orderId)
+            .Select(o => new WebOrderAcceptanceState(o.Id, o.AcceptanceStatus, o.AcceptanceDeadline))
+            .SingleOrDefaultAsync(cancellationToken);
+}
+
 internal sealed class OrderAcceptedMapper(ITenantContext tenant) : IntegrationEventMapper<OrderAccepted>
 {
     protected override IEnumerable<IntegrationEnvelope> Map(OrderAccepted e)

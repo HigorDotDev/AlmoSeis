@@ -107,6 +107,10 @@ public interface IEmployeeDirectory
 
     /// Nome dos aparelhos compartilhados (auditoria: `sharedDevice`).
     Task<IReadOnlyDictionary<Guid, string>> GetDeviceNamesAsync(IEnumerable<Guid> deviceIds, CancellationToken cancellationToken);
+
+    /// Vínculos ativos do usuário da sessão em todos os estabelecimentos (RLS de vínculo, 05 §5.12 grupo 2). Usado pelo
+    /// push para pôr o nome do estabelecimento no título quando há mais de um (ADR-0049 item 3).
+    Task<int> CountActiveMembershipsAsync(Guid userId, CancellationToken cancellationToken);
 }
 
 /// Data local do estabelecimento (fuso do tenant): a `BusinessDate` da abertura do expediente (ADR-0019).
@@ -131,4 +135,20 @@ public sealed record NewTenantInfo(Guid TenantId, string Name, string City, Date
 public interface ITenantCreatedListener
 {
     Task OnTenantCreatedAsync(NewTenantInfo tenant, CancellationToken cancellationToken);
+}
+
+/// Fim de sessão ou de acesso de um aparelho (ADR-0049 item 4). Declarada aqui e implementada pelos módulos acima do
+/// Identity que guardam algo por instalação (o registro de push). Chamada na **mesma transação**, com a sessão no tenant
+/// afetado.
+public interface IDeviceAccessListener
+{
+    /// Logout sem aparelho compartilhado e troca de estabelecimento: a instalação sai do tenant da sessão. O logout de um
+    /// aparelho compartilhado (inclusive pelo tempo ocioso) não chama: o tablet continua avisando (ADR-0049 item 5).
+    Task OnInstallationSignedOutAsync(string installationId, CancellationToken cancellationToken);
+
+    /// Desativação e troca de perfis (`AccessRevoked`).
+    Task OnEmployeeAccessRevokedAsync(Guid employeeId, CancellationToken cancellationToken);
+
+    /// Revogação do aparelho compartilhado (ou novo registro da mesma instalação).
+    Task OnSharedDevicesRevokedAsync(IReadOnlyCollection<Guid> deviceIds, CancellationToken cancellationToken);
 }

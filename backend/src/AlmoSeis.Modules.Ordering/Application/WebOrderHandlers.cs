@@ -32,6 +32,9 @@ public sealed class WebOrderOptions
 
     public int RetentionIntervalMinutes { get; set; } = 60;
 
+    /// Lembrete por push sem resposta (ADR-0046 item 15, ADR-0049): minutos depois do envio. 0 desliga.
+    public int ReminderMinutes { get; set; } = 3;
+
     public TimeSpan AcceptanceWindow => TimeSpan.FromMinutes(AcceptanceMinutes);
 }
 

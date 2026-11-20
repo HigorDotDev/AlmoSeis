@@ -175,7 +175,7 @@ internal sealed class UpdateEmployeeHandler(
             {
                 audit.Add("EmployeeRolesChanged", employee.SyncEntityType, employee.Id,
                     before: new { roles = beforeRoles }, after: new { roles = employee.Roles.Select(r => r.Role).Order().ToList() });
-                revoker.Revoke(employee, "ROLES_CHANGED");
+                await revoker.RevokeAsync(employee, "ROLES_CHANGED", cancellationToken);
             }
         }
 
@@ -204,7 +204,7 @@ internal sealed class DeactivateEmployeeHandler(
                 .Where(t => t.TenantEmployeeId == employee.Id && t.RevokedAt == null)
                 .ExecuteUpdateAsync(u => u.SetProperty(t => t.RevokedAt, now), cancellationToken);
             audit.Add("EmployeeDeactivated", employee.SyncEntityType, employee.Id, after: new { status = employee.Status });
-            revoker.Revoke(employee, "DEACTIVATED");
+            await revoker.RevokeAsync(employee, "DEACTIVATED", cancellationToken);
         }
 
         return (await dtos.EmployeesAsync([employee], cancellationToken))[0];
@@ -229,13 +229,23 @@ internal sealed class ReactivateEmployeeHandler(
     }
 }
 
-/// Invalida o cache de acesso e avisa o aparelho do funcionário (`AccessRevoked`, 06 §6.14).
-internal sealed class EmployeeAccessRevoker(IEmployeeAccessInvalidator cache, IUnitOfWork unitOfWork, ITenantContext tenant, TimeProvider time)
+/// Invalida o cache de acesso, avisa o aparelho do funcionário (`AccessRevoked`, 06 §6.14) e apaga os registros de push
+/// dele (ADR-0049 item 4), na mesma transação.
+internal sealed class EmployeeAccessRevoker(
+    IEmployeeAccessInvalidator cache,
+    IUnitOfWork unitOfWork,
+    ITenantContext tenant,
+    IEnumerable<IDeviceAccessListener> listeners,
+    TimeProvider time)
 {
-    public void Revoke(TenantEmployee employee, string reason)
+    public async Task RevokeAsync(TenantEmployee employee, string reason, CancellationToken cancellationToken)
     {
         Invalidate(employee);
         unitOfWork.Enqueue(new IntegrationEnvelope("AccessRevoked", employee.SyncEntityType, employee.Id, tenant.EmployeeId, new { reason }), time.GetUtcNow());
+        foreach (var listener in listeners)
+        {
+            await listener.OnEmployeeAccessRevokedAsync(employee.Id, cancellationToken);
+        }
     }
 
     public void Invalidate(TenantEmployee employee) => cache.Invalidate(employee.Id);

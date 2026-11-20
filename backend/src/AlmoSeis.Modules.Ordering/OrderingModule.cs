@@ -30,6 +30,7 @@ public static class OrderingModule
         services.AddOptions<WebOrderOptions>().BindConfiguration(WebOrderOptions.Section);
         services.AddScoped<WebOrderCustomerLinker>();
         services.AddScoped<IAwaitingWebOrdersRejector, AwaitingWebOrdersRejector>();
+        services.AddScoped<IWebOrderAcceptanceReader, WebOrderAcceptanceReader>();
         services.AddSingleton<WebOrderExpiryJob>();
         services.AddHostedService(sp => sp.GetRequiredService<WebOrderExpiryJob>());
 

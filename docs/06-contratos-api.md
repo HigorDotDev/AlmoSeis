@@ -97,7 +97,7 @@ Conflito de versão (`409`) traz o estado atual em `current` (ADR-0034):
 | 401 | `InvalidCredentials` | login, senha ou PIN errados |
 | 401 | `InvalidRefreshToken` | refresh inválido, expirado ou reutilizado (revoga a família) |
 | 401 | `InvalidDeviceSecret` | segredo do dispositivo compartilhado inválido ou revogado |
-| 402 | `SubscriptionInactive` | escrita com assinatura `SUSPENDED`/`CANCELED` (ADR-0017); extensão `subscriptionStatus`. Fora do bloqueio: leituras, `/auth`, `/admin`, `/webhooks` e, com `SUSPENDED`, `POST /closing/finalize` |
+| 402 | `SubscriptionInactive` | escrita com assinatura `SUSPENDED`/`CANCELED` (ADR-0017); extensão `subscriptionStatus`. Fora do bloqueio: leituras, `/auth`, `/admin`, `/webhooks`, `/devices/push-token` e, com `SUSPENDED`, `POST /closing/finalize` |
 | 403 | `PermissionDenied` | falta permissão (a extensão `permission` diz qual) |
 | 403 | `NoActiveMembership` | usuário sem vínculo ativo em nenhum estabelecimento |
 | 403 | `OriginNotAllowed` | requisição `X-App-Platform: WEB` sem `Origin` ou com `Origin` fora de `Cors:RestaurantAppOrigins`, nas rotas que leem cookie (anti-CSRF, ADR-0053; §6.3 "App no navegador") e na conexão do hub (§6.14) |
@@ -423,6 +423,92 @@ Lista quem pode entrar por PIN (funcionários ativos com PIN definido):
 ```
 
 → `200` `{ "tokens": {...}, "me": {...} }` (com `me.sharedDevice` preenchido). Erros: `401 InvalidDeviceSecret`, `401 InvalidCredentials` (extensão `attemptsLeft`), `423 PinLocked` (extensão `lockedUntil`). Na web, o segredo vem **só** do cookie, e `X-Device-Secret` é ignorado ("App no navegador").
+
+### Push dos pedidos do site (ADR-0049, EP-002 F-209)
+
+O app registra o token do Expo da **instalação atual** no estabelecimento da sessão. Quem recebe é decidido **no envio**, pelas permissões atuais do funcionário do registro (`orders.accept`), não no registro. Só o pedido do site aguardando aceite e o lembrete aos 3 min geram push; pedidos do app e alterações continuam só em primeiro plano (ADR-0036).
+
+#### `PUT /devices/push-token` — autenticado (qualquer perfil)
+
+```json
+{
+  "installationId": "inst_8f3a2c1e9b7d4f60",
+  "expoPushToken": "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]",
+  "platform": "ANDROID",
+  "webOrdersEnabled": true
+}
+```
+
+→ `200`:
+
+```json
+{
+  "installationId": "inst_8f3a2c1e9b7d4f60",
+  "platform": "ANDROID",
+  "webOrdersEnabled": true,
+  "receivesWebOrders": true,
+  "registeredAt": "2026-11-20T14:58:00Z",
+  "updatedAt": "2026-11-20T14:58:00Z"
+}
+```
+
+- Registra ou atualiza (idempotente; sem `Idempotency-Key` nem `If-Match`: só o próprio aparelho escreve). O app chama ao entrar, a cada abertura e quando o Expo troca o token. `updatedAt` é o "uso": registro sem novo `PUT` há 30 dias é apagado.
+- `installationId` precisa ser o do access token (`422` com `errors.installationId`, como em `POST /devices/shared`). `platform`: `ANDROID` ou `IOS`; `WEB` está reservado para o Web Push (Q-26) e hoje responde `422` com `errors.platform`. `expoPushToken` fora do formato `ExponentPushToken[…]` (ou `ExpoPushToken[…]`) → `422` com `errors.expoPushToken`.
+- `webOrdersEnabled`: a opção "Avisar pedidos do site com o app fechado" (item 6), ligada no primeiro registro. `null` ou ausente mantém a atual.
+- `receivesWebOrders` = a opção está ligada **e** o funcionário da sessão tem `orders.accept` agora. O token nunca volta na resposta.
+- Login por PIN (aparelho compartilhado): o registro fica ligado ao aparelho, e vale o último funcionário que entrou por PIN, mesmo depois do tempo ocioso.
+- O mesmo token registrado em outro estabelecimento (o aparelho trocou sem logout) ou em outra instalação sai de lá: um token tem um registro só. Push nunca vai para um aparelho registrado em outro tenant.
+- Fora do bloqueio da assinatura (`402`), como `/auth/*`: é configuração do aparelho.
+
+#### `DELETE /devices/push-token` — autenticado
+
+→ `204`, sempre (idempotente). Apaga o registro desta instalação (a do access token) no estabelecimento da sessão.
+
+**O servidor também apaga o registro** (na mesma transação): no `POST /auth/logout` (exceto do aparelho compartilhado, cujo logout é também o do tempo ocioso), no `POST /auth/switch-tenant` (o do estabelecimento anterior), na desativação e na troca de perfis do funcionário (`AccessRevoked`), na revogação do aparelho compartilhado e quando a Expo responde `DeviceNotRegistered`.
+
+#### A notificação (enviada pela API de push da Expo)
+
+O que o servidor envia para cada aparelho, em lotes de até 100, pelo outbox (pelo menos uma vez, sem repetir no mesmo aparelho; 3 tentativas com 30 s de espera):
+
+```json
+{
+  "to": "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]",
+  "title": "Novo pedido do site",
+  "body": "2 marmitas · Entrega · aceite em até 10 min",
+  "data": {
+    "tenantId": "0192d6a0-0000-7000-8000-000000000001",
+    "orderId": "0192d6a0-0000-7000-8000-000000000504",
+    "kind": "WEB_ORDER_AWAITING_ACCEPTANCE"
+  },
+  "sound": "web_order.wav",
+  "channelId": "web-orders",
+  "priority": "high",
+  "ttl": 600
+}
+```
+
+| `kind` | Quando | `title` | `body` |
+|---|---|---|---|
+| `WEB_ORDER_AWAITING_ACCEPTANCE` | pedido do site enviado (`OrderAwaitingAcceptance`) | `Novo pedido do site` | `{n} marmita(s) · Entrega\|Retirada · aceite em até {m} min` |
+| `WEB_ORDER_REMINDER` | 3 min depois, se ainda aguarda aceite (ADR-0046 item 15) | `Pedido do site esperando` | `Faltam {m} min para expirar` |
+
+- `{m}`: minutos inteiros até o prazo de aceite, arredondados para cima, no momento do envio. `ttl`: segundos até o prazo (depois disso a Expo descarta).
+- Quando o usuário tem vínculo com mais de um estabelecimento, o título termina com ` · {nome do estabelecimento}` (ex.: `Novo pedido do site · Marmitaria da Ana`). No aparelho compartilhado, não.
+- **Sem nome, telefone, endereço nem valor** (ADR-0049 item 3, ADR-0052 item 7). `data` leva só `tenantId`, `orderId` e `kind`: tocar abre o pedido, e o app busca tudo pela API. Notificação de outro `tenantId` que não o da sessão é ignorada.
+- Pedido já aceito, recusado, expirado ou desistido no momento do envio não gera push (nem o lembrete).
+- `channelId` e `sound` vêm de `Push:ChannelId` e `Push:Sound`: o app cria o canal Android `web-orders` (importância alta) com esse som, e o mesmo arquivo vai no pacote iOS. Com o app em primeiro plano, o app suprime a notificação (já tratou pelo SignalR, item 9).
+
+#### Configuração (API)
+
+| Chave | Uso | Desenvolvimento / testes |
+|---|---|---|
+| `Push:Provider` | `Expo` (`appsettings.json`), `Fake` (sem rede; recusado em Production) ou `None` (não envia). Sem a chave: `Fake` | `Fake` |
+| `Push:Expo:AccessToken` | "Enhanced push security" da Expo (`Authorization: Bearer`). Opcional; só Key Vault / `user-secrets`, nunca no repositório | vazio |
+| `Push:Expo:SendUrl`, `ReceiptsUrl`, `TimeoutSeconds` (5) | `https://exp.host/--/api/v2/push/send` e `/getReceipts` | — |
+| `Push:ChannelId` (`web-orders`), `Push:Sound` (`web_order.wav`) | canal Android e som (item 7) | — |
+| `Push:MaxAttempts` (3), `RetryDelaySeconds` (30) | tentativas da mensagem do outbox (item 8) | — |
+| `Push:ReceiptDelayMinutes` (15), `MaintenanceJobEnabled`, `MaintenanceIntervalMinutes` (5), `RegistrationRetentionDays` (30), `DeliveryRetentionDays` (7) | recibos, registros sem uso e histórico de envios | testes: job desligado, chamado por `RunOnceAsync` |
+| `WebOrders:ReminderMinutes` (3) | lembrete depois do envio; `0` desliga | — |
 
 ### App no navegador — `X-App-Platform: WEB` (ADR-0053)
 
@@ -2071,6 +2157,8 @@ Uma repetição de `POST /orders` com a mesma chave e o mesmo corpo devolve **a 
 | `SubscriptionStatusChanged` | todos do tenant | `status`, `canWrite` |
 
 O evento **não** é estado. O app busca o recurso pela API (§6.12). Quando `actorEmployeeId` é o próprio usuário, o app ignora o alerta (RN-008.6). Um salto de `seq` dispara `GET /sync/changes`.
+
+O pedido do site também grava no outbox a mensagem interna `WebOrderPushRequested` (o push e o lembrete agendado, §6.3 "Push dos pedidos do site"). Ela **não** vai para o SignalR.
 
 ---
 

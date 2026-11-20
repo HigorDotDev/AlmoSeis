@@ -7,6 +7,7 @@ using AlmoSeis.Modules.Catalog;
 using AlmoSeis.Modules.Closing;
 using AlmoSeis.Modules.Identity;
 using AlmoSeis.Modules.Menu;
+using AlmoSeis.Modules.Notifications;
 using AlmoSeis.Modules.Ordering;
 using AlmoSeis.Modules.Payments;
 using AlmoSeis.Modules.Storefront;
@@ -23,6 +24,7 @@ builder.Services.AddClosingModule();
 builder.Services.AddStorefrontModule();
 builder.Services.AddOrderingModule();
 builder.Services.AddPaymentsModule();
+builder.Services.AddNotificationsModule();
 builder.Services.AddSyncModule();
 builder.Services.AddAuditModule();
 // Demais módulos entram aqui à medida que forem implementados (07 §7.5), sempre antes do decorator.

@@ -20,7 +20,14 @@ namespace AlmoSeis.Modules.Identity.Application;
 /// POST /devices/shared: registra a instalação atual. A mesma instalação registrada de novo revoga o registro
 /// anterior e recebe um segredo novo (tablet reinstalado volta sem suporte).
 internal sealed class RegisterSharedDeviceHandler(
-    AppDbContext db, ITenantContext tenant, IIdGenerator ids, ISecretHasher hasher, IEmployeeDirectory employees, IAuditWriter audit, TimeProvider time)
+    AppDbContext db,
+    ITenantContext tenant,
+    IIdGenerator ids,
+    ISecretHasher hasher,
+    IEmployeeDirectory employees,
+    IAuditWriter audit,
+    IEnumerable<IDeviceAccessListener> listeners,
+    TimeProvider time)
     : ICommandHandler<RegisterSharedDeviceCommand, RegisteredSharedDeviceDto>
 {
     public async Task<RegisteredSharedDeviceDto> HandleAsync(RegisterSharedDeviceCommand command, CancellationToken cancellationToken)
@@ -39,6 +46,10 @@ internal sealed class RegisterSharedDeviceHandler(
         {
             // Já, e não no commit: o índice único de instalação ativa vale por comando.
             await DeviceRules.RevokeAsync(db, previous, now, cancellationToken);
+            foreach (var listener in listeners)
+            {
+                await listener.OnSharedDevicesRevokedAsync(previous, cancellationToken);
+            }
         }
 
         var secret = SecureRandom.Token("ds_");
@@ -67,7 +78,8 @@ internal sealed class ListSharedDevicesQueryHandler(AppDbContext db, IEmployeeDi
 }
 
 /// POST /devices/shared/{id}/revoke: também revoga os refresh tokens emitidos por PIN nesse aparelho.
-internal sealed class RevokeSharedDeviceHandler(AppDbContext db, IAuditWriter audit, TimeProvider time) : ICommandHandler<RevokeSharedDeviceCommand, bool>
+internal sealed class RevokeSharedDeviceHandler(AppDbContext db, IAuditWriter audit, IEnumerable<IDeviceAccessListener> listeners, TimeProvider time)
+    : ICommandHandler<RevokeSharedDeviceCommand, bool>
 {
     public async Task<bool> HandleAsync(RevokeSharedDeviceCommand command, CancellationToken cancellationToken)
     {
@@ -77,6 +89,11 @@ internal sealed class RevokeSharedDeviceHandler(AppDbContext db, IAuditWriter au
         }
 
         await DeviceRules.RevokeAsync(db, [command.DeviceId], time.GetUtcNow(), cancellationToken);
+        foreach (var listener in listeners)
+        {
+            await listener.OnSharedDevicesRevokedAsync([command.DeviceId], cancellationToken);
+        }
+
         audit.Add("SharedDeviceRevoked", "SHARED_DEVICE", command.DeviceId);
         return true;
     }

@@ -20,6 +20,14 @@ public interface IOutboxConsumer
 {
     string EventType { get; }
 
+    /// Tentativas antes de desistir. Nulo = `Outbox:MaxAttempts` (a mensagem fica parada com `last_error`). Com valor, ao
+    /// desistir a mensagem é marcada processada com o `last_error` da última falha e um log de erro (ex.: o push, que não
+    /// reenvia indefinidamente, ADR-0049 item 8).
+    int? MaxAttempts => null;
+
+    /// Espera antes da próxima tentativa, gravada em `available_at`. Zero = no próximo ciclo.
+    TimeSpan RetryDelay => TimeSpan.Zero;
+
     Task HandleAsync(Guid tenantId, System.Text.Json.JsonElement envelope, CancellationToken cancellationToken);
 }
 
@@ -38,7 +46,8 @@ public sealed class OutboxOptions
 }
 
 /// 07 §7.10: lê o outbox com `FOR UPDATE SKIP LOCKED` (seguro com várias réplicas), publica e marca processado.
-/// Entrega pelo menos uma vez; o app deduplica por `eventId`/`seq` (ADR-0031).
+/// Entrega pelo menos uma vez; o app deduplica por `eventId`/`seq` (ADR-0031). Mensagem com `available_at` no futuro
+/// (agendada, ou nova tentativa com espera) fica para depois.
 public sealed class OutboxDispatcher(
     IServiceScopeFactory scopes,
     IRealtimePublisher publisher,
@@ -81,10 +90,12 @@ public sealed class OutboxDispatcher(
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
 
         var o = options.Value;
+        var now = time.GetUtcNow();
         var batch = await db.Set<OutboxMessage>()
             .FromSql($"""
                 SELECT * FROM outbox_messages
                  WHERE processed_at IS NULL AND attempts < {o.MaxAttempts}
+                   AND (available_at IS NULL OR available_at <= {now})
                  ORDER BY occurred_at
                  LIMIT {o.BatchSize}
                    FOR UPDATE SKIP LOCKED
@@ -93,9 +104,10 @@ public sealed class OutboxDispatcher(
 
         foreach (var message in batch)
         {
+            _consumers.TryGetValue(message.EventType, out var consumer);
             try
             {
-                if (_consumers.TryGetValue(message.EventType, out var consumer))
+                if (consumer is not null)
                 {
                     using var envelope = System.Text.Json.JsonDocument.Parse(message.Payload);
                     await consumer.HandleAsync(message.TenantId, envelope.RootElement, cancellationToken);
@@ -111,9 +123,19 @@ public sealed class OutboxDispatcher(
             {
                 message.Attempts++;
                 message.LastError = ex.Message.Length > 500 ? ex.Message[..500] : ex.Message;
-                if (message.Attempts >= o.MaxAttempts)
+                if (consumer?.MaxAttempts is { } consumerMax && message.Attempts >= consumerMax)
+                {
+                    // Desistência do próprio consumidor: sai da fila (a retenção apaga em 7 dias) com o erro guardado.
+                    message.ProcessedAt = time.GetUtcNow();
+                    logger.LogError(ex, "Mensagem {MessageId} ({EventType}) do outbox desistida após {Attempts} tentativas.", message.Id, message.EventType, message.Attempts);
+                }
+                else if (message.Attempts >= o.MaxAttempts)
                 {
                     logger.LogError(ex, "Mensagem {MessageId} do outbox desistida após {Attempts} tentativas.", message.Id, message.Attempts);
+                }
+                else if (consumer?.RetryDelay is { } delay && delay > TimeSpan.Zero)
+                {
+                    message.AvailableAt = time.GetUtcNow() + delay;
                 }
             }
         }

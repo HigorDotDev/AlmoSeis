@@ -185,8 +185,16 @@ internal sealed class RefreshTokenHandler(
     private static AuthOutcome<TokensDto> Invalid() => AuthOutcome<TokensDto>.Failure(ErrorCodes.InvalidRefreshToken.Code);
 }
 
-/// POST /auth/logout: revoga o refresh informado (idempotente).
-internal sealed class LogoutHandler(AppDbContext db, ISecretHasher hasher, TimeProvider time) : ICommandHandler<LogoutCommand, bool>
+/// POST /auth/logout: revoga o refresh informado (idempotente). Fora do aparelho compartilhado, a instalação sai do
+/// estabelecimento do refresh: o registro de push é apagado (ADR-0049 item 4). No aparelho compartilhado, o logout (que
+/// também é o do tempo ocioso) mantém o registro: vale o último funcionário que entrou por PIN (item 5).
+internal sealed class LogoutHandler(
+    AppDbContext db,
+    ITenantContext tenant,
+    ITenantSession session,
+    ISecretHasher hasher,
+    IEnumerable<IDeviceAccessListener> listeners,
+    TimeProvider time) : ICommandHandler<LogoutCommand, bool>
 {
     public async Task<bool> HandleAsync(LogoutCommand command, CancellationToken cancellationToken)
     {
@@ -197,7 +205,32 @@ internal sealed class LogoutHandler(AppDbContext db, ISecretHasher hasher, TimeP
 
         var hash = hasher.Hash(command.RefreshToken);
         var token = await db.Set<RefreshToken>().SingleOrDefaultAsync(t => t.TokenHash == hash, cancellationToken);
-        token?.Revoke(time.GetUtcNow());
+        if (token is null)
+        {
+            return true;
+        }
+
+        token.Revoke(time.GetUtcNow());
+        if (token.SharedDeviceId is not null)
+        {
+            return true;
+        }
+
+        // Rota anônima: sem access token válido, a sessão do banco passa a ser a do refresh (RLS do registro de push).
+        if (tenant.TenantId is null)
+        {
+            tenant.InitializeForTenant(token.TenantId, token.UserId);
+            await session.ApplyAsync(cancellationToken);
+        }
+
+        if (tenant.TenantId == token.TenantId)
+        {
+            foreach (var listener in listeners)
+            {
+                await listener.OnInstallationSignedOutAsync(token.InstallationId, cancellationToken);
+            }
+        }
+
         return true;
     }
 }
@@ -210,6 +243,7 @@ internal sealed class SwitchTenantHandler(
     ITenantContext tenant,
     ITenantSession session,
     AuthSessionIssuer sessions,
+    IEnumerable<IDeviceAccessListener> listeners,
     TimeProvider time) : ICommandHandler<SwitchTenantCommand, AuthResultDto>
 {
     public async Task<AuthResultDto> HandleAsync(SwitchTenantCommand command, CancellationToken cancellationToken)
@@ -224,6 +258,12 @@ internal sealed class SwitchTenantHandler(
         await db.Set<RefreshToken>()
             .Where(t => t.UserId == userId && t.InstallationId == installationId && t.RevokedAt == null)
             .ExecuteUpdateAsync(u => u.SetProperty(t => t.RevokedAt, now), cancellationToken);
+
+        // Ainda na sessão do estabelecimento anterior: o push dele para de chegar nesta instalação (ADR-0049 item 4).
+        foreach (var listener in listeners)
+        {
+            await listener.OnInstallationSignedOutAsync(installationId, cancellationToken);
+        }
 
         tenant.SwitchTenant(command.TenantId, employee.Id);
         await session.ApplyAsync(cancellationToken);

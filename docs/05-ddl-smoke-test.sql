@@ -328,6 +328,34 @@ DO $$ BEGIN
   RAISE EXCEPTION 'FALHOU: origem da taxa fora de entrega aceita';
 EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: origem da taxa so em entrega'; END $$;
 
+-- ===== Push dos pedidos da página (ADR-0049, migration 0006) =====
+INSERT INTO push_registrations (id, tenant_id, installation_id, tenant_employee_id, platform, expo_push_token, created_at, updated_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000f01', 'aaaaaaaa-0000-0000-0000-000000000001', 'inst_a', 'aaaaaaaa-0000-0000-0000-0000000000e1',
+        'ANDROID', 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]', now(), now());
+INSERT INTO push_deliveries (event_id, registration_id, tenant_id, order_id, kind, ticket_id, sent_at)
+VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000f01', 'aaaaaaaa-0000-0000-0000-000000000001',
+        'aaaaaaaa-0000-0000-0000-000000000c01', 'WEB_ORDER_AWAITING_ACCEPTANCE', 'ticket-a', now());
+
+DO $$ BEGIN
+  INSERT INTO push_registrations (id, tenant_id, installation_id, tenant_employee_id, platform, expo_push_token, created_at, updated_at)
+  VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'inst_a2', 'aaaaaaaa-0000-0000-0000-0000000000e1', 'IOS', 'token-qualquer', now(), now());
+  RAISE EXCEPTION 'FALHOU: token fora do formato do Expo aceito';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: token de push no formato do Expo'; END $$;
+
+DO $$ BEGIN
+  INSERT INTO push_registrations (id, tenant_id, installation_id, tenant_employee_id, platform, expo_push_token, created_at, updated_at)
+  VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'inst_a2', 'aaaaaaaa-0000-0000-0000-0000000000e1', 'IOS',
+          'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]', now(), now());
+  RAISE EXCEPTION 'FALHOU: mesmo token em dois registros';
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'ok: um registro por token de push'; END $$;
+
+DO $$ BEGIN
+  INSERT INTO push_deliveries (event_id, registration_id, tenant_id, order_id, kind, sent_at)
+  VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000f01', 'aaaaaaaa-0000-0000-0000-000000000001',
+          'aaaaaaaa-0000-0000-0000-000000000c01', 'WEB_ORDER_REMINDER', now());
+  RAISE EXCEPTION 'FALHOU: entrega de push sem ticket nem erro aceita';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: entrega de push com ticket ou erro'; END $$;
+
 -- ===== Tenant B =====
 SELECT set_config('app.tenant_id', 'bbbbbbbb-0000-0000-0000-000000000002', false),
        set_config('app.user_id',   'bbbbbbbb-0000-0000-0000-0000000000b2', false);
@@ -367,6 +395,26 @@ DO $$ BEGIN
   IF (SELECT count(*) FROM delivery_quotes) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve cotacao de A'; END IF;
   IF (SELECT count(*) FROM geocode_cache_entries) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve o cache de A'; END IF;
   RAISE NOTICE 'ok: cotacao e cache de geocodificacao isolados';
+END $$;
+
+-- Push: isolado; só quem comprova ter o token (o aparelho que trocou de estabelecimento) vê e apaga o registro de A
+DO $$ BEGIN
+  IF (SELECT count(*) FROM push_registrations) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve registro de push de A'; END IF;
+  IF (SELECT count(*) FROM push_deliveries) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve entregas de push de A'; END IF;
+  DELETE FROM push_registrations WHERE installation_id = 'inst_a';
+  IF FOUND THEN RAISE EXCEPTION 'FALHOU: tenant B apagou registro de push de A sem o token'; END IF;
+  RAISE NOTICE 'ok: registro e entregas de push isolados';
+END $$;
+
+DO $$ BEGIN
+  PERFORM set_config('app.push_token', 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]', false);
+  IF (SELECT count(*) FROM push_registrations) <> 1 THEN RAISE EXCEPTION 'FALHOU: dono do token nao ve o registro'; END IF;
+  UPDATE push_registrations SET web_orders_enabled = false WHERE installation_id = 'inst_a';
+  IF FOUND THEN RAISE EXCEPTION 'FALHOU: tenant B alterou registro de push de A'; END IF;
+  DELETE FROM push_registrations WHERE expo_push_token = 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]';
+  IF NOT FOUND THEN RAISE EXCEPTION 'FALHOU: dono do token nao apagou o registro antigo'; END IF;
+  PERFORM set_config('app.push_token', '', false);
+  RAISE NOTICE 'ok: so o dono do token tira o aparelho do outro tenant';
 END $$;
 
 -- Página: slug e token têm leitura aberta (a resolução vem antes do tenant); perfil e hash do IP ficam isolados

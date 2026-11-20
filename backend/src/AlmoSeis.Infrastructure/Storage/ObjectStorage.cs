@@ -77,15 +77,19 @@ internal sealed class R2ObjectStorage(IOptions<R2Options> options, TimeProvider 
             throw new InvalidOperationException("Storage:R2 não configurado: defina AccountId (ou ServiceUrl), AccessKeyId e SecretAccessKey.");
         }
 
-        // Assinar é local: não há chamada de rede aqui.
+        // Assinar é local: não há chamada de rede aqui. O cliente é criado antes de ler o relógio: na primeira chamada,
+        // a criação preguiçosa levava tempo suficiente para o `X-Amz-Expires` sair 899.
+        var client = _client.Value;
         var expiresAt = time.GetUtcNow().AddMinutes(o.UploadUrlMinutes);
-        var url = _client.Value.GetPreSignedURL(new GetPreSignedUrlRequest
+        var url = client.GetPreSignedURL(new GetPreSignedUrlRequest
         {
             BucketName = o.Bucket,
             Key = storageKey,
             Verb = HttpVerb.PUT,
             ContentType = contentType,
-            Expires = expiresAt.UtcDateTime,
+            // O SDK faz `X-Amz-Expires` = round(`Expires` − relógio dele, em segundos). Meio segundo a mais absorve até 1 s
+            // entre o nosso instante e o da assinatura (GC, máquina carregada), e a URL vale exatamente `UploadUrlMinutes`.
+            Expires = expiresAt.UtcDateTime.AddMilliseconds(500),
             Protocol = Protocol.HTTPS,
         });
         return new UploadUrl(url, "PUT", new Dictionary<string, string> { ["Content-Type"] = contentType }, expiresAt);

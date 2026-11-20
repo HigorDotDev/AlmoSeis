@@ -33,6 +33,7 @@ Tipos usados nas tabelas: `Guid`, `string(n)`, `Money`, `int`, `bool`, `DateOnly
 | Closing | `BusinessDay`, `BusinessDateCounter`, `CashMovement`, `DailyClosing`, `DailyClosingLine`, `ClosingAdjustment` |
 | Audit | `AuditLog` |
 | Sync | `TenantSyncCounter`, `ChangeFeedEntry`, `IdempotencyRecord`, `OutboxMessage` |
+| Notifications (EP-002) | `PushRegistration`, `PushDelivery` (§4.15) |
 
 **Diferenças em relação ao §6.1 do épico:**
 - `Role` e `Permission` **não são tabelas**. São constantes em código (ADR-0028), e o vínculo é `TenantEmployeeRole`.
@@ -539,7 +540,7 @@ O ajuste **não** altera o `DailyClosing` relacionado nem o caixa físico. Apare
 | TenantSyncCounter | `TenantId` PK, `LastSeq` bigint | trava de linha por transação de escrita |
 | ChangeFeedEntry [T] | PK `(TenantId, Seq)`, `EntityType`, `EntityId`, `EntityVersion`, `ChangeKind` (`UPSERT`/`DELETE`), `OccurredAt` | retenção de 7 dias |
 | IdempotencyRecord [T] | `Key`, `UserId`, `Endpoint`, `RequestHash`, `Status` (`IN_PROGRESS`/`COMPLETED`), `ResponseStatus`, `ResponseBody` json, `ResourceId`, `CreatedAt`, `ExpiresAt` | único `(TenantId, Key)`; TTL de 72 h |
-| OutboxMessage [T] | `EventType`, `Payload` json (ids, versão, `seq`), `OccurredAt`, `ProcessedAt?`, `Attempts` | limpeza após 7 dias |
+| OutboxMessage [T] | `EventType`, `Payload` json (ids, versão, `seq`), `OccurredAt`, `AvailableAt?`, `ProcessedAt?`, `Attempts` | limpeza após 7 dias. `AvailableAt`: entrega agendada (lembrete do push, ADR-0046 item 15) ou espera entre tentativas de um consumidor interno; nulo = na hora |
 
 **Entidades [S]:** `TenantSettings`, `TenantEmployee`, `Product`, `MarmitaSize`, `Menu` (inclui itens), `Customer` (inclui endereços), `Order` (inclui itens, pesagens e eventos), `Payment`, `PaymentReversal`, `BusinessDay`, `CashMovement`, `DailyClosing`, `ClosingAdjustment`.
 
@@ -554,6 +555,7 @@ O ajuste **não** altera o `DailyClosing` relacionado nem o caixa físico. Apare
 | Identidade | `User`, `RefreshToken` | sem RLS de tenant; acesso só pelo módulo Identity |
 | Plataforma | `TrialClaim`, `BillingWebhookEvent` | sem RLS; acesso só pelos módulos Billing e Admin com o papel `almoseis_platform` |
 | Resolução pública | `StoreSlug`, `OrderTrackingToken` | leitura aberta ao papel da aplicação (o slug é público; o token está em hash), escrita só no tenant da sessão (ADR-0045 itens 4 e 5) |
+| Tenant + dono do token | `PushRegistration` | `tenant_id = app.tenant_id`; além disso, `SELECT`/`DELETE` (nunca `INSERT`/`UPDATE`) das linhas com `expo_push_token = app.push_token`, definido só na transação do registro: o aparelho que trocou de estabelecimento sai do anterior (ADR-0049 item 4) |
 
 ## 4.14 Página de pedidos (EP-002; ADR-0044, ADR-0045, ADR-0047, ADR-0048, ADR-0052)
 
@@ -601,6 +603,29 @@ PK `(TenantId, AddressHash)`. `Latitude`, `Longitude`, `GeocodedAt`, `ExpiresAt`
 ### WebOrderIntake [T]
 
 `OrderId` (PK), `IpHash` (HMAC-SHA-256 com sal diário), `CreatedAt`. Limite de 3 pedidos aguardando aceite por IP; apagado em 7 dias.
+
+## 4.15 Notificações push (EP-002; ADR-0049, ADR-0052)
+
+### PushRegistration [T] (ADR-0049 itens 4 a 6)
+
+| Campo | Tipo | Regra |
+|---|---|---|
+| InstallationId | string(64) | a do access token; único por tenant |
+| TenantEmployeeId | Guid | funcionário da sessão que registrou. No aparelho compartilhado, o último que entrou por PIN |
+| SharedDeviceId | Guid? | preenchido no login por PIN; a revogação do aparelho apaga o registro |
+| Platform | enum `ANDROID`, `IOS`, `WEB` | `WEB` reservado para o Web Push (Q-26); a API recusa por enquanto |
+| ExpoPushToken | string(200) | `ExponentPushToken[…]`/`ExpoPushToken[…]`. **Único em todo o sistema**: o aparelho que registra o token num estabelecimento sai dos outros. Nunca vai para log nem auditoria |
+| WebOrdersEnabled | bool | "Avisar pedidos do site com o app fechado"; ligada por padrão |
+| ShowTenantName | bool | usuário com mais de um vínculo ativo (calculado a cada registro; falso no aparelho compartilhado): o título leva o nome do estabelecimento |
+| CreatedAt, UpdatedAt | | `UpdatedAt` = último registro feito pelo app; sem uso há 30 dias → apagado |
+
+Destinatários do push, resolvidos **no envio**: registros do tenant com `WebOrdersEnabled`, plataforma `ANDROID`/`IOS`, funcionário ativo e com `orders.accept` agora (item 5). Apagado no logout fora do aparelho compartilhado, na troca de estabelecimento, na desativação e na troca de perfis, na revogação do aparelho e com `DeviceNotRegistered`. Sem auditoria (configuração técnica do aparelho).
+
+### PushDelivery [T] (ADR-0049 item 8)
+
+PK `(EventId, RegistrationId)`: o `eventId` da mensagem do outbox e o registro. `OrderId`, `Kind` (`WEB_ORDER_AWAITING_ACCEPTANCE`, `WEB_ORDER_REMINDER`), `TicketId?` (sucesso) **ou** `Error?` (erro do ticket, ex. `DeviceNotRegistered`), `SentAt`, `ReceiptCheckedAt?`, `ReceiptError?`. Deduplica o reenvio do outbox (um aparelho não recebe o mesmo aviso duas vezes) e guarda o ticket para a conferência do recibo depois de 15 min. Sem token, sem conteúdo. Apagada em 7 dias.
+
+Conteúdo (derivado, itens 2 e 3): título `Novo pedido do site` / `Pedido do site esperando` (+ ` · {estabelecimento}` com `ShowTenantName`); corpo `{n} marmita(s) · Entrega|Retirada · aceite em até {m} min` / `Faltam {m} min para expirar`, com `m = ⌈segundos até o prazo / 60⌉` no envio. Sem nome, telefone, endereço nem valor.
 
 ## 4.13 Mapeamento épico → modelo
 

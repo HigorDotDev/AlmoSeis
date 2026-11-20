@@ -19,12 +19,15 @@ public interface IUnitOfWork
 
 /// Envelope de tempo real de 06 §6.14, montado pelos mappers de cada módulo.
 /// `seq` e `entityVersion` vêm da entrada do feed da mesma transação.
+/// `AvailableAt`: o dispatcher só entrega a partir desse instante (mensagem agendada, ex.: o lembrete do push aos 3 min,
+/// ADR-0049). Nulo = na hora.
 public sealed record IntegrationEnvelope(
     string EventType,
     string EntityType,
     Guid EntityId,
     Guid? ActorEmployeeId,
-    object? Data);
+    object? Data,
+    DateTimeOffset? AvailableAt = null);
 
 /// Converte um evento de domínio em envelope(s) para o outbox (ADR-0031).
 public interface IIntegrationEventMapper
@@ -156,6 +159,7 @@ internal sealed class UnitOfWork(
                 EventType = envelope.EventType,
                 Seq = feed.Seq,
                 OccurredAt = occurredAt,
+                AvailableAt = envelope.AvailableAt,
                 Payload = JsonSerializer.Serialize(
                     new
                     {
