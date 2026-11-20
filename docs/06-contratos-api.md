@@ -140,7 +140,9 @@ Conflito de versão (`409`) traz o estado atual em `current` (ADR-0034):
 | 404 | `StoreNotFound` | `{slug}` da página inexistente (§6.19). Slug antigo não dá `404`: redireciona |
 | 409 | `StoreUnavailable` | envio (ou cotação) com a página fora de `OPEN`. Extensão `storeStatus`: `CLOSED`, `PAUSED` ou `UNAVAILABLE`, nunca o motivo (ADR-0045 item 16) |
 | 409 | `CartChanged` | envio pela página com item indisponível ou fora do cardápio do dia, ou com `expectedTotal` diferente do total recalculado. Extensão `cart` com o carrinho recalculado (ADR-0044 item 21, §6.19) |
-| 422 | `DeliveryUnavailable` | entrega pela página indisponível (pausa de entrega, ou cotação por distância ainda não disponível: até a fatia 4 a página só faz retirada, ADR-0048 item 13) |
+| 422 | `DeliveryUnavailable` | entrega pela página indisponível agora: pausa de entrega, requisitos da entrega por distância ausentes (`pageDelivery.missing`, §6.18) ou provedor de mapas fora do ar, lento ou sem cota (`detail`: "Não conseguimos calcular a entrega agora. Você pode retirar no local.", ADR-0048 item 13). A página oferece retirada |
+| 422 | `OutOfDeliveryArea` | cotação (ou recálculo no envio) com o endereço além do raio máximo, ou sem rota de carro até ele (ADR-0048 item 7). Extensões `distanceKm` e `maxDistanceKm` quando é o raio |
+| 409 | `DeliveryQuoteChanged` | envio pela página com cotação vencida, de outro endereço ou de outra configuração, e o recálculo deu outra taxa (ADR-0048 item 10). Extensão `quote` com a cotação nova (já gravada); o cliente confirma e reenvia com ela |
 | 403 | `CaptchaFailed` | envio pela página sem o token do Turnstile ou com token inválido, vencido ou repetido (ADR-0045 item 12) |
 | 429 | `TooManyPendingOrders` | o telefone já tem 2 pedidos aguardando aceite no restaurante, ou o IP já tem 3 (ADR-0045 item 13) |
 | 410 | `TrackingExpired` | acompanhamento com mais de 7 dias (ADR-0047 item 4) |
@@ -1009,6 +1011,8 @@ Fiado (`pendingAmount`, `pendingOrderCount` e `pending-orders`) só considera pe
   "changeFor": null,
   "riskFlag": null,
   "deliveryFee": "5.00",
+  "deliveryFeeSource": "FIXED_DEFAULT",
+  "deliveryDistanceKm": null,
   "itemsTotal": "50.00",
   "weighingsTotal": "0.00",
   "totalAmount": "55.00",
@@ -1101,6 +1105,7 @@ Fiado (`pendingAmount`, `pendingOrderCount` e `pending-orders`) só considera pe
 - `lineTotal` do adicional = `unitPrice × quantity × quantidade do pai` (2,00 × 1 × 2 = 4,00, conforme o §4.7 de `04-modelo-dados.md`).
 - `itemsTotal` = 40,00 (2 marmitas M) + 4,00 (ovo × 2) + 6,00 (Coca) = **50,00**. `totalAmount` = 50,00 + 5,00 de entrega = **55,00**.
 - `balance` = `totalAmount − paidAmount` = 55,00 − 20,00 = **35,00**, calculado no servidor.
+- `deliveryFeeSource` (ADR-0048 item 20, só em entrega): `FIXED_DEFAULT` (a taxa padrão do estabelecimento), `DISTANCE` (calculada pela página, §6.19) ou `MANUAL` (digitada ou editada no app). Editar a taxa ou o endereço de um pedido `DISTANCE` o torna `MANUAL`/`FIXED_DEFAULT`. `null` fora de entrega e nas entregas gravadas antes da migration 0005. `deliveryDistanceKm`: `"4.5"` só enquanto a origem for `DISTANCE`; senão `null`.
 - `items` traz só itens `ACTIVE`. As remoções aparecem em `GET /orders/{id}/history`.
 - `pendingAlertCount` é **por funcionário** (o de quem chama).
 - `cancellation` (quando cancelado): `{ "canceledAt": "...", "canceledBy": {...}, "reason": "Cliente desistiu" }`.
@@ -1148,12 +1153,14 @@ Pedido "pagar na entrega/retirada" enviado pela página, aguardando aceite. A ro
   "expectedPaymentMethod": "CASH",
   "changeFor": "50.00",
   "riskFlag": null,
-  "deliveryFee": "5.00",
+  "deliveryFee": "3.60",
+  "deliveryFeeSource": "DISTANCE",
+  "deliveryDistanceKm": "4.5",
   "itemsTotal": "40.00",
   "weighingsTotal": "0.00",
-  "totalAmount": "45.00",
+  "totalAmount": "43.60",
   "paidAmount": "0.00",
-  "balance": "45.00",
+  "balance": "43.60",
   "isPaid": false,
   "productionStatus": null,
   "productionStatusChangedAt": null,
@@ -2158,8 +2165,9 @@ A página nasce **inativa** no autocadastro, com o slug gerado do nome já reser
   "contactPhone": "+5534999990000",
   "hoursText": "Seg a sáb, 10h30 às 14h",
   "address": { "street": "Rua das Flores", "number": "123", "complement": null, "neighborhood": "Centro", "city": "Uberlândia", "state": "MG", "zipCode": "38400000" },
-  "location": null,
+  "location": { "latitude": -18.918600, "longitude": -48.277200, "isConfirmed": true },
   "delivery": { "feeMode": "DISTANCE", "pricePerKm": "0.80", "minimumFee": "3.00", "maxDistanceKm": "6.0" },
+  "pageDelivery": { "available": true, "missing": [] },
   "status": "OPEN",
   "updatedAt": "2026-10-27T09:30:00Z"
 }
@@ -2167,8 +2175,15 @@ A página nasce **inativa** no autocadastro, com o slug gerado do nome já reser
 
 - `slug`: o atual. `previousSlugs`: os antigos do mesmo tenant, que redirecionam para o atual (máximo 5, ADR-0044 item 15).
 - `status`: o estado que a página mostra agora (`OPEN`, `CLOSED`, `PAUSED`, `UNAVAILABLE`, §6.19), para o app exibir "Sua página está fechada agora".
-- `location` (latitude/longitude confirmadas no mapa) e `delivery` são da taxa por distância (ADR-0048), usados a partir da fatia 4. Mudar o endereço apaga `location`. Até a fatia 4, a página **só faz retirada**, mesmo com `offersDelivery: true`.
-- `maxDistanceKm`: string com uma casa (`"6.0"`) ou `null`.
+- `location` (ADR-0048 item 3): o ponto do restaurante, latitude/longitude como **número** com 6 casas. Ao salvar um endereço completo, a API o geocodifica **uma vez** e devolve o ponto com `isConfirmed: false`; o app mostra no mapa e o proprietário confirma ou arrasta o marcador (PUT com `isConfirmed: true`). `null` = sem ponto (endereço incompleto, não encontrado, provedor fora do ar ou `Maps:Provider = None`): o app deixa marcar no mapa.
+- `delivery.feeMode`: `DISTANCE` (rota × `pricePerKm`, mínimo `minimumFee`, raio opcional `maxDistanceKm`) ou `FIXED` (a `defaultDeliveryFee` do estabelecimento, §6.4, sem mapa). `maxDistanceKm`: string com uma casa (`"6.0"`) ou `null`.
+- `pageDelivery`: se a página oferece entrega agora e, se não, o que falta, na ordem: `DELIVERY_OFF` (`offersDelivery` ou `isDeliveryEnabled` falso), `PRICE_PER_KM`, `CONFIRMED_LOCATION`, `MAPS_PROVIDER` (a API está sem provedor de mapas). Os três últimos só no modo `DISTANCE`. Salvar com algo faltando **não** é erro: a entrega só não aparece na página (`deliveryAvailable: false`), e o app explica com esta lista.
+
+Exemplo logo depois de salvar o endereço:
+
+```json
+{ "location": { "latitude": -18.918512, "longitude": -48.277003, "isConfirmed": false }, "pageDelivery": { "available": false, "missing": ["CONFIRMED_LOCATION"] } }
+```
 
 ### `PUT /storefront` — `storefront.manage` [M]
 
@@ -2186,9 +2201,19 @@ Substitui a configuração inteira (as chaves rápidas "pausar pedidos" e "pausa
   "contactPhone": "+5534999990000",
   "hoursText": "Seg a sáb, 10h30 às 14h",
   "address": { "street": "Rua das Flores", "number": "123", "complement": null, "neighborhood": "Centro", "city": "Uberlândia", "state": "MG", "zipCode": "38400-000" },
-  "delivery": { "feeMode": "DISTANCE", "pricePerKm": "0.80", "minimumFee": "3.00", "maxDistanceKm": "6.0" }
+  "delivery": { "feeMode": "DISTANCE", "pricePerKm": "0.80", "minimumFee": "3.00", "maxDistanceKm": "6.0" },
+  "location": { "latitude": -18.918600, "longitude": -48.277200, "isConfirmed": true }
 }
 ```
+
+**`location` no PUT** (compatível com o app da fatia 2, que não envia o campo):
+
+| Corpo | Efeito |
+|---|---|
+| sem `location` (ou `"location": null`) | mantém o ponto salvo e a confirmação. Não existe "apagar o ponto" pelo PUT |
+| `location` com `isConfirmed: true` | grava o ponto (arredondado a 6 casas) como confirmado. Reenviar o mesmo ponto confirmado não muda nada (nem a versão) |
+| `location` com `isConfirmed: false` | grava o ponto sem confirmação |
+| `address` diferente do salvo | **exceção**: o ponto salvo e o `location` enviado são descartados, a API geocodifica o endereço novo e devolve `isConfirmed: false`. Confirme com um segundo PUT |
 
 Regras (`422 ValidationFailed`, com o campo em `errors`):
 
@@ -2201,8 +2226,9 @@ Regras (`422 ValidationFailed`, com o campo em `errors`):
 | `contactPhone` | E.164 ou `null` |
 | `address.state` / `address.zipCode` | UF com 2 letras / CEP com 8 dígitos (com ou sem hífen) |
 | `delivery.pricePerKm` / `minimumFee` / `maxDistanceKm` | `> 0` ou `null` / `≥ 0` / `"0.1"` a `"999.9"` ou `null` |
+| `location.latitude` / `location.longitude` | `-90` a `90` / `-180` a `180` |
 
-Auditoria `StorefrontUpdated` (sem telefone de contato nem endereço). `If-Match` antigo → `409 VersionConflict` com o objeto atual em `current`.
+Auditoria `StorefrontUpdated` (sem telefone de contato, endereço nem coordenadas; leva `hasLocation` e `locationConfirmed`). `If-Match` antigo → `409 VersionConflict` com o objeto atual em `current`.
 
 ---
 
@@ -2261,9 +2287,9 @@ Perfil, estado e cardápio do dia. Estado calculado a cada requisição (ADR-004
   "contactPhone": "+5534999990000",
   "hoursText": "Seg a sáb, 10h30 às 14h",
   "pickupAvailable": true,
-  "deliveryAvailable": false,
-  "deliveryRule": null,
-  "privacy": { "controllerName": "Marmitaria da Ana", "controllerPhone": "+5534999990000", "operatorName": "AlmoSeis", "thirdParties": ["ANTI_BOT"] },
+  "deliveryAvailable": true,
+  "deliveryRule": { "feeMode": "DISTANCE", "pricePerKm": "0.80", "minimumFee": "3.00", "maxDistanceKm": "6.0", "fixedFee": null },
+  "privacy": { "controllerName": "Marmitaria da Ana", "controllerPhone": "+5534999990000", "operatorName": "AlmoSeis", "thirdParties": ["ANTI_BOT", "MAPS"] },
   "businessDate": "2026-10-27",
   "menu": {
     "marmitaSizes": [
@@ -2290,8 +2316,8 @@ Perfil, estado e cardápio do dia. Estado calculado a cada requisição (ADR-004
 ```
 
 - `menu`: o `DAILY` de `MARMITA` da `businessDate` (ADR-0038) + tamanhos ativos + adicionais e bebidas ativos com `isVisibleOnPage`. `isAvailable: false` → "Acabou" (desabilitado). Sem cardápio publicado → `menu: null`. PF e quilo nunca aparecem.
-- `pickupAvailable` / `deliveryAvailable`: o que a página oferece agora. **Até a fatia 4, `deliveryAvailable` é sempre `false`** (sem cotação por distância não há taxa, ADR-0048 item 13). `deliveryRule` (`{ "pricePerKm": "0.80", "minimumFee": "3.00", "maxDistanceKm": "6.0" }`) aparece junto com a entrega.
-- `privacy` (ADR-0052 item 1): dados variáveis do aviso "Seus dados são usados por **{controllerName}** para preparar e entregar o pedido". O texto completo é da página (revisão jurídica). `thirdParties`: `ANTI_BOT` (Cloudflare Turnstile, quando ligado); `MAPS` entra com a fatia 4 e `PAYMENTS` com a Fase 2.
+- `pickupAvailable` / `deliveryAvailable`: o que a página oferece agora. `deliveryAvailable` = entrega ligada (`offersDelivery` e `isDeliveryEnabled`) e, no modo `DISTANCE`, preço por km, ponto do restaurante confirmado e provedor de mapas configurado na API (o mesmo que `pageDelivery.available`, §6.18). Uma falha momentânea do provedor **não** muda este campo: a cotação responde `422 DeliveryUnavailable` e a página oferece retirada. `deliveryRule` (só com `deliveryAvailable: true`): `DISTANCE` → `{ "feeMode": "DISTANCE", "pricePerKm": "0.80", "minimumFee": "3.00", "maxDistanceKm": "6.0", "fixedFee": null }` ("R$ 0,80/km, mínimo R$ 3,00, até 6 km"); `FIXED` → `{ "feeMode": "FIXED", "pricePerKm": null, "minimumFee": null, "maxDistanceKm": null, "fixedFee": "5.00" }`.
+- `privacy` (ADR-0052 item 1): dados variáveis do aviso "Seus dados são usados por **{controllerName}** para preparar e entregar o pedido". O texto completo é da página (revisão jurídica). `thirdParties`: `ANTI_BOT` (Cloudflare Turnstile, quando ligado); `MAPS` (entrega por distância disponível e provedor externo, `Osm` ou `Google`; o `Fake` não manda o endereço a ninguém) e `PAYMENTS` com a Fase 2.
 - `Cache-Control: no-cache`: o servidor da página revalida a cada uso (pausa e "Acabou" aparecem em até 30 s, RF-202/RF-205).
 
 ### `POST /public/stores/{slug}/orders` — público [I]
@@ -2355,11 +2381,14 @@ Ordem das checagens e erros:
 | 2 | campo-isca `website` preenchido | `400 MalformedRequest`, sem detalhes |
 | 3 | página fora de `OPEN` | `409 StoreUnavailable` (`storeStatus`) |
 | 4 | Turnstile ausente ou inválido | `403 CaptchaFailed`. Cloudflare sem resposta em 3 s → o pedido é aceito com `riskFlag: "CAPTCHA_UNAVAILABLE"` |
-| 5 | `DELIVERY` | `422 DeliveryUnavailable` (até a fatia 4) |
+| 5 | `DELIVERY` com a entrega indisponível (§6.18 `pageDelivery`) | `422 DeliveryUnavailable` |
+| 5a | `DELIVERY` sem `deliveryQuoteId` | `422 ValidationFailed` em `deliveryQuoteId` (já na checagem 1) |
 | 6 | `PICKUP` com a retirada desligada | `422 ValidationFailed` em `fulfillmentType` |
 | 7 | `expectedPaymentMethod` fora das formas habilitadas | `422 PaymentMethodDisabled` |
 | 8 | o telefone já tem 2 pedidos aguardando aceite, ou o IP já tem 3 | `429 TooManyPendingOrders` |
 | 9 | sem cardápio do dia publicado | `404 MenuNotFound` |
+| 9a | `DELIVERY`: cotação inexistente ou de outro restaurante | `422 ValidationFailed` em `deliveryQuoteId` ("Calcule a entrega de novo") |
+| 9b | `DELIVERY`: cotação vencida, de outro endereço (rua, número, bairro, cidade ou CEP; complemento e referência não contam) ou feita antes de o restaurante mudar a configuração → **recalcula**. Mesma taxa → segue com ela; outra taxa → | `409 DeliveryQuoteChanged` com a cotação nova em `quote`. O recálculo pode dar os erros da cotação (`OutOfDeliveryArea`, `DeliveryUnavailable`, `422` em `deliveryAddress.street`/`deliveryAddress.number`) |
 | 10 | item fora do cardápio, indisponível ou escondido, ou `expectedTotal` diferente do recalculado | `409 CartChanged` |
 | 11 | `changeFor` menor que o total | `422 ValidationFailed` em `changeFor` |
 
@@ -2387,15 +2416,73 @@ Ordem das checagens e erros:
 
 ### `POST /public/stores/{slug}/delivery-quotes` — público
 
-Ponto de extensão da taxa por distância (ADR-0048 item 8). **Nesta fatia** responde `409 StoreUnavailable` (página fora de `OPEN`) ou `422 DeliveryUnavailable`. Formato que entra na fatia 4:
+Cotação da taxa de entrega (ADR-0048 itens 4 a 13; RF-204). Pedida **quando o cliente confirma o endereço**, nunca a cada tecla. Header `X-Turnstile-Token` como no envio (ADR-0045 item 12: um token novo por chamada; Cloudflare fora do ar → segue). O cálculo é sempre do servidor: o corpo não tem distância nem taxa.
 
 ```json
 { "address": { "street": "Rua das Palmeiras", "number": "45", "complement": "Casa 2", "neighborhood": "Centro", "city": "Uberlândia", "zipCode": "38400100", "reference": null } }
 ```
 
+→ `201 Created` (sem `Location`; a cotação só é usada pelo envio):
+
 ```json
-{ "quoteId": "0192d6a0-0000-7000-8000-000000000e01", "formattedAddress": "Rua das Palmeiras, 45 - Centro, Uberlândia - MG", "distanceKm": "4.5", "deliveryFee": "3.60", "expiresAt": "2026-10-27T12:15:00Z" }
+{ "quoteId": "0192d6a0-0000-7000-8000-000000000e01", "formattedAddress": "R. das Palmeiras, 45 - Centro, Uberlândia - MG, 38400-100, Brasil", "distanceKm": "4.5", "deliveryFee": "3.60", "expiresAt": "2026-10-27T12:15:00Z" }
 ```
+
+- **Cálculo** (rota de carro sem trânsito, do ponto **confirmado** do restaurante): `km = round(metros / 1000, 1, AwayFromZero)` e `deliveryFee = max(round(km × pricePerKm, 2, AwayFromZero), minimumFee)`.
+
+  | Rota | `distanceKm` | km × R$ 0,80 | Mínimo R$ 3,00 | `deliveryFee` | Raio `"6.0"` |
+  |---|---:|---:|---:|---:|---|
+  | 4.480 m | `"4.5"` | 3,60 | — | `"3.60"` | entrega |
+  | 2.130 m | `"2.1"` | 1,68 | aplica | `"3.00"` | entrega |
+  | 6.040 m | `"6.0"` | 4,80 | — | `"4.80"` | entrega |
+  | 6.050 m | `"6.1"` | 4,88 | — | — | `422 OutOfDeliveryArea` |
+
+  Com R$ 0,85/km e 4,5 km: 3,825 → `"3.83"`.
+- `formattedAddress`: o endereço como o geocodificador entendeu ("Encontramos: …"); a página mostra e o cliente confirma. Numa cotação servida pelo cache (mesmo endereço normalizado no mesmo restaurante, até 30 dias), é o endereço digitado, porque o cache não guarda texto (ADR-0052 item 5).
+- `expiresAt`: **15 min**. O envio confere a cotação (§ envio, checagens 9a e 9b).
+- Modo `FIXED`: `distanceKm: null` e `deliveryFee` = `defaultDeliveryFee`; sem mapa, sem raio e sem conferência de precisão.
+- Mesmo endereço normalizado = rua (abreviações comuns como "R." e "Av." contam como "Rua"/"Avenida"), número, bairro, cidade (nula = a do restaurante) e CEP, sem caixa, acento ou pontuação. A UF é sempre a do restaurante. `complement` e `reference` ficam de fora.
+
+Erros, nesta ordem:
+
+| Situação | Resposta |
+|---|---|
+| formato: `street` obrigatória até 120; `number` até 10; `complement`, `neighborhood` até 60; `city` até 80; `zipCode` com 8 dígitos; `reference` até 120 | `422 ValidationFailed` em `address.*` |
+| página fora de `OPEN` | `409 StoreUnavailable` (`storeStatus`) |
+| Turnstile ausente ou inválido (com `Turnstile:Enabled`) | `403 CaptchaFailed` |
+| entrega indisponível (`deliveryAvailable: false`) | `422 DeliveryUnavailable` |
+| endereço não encontrado | `422 ValidationFailed` em `address.street`: "Não encontramos esse endereço. Confira a rua, o número e o bairro." |
+| resultado aproximado (só rua, bairro ou cidade; inclui número ausente ou "S/N" não localizado) | `422 ValidationFailed` em `address.number`: "Não achamos esse número nessa rua. Confira o número e o bairro." Resultado aproximado **nunca** vira taxa |
+| sem rota de carro, ou `distanceKm` acima de `maxDistanceKm` | `422 OutOfDeliveryArea` ("Não entregamos nesse endereço. Você pode retirar no local."); no raio, com `distanceKm` e `maxDistanceKm` |
+| provedor de mapas com erro, sem resposta em 3 s ou sem cota | `422 DeliveryUnavailable` com `detail` "Não conseguimos calcular a entrega agora. Você pode retirar no local." A página oferece retirada; `deliveryAvailable` do perfil continua `true` (a falha é momentânea) e a próxima cotação tenta de novo |
+
+```json
+{
+  "type": "urn:almoseis:error:out-of-delivery-area",
+  "title": "Não entregamos nesse endereço. Você pode retirar no local.",
+  "status": 422,
+  "errorCode": "OutOfDeliveryArea",
+  "traceId": "00-7a1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e-7a1c2d3e4f5a6b7c-01",
+  "distanceKm": "6.1",
+  "maxDistanceKm": "6.0"
+}
+```
+
+`409 DeliveryQuoteChanged` do envio (checagem 9b), com a cotação nova já gravada. A página mostra "A taxa de entrega agora é R$ 4,50", o cliente confirma e reenvia com o `quote.quoteId` novo e o `expectedTotal` novo (a mesma `Idempotency-Key` serve: o erro não grava nada do pedido):
+
+```json
+{
+  "type": "urn:almoseis:error:delivery-quote-changed",
+  "title": "A taxa de entrega mudou. Confira o novo valor.",
+  "status": 409,
+  "detail": "A taxa de entrega agora é R$ 4,50. Confira e envie de novo.",
+  "errorCode": "DeliveryQuoteChanged",
+  "traceId": "00-8b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e-8b2c3d4e5f6a7b8c-01",
+  "quote": { "quoteId": "0192d6a0-0000-7000-8000-000000000e02", "formattedAddress": "Rua das Palmeiras, 45 - Centro, Uberlândia - MG", "distanceKm": "4.5", "deliveryFee": "4.50", "expiresAt": "2026-10-27T12:31:00Z" }
+}
+```
+
+No envio com entrega, o pedido grava a taxa da cotação e o snapshot (`deliveryFeeSource: "DISTANCE"`, metros, preço por km e mínimo; §6.9); o `itemsTotal + deliveryFee` precisa bater com `expectedTotal` (senão `409 CartChanged`, com a taxa em `cart.deliveryFee`). O endereço do pedido guarda rua, número, complemento, bairro e referência (a cidade não entra no `deliveryAddress` do pedido).
 
 ### `GET /public/tracking/{trackingToken}` — público
 
@@ -2448,7 +2535,7 @@ Ponto de extensão da taxa por distância (ADR-0048 item 8). **Nesta fatia** res
 - `rejection`: `{ "reasonCode": "ITEM_UNAVAILABLE", "message": "A costela acabou." }`; em `SUSPECTED_PRANK`, `message: null` (ADR-0046 item 12). `BUSINESS_DAY_CLOSED` na recusa do fechamento.
 - `canWithdraw`: `true` só em `AWAITING_ACCEPTANCE`.
 - `changedByStore`: o restaurante alterou o pedido depois do aceite ("O restaurante alterou seu pedido", com o total atualizado).
-- `deliveryAddress` (entrega): só `{ "street", "number" }`. **Nunca** aparecem telefone, sobrenome, complemento, referência, funcionários, outros pedidos ou saldo de fiado (ADR-0047 itens 5 e 6). `deliveryDistanceKm` entra com a fatia 4.
+- `deliveryAddress` (entrega): só `{ "street", "number" }`. **Nunca** aparecem telefone, sobrenome, complemento, referência, funcionários, outros pedidos ou saldo de fiado (ADR-0047 itens 5 e 6). `deliveryDistanceKm`: `"4.5"` quando a taxa foi a calculada pela distância; `null` em retirada, no modo `FIXED` ou se o restaurante editou a taxa ou o endereço depois.
 - `ETag: "{version}"`. A página consulta a cada 20 s com `If-None-Match`; sem mudança → `304 Not Modified` (ADR-0047 item 8).
 - Toda resposta de `/public/tracking/*` (inclusive erros) leva `Cache-Control: private, no-store`, `Referrer-Policy: no-referrer` e `X-Robots-Tag: noindex` (item 9).
 - Token inventado, malformado ou de pedido apagado → `404 NotFound`, sem nada do restaurante. Mais de 7 dias → `410 TrackingExpired` (o registro é apagado pelo job de retenção, e depois disso o mesmo token dá `404`).
@@ -2466,3 +2553,8 @@ Sem corpo. Desistência enquanto `AWAITING_ACCEPTANCE` (ADR-0046 item 17) → `2
 | `PublicPage:IpHashSecret` | segredo do sal diário do hash do IP (Key Vault). Vazio → sal aleatório por processo | vazio |
 | `PublicPage:RendererKey` | `X-Web-Renderer-Key` do servidor da página (Key Vault). Vazio → sem isenção | vazio |
 | `WebOrders:RetentionJobEnabled`, `RetentionIntervalMinutes` (60) | job de retenção do ADR-0052 | testes: desligado, chamado por `RunOnceAsync` |
+| `Maps:Provider` | `None` (sem entrega por distância: `MAPS_PROVIDER` em `pageDelivery.missing`), `Fake`, `Osm` ou `Google` (ADR-0048 item 15). `appsettings.json` versionado: `None` até o usuário escolher. `Fake` é recusado em Production | Development e testes: `Fake` (sem rede). Sem a chave na configuração, o padrão também é `Fake` |
+| `Maps:Google:ApiKey` | chave da Geocoding API + Routes API (Compute Route Matrix, Essentials, `TRAFFIC_UNAWARE`). Só Key Vault / `user-secrets`; obrigatória com `Google` (a API não sobe sem ela) | vazio |
+| `Maps:Osm:NominatimUrl`, `OsrmUrl`, `UserAgent`, `NominatimMinIntervalMilliseconds` (1000), `AcceptStreetLevel` (false) | Nominatim + OSRM. Padrão: as instâncias públicas (só desenvolvimento; política de 1 req/s, respeitada por réplica). `UserAgent` genérico do produto, sem e-mail | — |
+| `Maps:TimeoutSeconds` (3), `GeocodeCacheDays` (30), `RouteCacheDays` (30) | tempo máximo por chamada; validade do cache por tenant das coordenadas e dos metros (0 desliga; ver ADR-0048 item 11 sobre os termos do Google) | — |
+| `Maps:RetentionJobEnabled`, `RetentionIntervalMinutes` (60) | apaga cotações 24 h depois de vencer e o cache vencido (ADR-0052 item 5) | testes: desligado, chamado por `RunOnceAsync` |

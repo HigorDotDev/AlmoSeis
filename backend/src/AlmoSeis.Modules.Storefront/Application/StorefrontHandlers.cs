@@ -98,13 +98,13 @@ internal sealed class SlugWriter(AppDbContext db)
 }
 
 /// GET /storefront (06 §6.18).
-internal sealed class GetStorefrontQueryHandler(AppDbContext db, ITenantContext tenant, StorefrontStatusCalculator status)
+internal sealed class GetStorefrontQueryHandler(AppDbContext db, ITenantContext tenant, StorefrontStatusCalculator status, IMapsAvailability maps)
     : IQueryHandler<GetStorefrontQuery, StorefrontDto>
 {
     public async Task<StorefrontDto> HandleAsync(GetStorefrontQuery query, CancellationToken cancellationToken)
     {
         var settings = await db.Set<StorefrontSettings>().AsNoTracking().SingleAsync(s => s.Id == tenant.TenantId, cancellationToken);
-        return await StorefrontDtos.BuildAsync(db, settings, await status.ComputeAsync(settings, cancellationToken), cancellationToken);
+        return await StorefrontDtos.BuildAsync(db, settings, await status.ComputeAsync(settings, cancellationToken), maps.IsConfigured, cancellationToken);
     }
 }
 
@@ -116,6 +116,8 @@ internal sealed class UpdateStorefrontHandler(
     ICatalogReader catalog,
     SlugWriter slugs,
     StorefrontStatusCalculator status,
+    DeliveryQuoteCalculator maps,
+    IMapsAvailability mapsAvailability,
     IAuditWriter audit,
     TimeProvider time) : ICommandHandler<UpdateStorefrontCommand, StorefrontDto>
 {
@@ -147,17 +149,24 @@ internal sealed class UpdateStorefrontHandler(
             new StorefrontChanges(
                 request.PublicName, request.IsPageActive, request.IsAcceptingOrders, request.IsDeliveryEnabled, request.OffersDelivery,
                 request.OffersPickup, request.ContactPhone, request.HoursText, request.Address,
-                new DeliveryRule(delivery.FeeMode, delivery.PricePerKm, delivery.MinimumFee, StorefrontDtos.ParseKm(delivery.MaxDistanceKm))),
+                new DeliveryRule(delivery.FeeMode, delivery.PricePerKm, delivery.MinimumFee, StorefrontDtos.ParseKm(delivery.MaxDistanceKm)),
+                request.Location),
             slugChanged,
             hasActiveSize,
             now);
+
+        // Endereço novo (ou ainda sem ponto): geocodifica uma vez ao salvar; o proprietário confirma no mapa (ADR-0048 item 3).
+        if (settings.Latitude is null && await maps.GeocodeStoreAsync(settings, cancellationToken) is { } point)
+        {
+            changed |= settings.SuggestLocation(point, now);
+        }
 
         if (changed)
         {
             audit.Add("StorefrontUpdated", "STOREFRONT", tenantId, before: before, after: Audit(settings, slug));
         }
 
-        return await StorefrontDtos.BuildAsync(db, settings, await status.ComputeAsync(settings, cancellationToken), cancellationToken, slug);
+        return await StorefrontDtos.BuildAsync(db, settings, await status.ComputeAsync(settings, cancellationToken), mapsAvailability.IsConfigured, cancellationToken, slug);
     }
 
     public static async Task<string> CurrentSlugAsync(AppDbContext db, Guid tenantId, CancellationToken cancellationToken) =>
@@ -177,6 +186,8 @@ internal sealed class UpdateStorefrontHandler(
         pricePerKm = s.PricePerKm?.ToString(),
         minimumDeliveryFee = s.MinimumDeliveryFee.ToString(),
         s.MaxDeliveryDistanceKm,
+        hasLocation = s.Latitude is not null,
+        locationConfirmed = s.IsLocationConfirmed,
     };
 }
 
@@ -216,8 +227,9 @@ internal sealed class StorefrontStatusCalculator(ITenantContext tenant, ISubscri
 internal static class StorefrontDtos
 {
     public static async Task<StorefrontDto> BuildAsync(
-        AppDbContext db, StorefrontSettings s, StoreStatus status, CancellationToken cancellationToken, string? currentSlug = null)
+        AppDbContext db, StorefrontSettings s, StoreStatus status, bool mapsConfigured, CancellationToken cancellationToken, string? currentSlug = null)
     {
+        var missing = s.MissingForPageDelivery(mapsConfigured);
         var slugs = await db.Set<StoreSlug>().AsNoTracking()
             .Where(x => x.TenantId == s.Id)
             .OrderByDescending(x => x.CreatedAt)
@@ -230,8 +242,9 @@ internal static class StorefrontDtos
             s.Version, current, previous, s.PublicName, s.IsPageActive, s.IsAcceptingOrders, s.IsDeliveryEnabled, s.OffersDelivery, s.OffersPickup,
             s.ContactPhone, s.HoursText,
             new StorefrontAddressDto(s.AddressStreet, s.AddressNumber, s.AddressComplement, s.AddressNeighborhood, s.AddressCity, s.AddressState, s.AddressZipCode),
-            s.Latitude is { } lat && s.Longitude is { } lng ? new StorefrontLocationDto(lat, lng) : null,
+            s.Latitude is { } lat && s.Longitude is { } lng ? new StorefrontLocationDto(lat, lng, s.IsLocationConfirmed) : null,
             new StorefrontDeliveryDto(s.DeliveryFeeMode, s.PricePerKm, s.MinimumDeliveryFee, FormatKm(s.MaxDeliveryDistanceKm)),
+            new PageDeliveryStatusDto(missing.Count == 0, missing),
             status, s.UpdatedAt);
     }
 

@@ -302,6 +302,8 @@ Aparelho registrado como compartilhado (ADR-0027).
 | RiskFlag | enum `CAPTCHA_UNAVAILABLE`? | só `WEB`: o anti-robô não respondeu no envio (ADR-0045 item 12) |
 | AnonymizedAt | DateTimeOffset? | pedido `WEB` não aceito anonimizado 7 dias depois (nome, telefone, endereço e observações; ADR-0052 item 3) |
 | DeliveryFee | Money | 0 se não for `DELIVERY` |
+| DeliveryFeeSource | enum? `FIXED_DEFAULT`, `DISTANCE`, `MANUAL` | só em `DELIVERY` (ADR-0048 item 20): padrão do estabelecimento, calculada pela página, ou digitada/editada no app. Editar taxa ou endereço de um `DISTANCE` → `MANUAL`/`FIXED_DEFAULT`; nulo nas entregas anteriores à 0005 |
+| DeliveryDistanceMeters, DeliveryPricePerKm, DeliveryMinimumFee | int?, decimal(10,2)?, Money? | snapshot da regra por distância (os três juntos; obrigatórios em `DISTANCE`; ficam como histórico se a taxa for editada) |
 | ItemsTotal | Money | Σ `OrderItem.LineTotal` ativos |
 | WeighingsTotal | Money | Σ `WeighingEntry.Amount` ativas |
 | TotalAmount | Money | `ItemsTotal + WeighingsTotal + DeliveryFee` |
@@ -567,13 +569,26 @@ O ajuste **não** altera o `DailyClosing` relacionado nem o caixa físico. Apare
 | ContactPhone | string(16)? | E.164 |
 | HoursText | string(120)? | informativo |
 | Address* | Street(120), Number(10), Complement(60), Neighborhood(60), City(80), State(2), ZipCode(8) | endereço do restaurante |
-| Latitude, Longitude | decimal(9,6)? | ponto confirmado no mapa (fatia 4); apagado quando o endereço muda |
-| DeliveryFeeMode | enum `DISTANCE`, `FIXED` | ADR-0048 (fatia 4) |
+| Latitude, Longitude | decimal(9,6)? | ponto do restaurante: geocodificado ao salvar o endereço e confirmado (ou arrastado) no mapa pelo proprietário; apagado quando o endereço muda |
+| LocationConfirmedAt | timestamptz? | confirmação do ponto; exige ponto. Mudar o endereço apaga (ADR-0048 item 3) |
+| DeliveryFeeMode | enum `DISTANCE`, `FIXED` | ADR-0048 item 1. `FIXED` = `TenantSettings.DefaultDeliveryFee`, sem mapa |
 | PricePerKm | decimal(10,2)? | > 0 |
 | MinimumDeliveryFee | Money | ≥ 0 |
 | MaxDeliveryDistanceKm | decimal(4,1)? | > 0 |
 
 Estado da página (derivado, ADR-0044 item 6): `UNAVAILABLE` (inativa ou assinatura sem escrita) → `CLOSED` (sem expediente aberto) → `PAUSED` → `OPEN`.
+
+Entrega pela página (derivado, ADR-0048): `OffersDelivery` e `IsDeliveryEnabled`; no modo `DISTANCE`, também `PricePerKm`, ponto confirmado e provedor de mapas configurado. Salvar sem isso não é erro: a página só não oferece entrega.
+
+### DeliveryQuote [T] (ADR-0048 item 8)
+
+`Id`, `AddressHash` (SHA-256 do tenant + endereço normalizado), `FormattedAddress` (200), `Latitude`/`Longitude`, `FeeMode`, `DistanceMeters`, `DistanceKm` (decimal(5,1), uma casa), `PricePerKm`, `MinimumFee`, `DeliveryFee`, `SettingsVersion` (versão do `StorefrontSettings` usada), `CreatedAt`, `ExpiresAt` (+ 15 min). `DISTANCE` exige ponto, metros e regra; `FIXED` não tem nenhum deles. Apagada 24 h depois de vencer.
+
+Cálculos: `km = round(metros / 1000, 1, AwayFromZero)`; `taxa = max(round(km × PricePerKm, 2, AwayFromZero), MinimumDeliveryFee)`; fora da área se `km > MaxDeliveryDistanceKm` (o `km` arredondado) ou sem rota. No envio: válida + mesmo hash + mesma versão → a taxa dela; senão recalcula, e taxa diferente → `409 DeliveryQuoteChanged` com a cotação nova.
+
+### GeocodeCacheEntry [T] (ADR-0048 item 11, ADR-0052 item 5)
+
+PK `(TenantId, AddressHash)`. `Latitude`, `Longitude`, `GeocodedAt`, `ExpiresAt` (+ 30 dias) e, se a rota foi calculada, `OriginLatitude`/`OriginLongitude` (o ponto do restaurante usado), `DistanceMeters` e `RoutedAt`. **Sem o texto do endereço.** Só resultado exato entra. A distância só vale com o mesmo ponto de partida.
 
 ### StoreSlug (plataforma)
 

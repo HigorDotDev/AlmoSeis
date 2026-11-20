@@ -16,7 +16,8 @@ internal sealed class StorefrontModelConfiguration : IModuleModelConfiguration
             b.Property(x => x.Id).HasColumnName("tenant_id");
             b.Ignore(x => x.TenantId);
             b.Ignore(x => x.HasCompleteAddress);
-            b.Ignore(x => x.DeliveryAvailableOnPage);
+            b.Ignore(x => x.IsLocationConfirmed);
+            b.Ignore(x => x.ConfirmedLocation);
             b.Ignore(x => x.PublicAddress);
             b.Property(x => x.PublicName).HasMaxLength(80);
             b.Property(x => x.ContactPhone).HasMaxLength(16);
@@ -39,6 +40,31 @@ internal sealed class StorefrontModelConfiguration : IModuleModelConfiguration
             b.ToTable("store_slugs");
             b.HasKey(x => x.Slug);
             b.Property(x => x.Slug).HasMaxLength(40);
+        });
+
+        // 05 §5.17, 0005 (ADR-0048).
+        modelBuilder.Entity<DeliveryQuote>(b =>
+        {
+            b.ToTable("delivery_quotes");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.AddressHash).HasMaxLength(64).IsFixedLength();
+            b.Property(x => x.FormattedAddress).HasMaxLength(DeliveryQuote.FormattedAddressMax);
+            b.Property(x => x.Latitude).HasPrecision(9, 6);
+            b.Property(x => x.Longitude).HasPrecision(9, 6);
+            b.Property(x => x.DistanceKm).HasPrecision(5, 1);
+            b.Property(x => x.PricePerKm).HasPrecision(10, 2);
+        });
+
+        modelBuilder.Entity<GeocodeCacheEntry>(b =>
+        {
+            b.ToTable("geocode_cache_entries");
+            b.HasKey(x => new { x.TenantId, x.AddressHash });
+            b.Ignore(x => x.Point);
+            b.Property(x => x.AddressHash).HasMaxLength(64).IsFixedLength();
+            b.Property(x => x.Latitude).HasPrecision(9, 6);
+            b.Property(x => x.Longitude).HasPrecision(9, 6);
+            b.Property(x => x.OriginLatitude).HasPrecision(9, 6);
+            b.Property(x => x.OriginLongitude).HasPrecision(9, 6);
         });
     }
 }

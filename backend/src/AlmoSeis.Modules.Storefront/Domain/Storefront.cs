@@ -35,6 +35,9 @@ internal sealed class StorefrontSettings : AggregateRoot, ITenantOwned
     public string? AddressZipCode { get; private set; }
     public decimal? Latitude { get; private set; }
     public decimal? Longitude { get; private set; }
+
+    /// Quando o proprietário confirmou (ou arrastou) o ponto no mapa. Nulo = ponto só geocodificado, ou sem ponto.
+    public DateTimeOffset? LocationConfirmedAt { get; private set; }
     public DeliveryFeeMode DeliveryFeeMode { get; private set; } = DeliveryFeeMode.Distance;
     public Money? PricePerKm { get; private set; }
     public Money MinimumDeliveryFee { get; private set; } = Money.Zero;
@@ -81,8 +84,13 @@ internal sealed class StorefrontSettings : AggregateRoot, ITenantOwned
         (AddressStreet, AddressNumber, AddressComplement, AddressNeighborhood, AddressCity, AddressState, AddressZipCode) = newAddress;
         if (addressChanged)
         {
-            // Mudar o endereço exige confirmar o ponto no mapa de novo (ADR-0048 item 3; a confirmação é da fatia 4).
-            (Latitude, Longitude) = (null, null);
+            // Mudar o endereço exige confirmar o ponto no mapa de novo (ADR-0048 item 3): o ponto enviado junto é de
+            // antes da mudança e é descartado; o handler geocodifica o endereço novo.
+            (Latitude, Longitude, LocationConfirmedAt) = (null, null, null);
+        }
+        else if (changes.Location is { } location)
+        {
+            SetLocation(location, now);
         }
 
         DeliveryFeeMode = changes.Delivery.FeeMode;
@@ -115,11 +123,80 @@ internal sealed class StorefrontSettings : AggregateRoot, ITenantOwned
         return true;
     }
 
-    /// Entrega efetiva pela página. Nesta fatia sempre falso: a cotação por distância (ADR-0048) é da fatia 4, e sem ela a
-    /// página não cobra taxa (item 13: não existe taxa de reserva).
-    public bool DeliveryAvailableOnPage => OffersDelivery && IsDeliveryEnabled && DistanceQuotesAvailable;
+    public bool IsLocationConfirmed => LocationConfirmedAt is not null && Latitude is not null && Longitude is not null;
 
-    public const bool DistanceQuotesAvailable = false;
+    /// Ponto de partida da rota: só o confirmado no mapa (ADR-0048 item 3).
+    public GeoPoint? ConfirmedLocation => IsLocationConfirmed ? new GeoPoint(Latitude!.Value, Longitude!.Value) : null;
+
+    /// O que falta para a página oferecer entrega (ADR-0048 item 3). `mapsConfigured`: a API tem provedor de mapas.
+    /// `FIXED` não consulta mapa: basta a entrega ligada.
+    public IReadOnlyList<PageDeliveryRequirement> MissingForPageDelivery(bool mapsConfigured)
+    {
+        var missing = new List<PageDeliveryRequirement>();
+        if (!OffersDelivery || !IsDeliveryEnabled)
+        {
+            missing.Add(PageDeliveryRequirement.DeliveryOff);
+        }
+
+        if (DeliveryFeeMode == DeliveryFeeMode.Distance)
+        {
+            if (PricePerKm is null)
+            {
+                missing.Add(PageDeliveryRequirement.PricePerKm);
+            }
+
+            if (!IsLocationConfirmed)
+            {
+                missing.Add(PageDeliveryRequirement.ConfirmedLocation);
+            }
+
+            if (!mapsConfigured)
+            {
+                missing.Add(PageDeliveryRequirement.MapsProvider);
+            }
+        }
+
+        return missing;
+    }
+
+    /// Entrega pela página (`deliveryAvailable` do perfil público). Uma falha momentânea do provedor não desliga isto:
+    /// a cotação responde `DeliveryUnavailable` e a página oferece retirada (ADR-0048 item 13).
+    public bool IsDeliveryAvailableOnPage(bool mapsConfigured) => MissingForPageDelivery(mapsConfigured).Count == 0;
+
+    /// Ponto geocodificado do endereço salvo, ainda sem confirmação (ADR-0048 item 3). Só preenche um ponto vazio.
+    public bool SuggestLocation(GeoPoint point, DateTimeOffset now)
+    {
+        if (Latitude is not null || !HasCompleteAddress)
+        {
+            return false;
+        }
+
+        (Latitude, Longitude, LocationConfirmedAt) = (Round(point.Latitude), Round(point.Longitude), null);
+        UpdatedAt = now;
+        Touch();
+        return true;
+    }
+
+    /// Ponto enviado pelo app (o que o proprietário viu no mapa). Confirmar o mesmo ponto já confirmado não muda nada.
+    private void SetLocation(StorefrontLocationDto location, DateTimeOffset now)
+    {
+        if (location.Latitude is < -90 or > 90)
+        {
+            throw BusinessException.Validation("location.latitude", "Latitude entre -90 e 90.");
+        }
+
+        if (location.Longitude is < -180 or > 180)
+        {
+            throw BusinessException.Validation("location.longitude", "Longitude entre -180 e 180.");
+        }
+
+        var (latitude, longitude) = (Round(location.Latitude), Round(location.Longitude));
+        var samePoint = latitude == Latitude && longitude == Longitude;
+        LocationConfirmedAt = location.IsConfirmed ? (samePoint && LocationConfirmedAt is { } at ? at : now) : null;
+        (Latitude, Longitude) = (latitude, longitude);
+    }
+
+    private static decimal Round(decimal coordinate) => Math.Round(coordinate, 6, MidpointRounding.AwayFromZero);
 
     public PublicStoreAddressDto? PublicAddress =>
         HasCompleteAddress
@@ -130,7 +207,7 @@ internal sealed class StorefrontSettings : AggregateRoot, ITenantOwned
     {
         PublicName, IsPageActive, IsAcceptingOrders, IsDeliveryEnabled, OffersDelivery, OffersPickup, ContactPhone, HoursText,
         AddressStreet, AddressNumber, AddressComplement, AddressNeighborhood, AddressCity, AddressState, AddressZipCode,
-        Latitude, Longitude, DeliveryFeeMode, PricePerKm, MinimumDeliveryFee, MaxDeliveryDistanceKm,
+        Latitude, Longitude, LocationConfirmedAt, DeliveryFeeMode, PricePerKm, MinimumDeliveryFee, MaxDeliveryDistanceKm,
     }.Select(v => Convert.ToString(v, CultureInfo.InvariantCulture)));
 
     private static string? Clean(string? text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
@@ -151,7 +228,8 @@ internal sealed record StorefrontChanges(
     string? ContactPhone,
     string? HoursText,
     StorefrontAddressDto Address,
-    DeliveryRule Delivery);
+    DeliveryRule Delivery,
+    StorefrontLocationDto? Location = null);
 
 internal sealed record DeliveryRule(DeliveryFeeMode FeeMode, Money? PricePerKm, Money MinimumFee, decimal? MaxDistanceKm);
 

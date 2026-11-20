@@ -78,7 +78,7 @@ public sealed class StorefrontSettingsTests
     {
         var settings = StorefrontSettings.CreateDefault(Guid.NewGuid(), "Marmitaria da Ana", Now);
         settings.IsPageActive.ShouldBeFalse();
-        settings.DeliveryAvailableOnPage.ShouldBeFalse("a entrega pela página só existe com a cotação da fatia 4");
+        settings.IsDeliveryAvailableOnPage(mapsConfigured: true).ShouldBeFalse("sem preço por km nem ponto confirmado");
     }
 
     [Fact]

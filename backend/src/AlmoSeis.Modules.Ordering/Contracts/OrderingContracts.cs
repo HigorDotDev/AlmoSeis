@@ -58,6 +58,19 @@ public enum FulfillmentType
     DineIn,
 }
 
+/// Origem da taxa de entrega (ADR-0048 item 20). Nula fora de entrega e nas entregas gravadas antes da 0005.
+public enum DeliveryFeeSource
+{
+    /// A taxa padrão do estabelecimento (ADR-0021).
+    FixedDefault,
+
+    /// Calculada pela distância na página (ADR-0048), com o snapshot de metros, preço por km e mínimo.
+    Distance,
+
+    /// Digitada ou editada no app (`orders.delivery-fee.edit`).
+    Manual,
+}
+
 public enum ProductionStatus
 {
     Open,
@@ -173,6 +186,8 @@ public sealed record OrderDto(
     Money? ChangeFor,
     WebOrderRiskFlag? RiskFlag,
     Money DeliveryFee,
+    DeliveryFeeSource? DeliveryFeeSource,
+    string? DeliveryDistanceKm,
     Money ItemsTotal,
     Money WeighingsTotal,
     Money TotalAmount,

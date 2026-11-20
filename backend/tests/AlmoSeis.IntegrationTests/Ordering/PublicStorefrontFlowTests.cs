@@ -51,7 +51,10 @@ public sealed class PublicStorefrontFlowTests(PostgresFixture db) : IDisposable
         active.Version().ShouldBe(config.Version() + 1);
         active.GetProperty("delivery").GetProperty("pricePerKm").GetString().ShouldBe("0.80");
         active.GetProperty("delivery").GetProperty("maxDistanceKm").GetString().ShouldBe("6.0");
-        active.GetProperty("location").ValueKind.ShouldBe(JsonValueKind.Null);
+        // Endereço salvo: o ponto geocodificado (provedor Fake) vem sem confirmação, e a entrega pela página espera por ela.
+        active.GetProperty("location").GetProperty("isConfirmed").GetBoolean().ShouldBeFalse();
+        active.GetProperty("pageDelivery").GetProperty("available").GetBoolean().ShouldBeFalse();
+        active.GetProperty("pageDelivery").GetProperty("missing")[0].GetString().ShouldBe("CONFIRMED_LOCATION");
 
         // If-Match antigo → 409 com o estado atual.
         var stale = await PutStorefront(s, StorefrontBody(slug, accepting: false), config.Version());
@@ -77,7 +80,7 @@ public sealed class PublicStorefrontFlowTests(PostgresFixture db) : IDisposable
         store.GetProperty("status").GetString().ShouldBe("OPEN");
         store.GetProperty("name").GetString().ShouldBe("Marmitaria da Ana");
         store.GetProperty("pickupAvailable").GetBoolean().ShouldBeTrue();
-        store.GetProperty("deliveryAvailable").GetBoolean().ShouldBeFalse("a taxa por distância é da fatia 4");
+        store.GetProperty("deliveryAvailable").GetBoolean().ShouldBeFalse("sem o ponto do restaurante confirmado no mapa");
         store.GetProperty("deliveryRule").ValueKind.ShouldBe(JsonValueKind.Null);
         store.GetProperty("address").GetProperty("street").GetString().ShouldBe("Rua das Flores");
         store.GetProperty("businessDate").GetString().ShouldBe(OrderingScenario.Today.ToString("yyyy-MM-dd"));
@@ -352,8 +355,10 @@ public sealed class PublicStorefrontFlowTests(PostgresFixture db) : IDisposable
         errors.GetProperty("customerPhone").GetArrayLength().ShouldBeGreaterThan(0);
         errors.GetProperty("changeFor").GetArrayLength().ShouldBeGreaterThan(0);
 
-        // Entrega ainda não existe na página (fatia 4).
-        var delivery = await Refused(Order(s, delivery: true), HttpStatusCode.UnprocessableEntity);
+        // Entrega: sem cotação → 422 no campo; com o ponto do restaurante ainda sem confirmação → só retirada.
+        var noQuote = await Refused(Order(s, delivery: true), HttpStatusCode.UnprocessableEntity);
+        noQuote.GetProperty("errors").GetProperty("deliveryQuoteId").GetArrayLength().ShouldBeGreaterThan(0);
+        var delivery = await Refused(Order(s, delivery: true, quoteId: Guid.NewGuid()), HttpStatusCode.UnprocessableEntity);
         delivery.GetProperty("errorCode").GetString().ShouldBe("DeliveryUnavailable");
         var quote = await Public().PostAsJsonAsync($"/api/v1/public/stores/{slug}/delivery-quotes",
             new { address = new { street = "Rua A", number = "1", complement = (string?)null, neighborhood = "Centro", city = "Uberlândia", zipCode = (string?)null, reference = (string?)null } }, Ct);
@@ -625,7 +630,7 @@ public sealed class PublicStorefrontFlowTests(PostgresFixture db) : IDisposable
     /// 2 marmitas M (Frango, Arroz, Feijão) com ovo + 1 Coca: 2 × 22,00 + 6,00 = 50,00.
     private static object Order(
         OrderingScenario s, string expectedTotal = "50.00", string phone = "(34) 98888-7777", int quantity = 2, Guid? main = null,
-        int secondMarmita = 0, bool delivery = false, string? website = null, bool extraPrice = false)
+        int secondMarmita = 0, bool delivery = false, string? website = null, bool extraPrice = false, Guid? quoteId = null)
     {
         var items = new List<object>
         {
@@ -652,7 +657,7 @@ public sealed class PublicStorefrontFlowTests(PostgresFixture db) : IDisposable
             deliveryAddress = delivery
                 ? new { street = "Rua das Palmeiras", number = "45", complement = "Casa 2", neighborhood = "Centro", city = "Uberlândia", zipCode = (string?)null, reference = (string?)null }
                 : null,
-            deliveryQuoteId = (Guid?)null,
+            deliveryQuoteId = quoteId,
             expectedPaymentMethod = "CASH",
             changeFor = quantity == 2 && secondMarmita == 0 ? "50.00" : null,
             notes = "Sem talher",

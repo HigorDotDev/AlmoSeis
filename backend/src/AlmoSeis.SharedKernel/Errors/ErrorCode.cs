@@ -83,6 +83,10 @@ public static class ErrorCodes
     public static readonly ErrorCode TooManyPendingOrders = new("TooManyPendingOrders", 429, "Você já tem pedidos aguardando o restaurante.");
     public static readonly ErrorCode TrackingExpired = new("TrackingExpired", 410, "Este acompanhamento expirou.");
 
+    // ---------- Taxa de entrega por distância (EP-002 fatia 4, ADR-0048) ----------
+    public static readonly ErrorCode OutOfDeliveryArea = new("OutOfDeliveryArea", 422, "Não entregamos nesse endereço. Você pode retirar no local.");
+    public static readonly ErrorCode DeliveryQuoteChanged = new("DeliveryQuoteChanged", 409, "A taxa de entrega mudou. Confira o novo valor.");
+
     public static IReadOnlyList<ErrorCode> All { get; } =
     [
         MalformedRequest, Unauthenticated, InvalidCredentials, InvalidRefreshToken, InvalidDeviceSecret,
@@ -96,5 +100,6 @@ public static class ErrorCodes
         PaymentMethodDisabled, ProductUnavailable, KiloPriceNotConfigured, JustificationRequired, PinLocked,
         AppVersionUnsupported, IdempotencyKeyRequired, IfMatchRequired, TooManyRequests,
         StoreNotFound, StoreUnavailable, CartChanged, DeliveryUnavailable, CaptchaFailed, TooManyPendingOrders, TrackingExpired,
+        OutOfDeliveryArea, DeliveryQuoteChanged,
     ];
 }

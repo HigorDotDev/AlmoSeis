@@ -26,6 +26,7 @@ internal sealed class PlaceWebOrderHandler(
     IClientIpHasher ipHasher,
     ISecretHasher hasher,
     WebOrderSubmitter submitter,
+    IDeliveryQuoteRedeemer quotes,
     TimeProvider time) : ICommandHandler<PlaceWebOrderCommand, PlacedWebOrderDto>, IPublicHandler
 {
     /// ADR-0045 item 13.
@@ -55,7 +56,7 @@ internal sealed class PlaceWebOrderHandler(
 
         if (request.FulfillmentType == FulfillmentType.Delivery && !store.DeliveryAvailable)
         {
-            // A taxa por distância é da fatia 4: até lá a página só oferece retirada (ADR-0048 item 13).
+            // Entrega pausada ou sem o que o ADR-0048 exige (ponto confirmado, preço por km, provedor): só retirada.
             throw new BusinessException(ErrorCodes.DeliveryUnavailable);
         }
 
@@ -80,7 +81,23 @@ internal sealed class PlaceWebOrderHandler(
             ?? throw new BusinessException(
                 ErrorCodes.MenuNotFound, "O cardápio de hoje ainda não foi publicado.",
                 new Dictionary<string, object?> { ["menuType"] = "MARMITA", ["businessDate"] = businessDate });
+        // Entrega: a taxa é a da cotação que o cliente viu, conferida aqui (ADR-0048 item 10). Taxa mudada → 409 com a nova.
         var deliveryFee = Money.Zero;
+        DeliveryPricing? pricing = null;
+        DeliveryAddressDto? address = null;
+        if (request.FulfillmentType == FulfillmentType.Delivery && request.DeliveryAddress is { } input)
+        {
+            var redeemed = await quotes.RedeemAsync(
+                request.DeliveryQuoteId,
+                new PublicAddressInput(input.Street, input.Number, input.Complement, input.Neighborhood, input.City, input.ZipCode, input.Reference),
+                cancellationToken);
+            deliveryFee = redeemed.DeliveryFee;
+            pricing = redeemed.FeeMode == DeliveryFeeMode.Distance
+                ? new DeliveryPricing(DeliveryFeeSource.Distance, redeemed.DistanceMeters, redeemed.PricePerKm, redeemed.MinimumFee)
+                : new DeliveryPricing(DeliveryFeeSource.FixedDefault);
+            address = new DeliveryAddressDto(input.Street.Trim(), Clean(input.Number), Clean(input.Complement), Clean(input.Neighborhood), Clean(input.Reference));
+        }
+
         var cart = WebOrderCart.Price(request.Items, menu, deliveryFee);
         if (cart.Items.Any(i => !i.Available) || cart.TotalAmount != request.ExpectedTotal)
         {
@@ -89,10 +106,11 @@ internal sealed class PlaceWebOrderHandler(
 
         var order = await submitter.SubmitAsync(
             new SubmitWebOrderCommand(
-                request.FulfillmentType, request.CustomerName.Trim(), phone, null, deliveryFee, Clean(request.Notes),
+                request.FulfillmentType, request.CustomerName.Trim(), phone, address, deliveryFee, Clean(request.Notes),
                 request.Items.Select(ToOrderItem).ToList(),
                 request.ExpectedPaymentMethod, request.ChangeFor,
-                captcha == TurnstileOutcome.Unavailable ? WebOrderRiskFlag.CaptchaUnavailable : null),
+                captcha == TurnstileOutcome.Unavailable ? WebOrderRiskFlag.CaptchaUnavailable : null,
+                pricing),
             cancellationToken);
 
         var tenantId = tenant.TenantId!.Value;
@@ -272,6 +290,7 @@ internal sealed class PlaceWebOrderRequestValidator : AbstractValidator<PlaceWeb
         RuleFor(x => x.FulfillmentType).Must(f => f is FulfillmentType.Delivery or FulfillmentType.Pickup).WithMessage("Escolha entrega ou retirada.");
         RuleFor(x => x.DeliveryAddress).NotNull().WithMessage("Informe o endereço de entrega.").When(x => x.FulfillmentType == FulfillmentType.Delivery);
         RuleFor(x => x.DeliveryAddress).Null().WithMessage("Retirada não tem endereço de entrega.").When(x => x.FulfillmentType == FulfillmentType.Pickup);
+        RuleFor(x => x.DeliveryQuoteId).NotNull().WithMessage("Calcule a taxa de entrega antes de enviar o pedido.").When(x => x.FulfillmentType == FulfillmentType.Delivery);
         RuleFor(x => x.DeliveryAddress!.Street).NotEmpty().MaximumLength(120).When(x => x.DeliveryAddress is not null);
         RuleFor(x => x.DeliveryAddress!.Number).MaximumLength(10).When(x => x.DeliveryAddress is not null);
         RuleFor(x => x.DeliveryAddress!.Complement).MaximumLength(60).When(x => x.DeliveryAddress is not null);
@@ -436,7 +455,7 @@ internal static class WebOrderTracking
             items,
             order.ItemsTotal,
             order.DeliveryFee,
-            null,
+            order.DeliveryDistanceKm,
             order.TotalAmount,
             order.ExpectedPaymentMethod,
             order.ChangeFor,

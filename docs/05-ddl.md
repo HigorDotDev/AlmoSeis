@@ -1050,7 +1050,7 @@ Cada entidade [S] alterada na transação recebe seu próprio `seq`, porque a PK
 
 ## 5.16 Validação
 
-O script foi validado em 2026-10-27 num PostgreSQL 16 (Docker): os blocos `sql` deste documento aplicados do zero (36 tabelas e 65 políticas na `0001`; 40 e 76 com as alterações até a `0004`) e depois o teste de fumaça [`05-ddl-smoke-test.sql`](05-ddl-smoke-test.sql), que roda como `almoseis_app`/`almoseis_platform` e confere 41 regras (22 da `0001`, 9 da `0003`, 10 da `0004`): isolamento entre dois tenants, plataforma do aparelho compartilhado, login, convite por código, totais, cancelamento, troco, estorno, conciliação, imutabilidade, casos com `NULL` e, desde a `0003`, o pedido da página (sem número, sem produção e sem autor enquanto aguarda aceite; recusa coerente; atendimento só em entrega) e, desde a `0004`, a página de pedidos (endereço para ativar, slug atual único e no formato, troco só em dinheiro, campos da página só em `WEB`, idempotência anônima, slug e token resolvíveis por outro tenant mas nunca gravados por ele, perfil e hash do IP isolados). Toda mudança neste documento deve repetir os dois passos:
+O script foi validado em 2026-10-27 num PostgreSQL 16 (Docker): os blocos `sql` deste documento aplicados do zero (36 tabelas e 65 políticas na `0001`; 40 e 76 com as alterações até a `0004`; 42 e 80 até a `0005`) e depois o teste de fumaça [`05-ddl-smoke-test.sql`](05-ddl-smoke-test.sql), que roda como `almoseis_app`/`almoseis_platform` e confere 45 regras (22 da `0001`, 9 da `0003`, 10 da `0004`, 4 da `0005`): isolamento entre dois tenants, plataforma do aparelho compartilhado, login, convite por código, totais, cancelamento, troco, estorno, conciliação, imutabilidade, casos com `NULL` e, desde a `0003`, o pedido da página (sem número, sem produção e sem autor enquanto aguarda aceite; recusa coerente; atendimento só em entrega) e, desde a `0004`, a página de pedidos (endereço para ativar, slug atual único e no formato, troco só em dinheiro, campos da página só em `WEB`, idempotência anônima, slug e token resolvíveis por outro tenant mas nunca gravados por ele, perfil e hash do IP isolados) e, desde a `0005`, a taxa por distância (cotação por distância completa, confirmação do ponto só com ponto, origem da taxa só em entrega, cotação e cache isolados). Toda mudança neste documento deve repetir os dois passos:
 
 ```text
 docker run -d --name almoseis-ddl-test -e POSTGRES_PASSWORD=test postgres:16
@@ -1386,4 +1386,102 @@ GRANT INSERT, UPDATE ON storefront_settings, store_slugs TO almoseis_app;
 GRANT INSERT ON order_tracking_tokens, web_order_intakes TO almoseis_app;
 -- Retenção (ADR-0047 item 4, ADR-0052 item 5): token vencido e hash do IP com mais de 7 dias
 GRANT DELETE ON order_tracking_tokens, web_order_intakes TO almoseis_platform;
+```
+
+### 0005_DeliveryByDistance — 2026-11-20 (ADR-0048, ADR-0052)
+
+Taxa de entrega por distância (EP-002 fatia 4, F-205):
+
+- **`storefront_settings.location_confirmed_at`**: quando o proprietário confirmou (ou arrastou) o ponto do restaurante no mapa. O ponto geocodificado ao salvar o endereço nasce sem confirmação; o modo `DISTANCE` só cota com o ponto confirmado (ADR-0048 item 3). Confirmação exige ponto (`ck_storefront_settings_location_confirmed`).
+- **`delivery_quotes`** [T] (ADR-0048 item 8): a cotação de 15 min com o hash do endereço normalizado, o endereço como o geocodificador entendeu, coordenadas, metros, km com uma casa, a regra usada (preço por km, mínimo, versão da configuração) e a taxa. Modo `FIXED`: sem coordenadas nem distância. Apagada 24 h depois de vencer pelo job de retenção, no papel de plataforma (ADR-0052 item 5). Sem FK a partir de `orders`: o pedido guarda o snapshot.
+- **`geocode_cache_entries`** [T] (ADR-0048 item 11, ADR-0052 item 5): por tenant, hash do endereço normalizado (SHA-256 com o tenant) → coordenadas e, se a rota foi calculada, o ponto de partida e os metros. **Sem o texto do endereço.** Vale 30 dias (`expires_at`); a rota só vale enquanto o ponto do restaurante for o mesmo. Gravado com `INSERT … ON CONFLICT`, por isso o papel da aplicação tem `UPDATE`.
+- **`orders`** (ADR-0048 item 20): `delivery_fee_source` (`FIXED_DEFAULT`, `DISTANCE`, `MANUAL`; só em entrega; nulo nas entregas anteriores à 0005) e o snapshot `delivery_distance_meters`, `delivery_price_per_km`, `delivery_minimum_fee` (os três juntos; obrigatórios em `DISTANCE`; mantidos como histórico quando a taxa é editada depois e vira `MANUAL`).
+
+```sql
+-- Ponto do restaurante confirmado no mapa (ADR-0048 item 3)
+ALTER TABLE storefront_settings ADD COLUMN location_confirmed_at timestamptz;
+ALTER TABLE storefront_settings
+  ADD CONSTRAINT ck_storefront_settings_location_confirmed CHECK (location_confirmed_at IS NULL OR latitude IS NOT NULL);
+
+-- Cotação de entrega: 15 min, apagada 24 h depois de vencer (ADR-0048 item 8, ADR-0052 item 5)
+CREATE TABLE delivery_quotes (
+  id                 uuid           PRIMARY KEY,
+  tenant_id          uuid           NOT NULL REFERENCES tenants (id),
+  address_hash       char(64)       NOT NULL,
+  formatted_address  varchar(200)   NOT NULL,
+  latitude           numeric(9,6)   CHECK (latitude BETWEEN -90 AND 90),
+  longitude          numeric(9,6)   CHECK (longitude BETWEEN -180 AND 180),
+  fee_mode           text           NOT NULL CHECK (fee_mode IN ('DISTANCE', 'FIXED')),
+  distance_meters    integer        CHECK (distance_meters >= 0),
+  distance_km        numeric(5,1)   CHECK (distance_km >= 0),
+  price_per_km       numeric(10,2)  CHECK (price_per_km > 0),
+  minimum_fee        numeric(12,2)  CHECK (minimum_fee >= 0),
+  delivery_fee       numeric(12,2)  NOT NULL CHECK (delivery_fee >= 0),
+  settings_version   integer        NOT NULL,
+  created_at         timestamptz    NOT NULL,
+  expires_at         timestamptz    NOT NULL,
+  CONSTRAINT ck_delivery_quotes_expiry CHECK (expires_at > created_at),
+  CONSTRAINT ck_delivery_quotes_mode CHECK (
+       (fee_mode = 'DISTANCE' AND latitude IS NOT NULL AND longitude IS NOT NULL AND distance_meters IS NOT NULL
+        AND distance_km IS NOT NULL AND price_per_km IS NOT NULL AND minimum_fee IS NOT NULL)
+    OR (fee_mode = 'FIXED' AND latitude IS NULL AND longitude IS NULL AND distance_meters IS NULL
+        AND distance_km IS NULL AND price_per_km IS NULL AND minimum_fee IS NULL))
+);
+CREATE INDEX ix_delivery_quotes_expires ON delivery_quotes (expires_at);
+
+-- Cache por tenant: hash do endereço → coordenadas e metros, sem o texto (ADR-0048 item 11, ADR-0052 item 5)
+CREATE TABLE geocode_cache_entries (
+  tenant_id         uuid          NOT NULL REFERENCES tenants (id),
+  address_hash      char(64)      NOT NULL,
+  latitude          numeric(9,6)  NOT NULL CHECK (latitude BETWEEN -90 AND 90),
+  longitude         numeric(9,6)  NOT NULL CHECK (longitude BETWEEN -180 AND 180),
+  geocoded_at       timestamptz   NOT NULL,
+  origin_latitude   numeric(9,6),
+  origin_longitude  numeric(9,6),
+  distance_meters   integer       CHECK (distance_meters >= 0),
+  routed_at         timestamptz,
+  expires_at        timestamptz   NOT NULL,
+  PRIMARY KEY (tenant_id, address_hash),
+  CONSTRAINT ck_geocode_cache_entries_route CHECK (
+        (origin_latitude IS NULL) = (distance_meters IS NULL)
+    AND (origin_longitude IS NULL) = (distance_meters IS NULL)
+    AND (routed_at IS NULL) = (distance_meters IS NULL)),
+  CONSTRAINT ck_geocode_cache_entries_expiry CHECK (expires_at > geocoded_at)
+);
+CREATE INDEX ix_geocode_cache_entries_expires ON geocode_cache_entries (expires_at);
+
+-- Pedido: origem da taxa e snapshot da regra por distância (ADR-0048 item 20)
+ALTER TABLE orders
+  ADD COLUMN delivery_fee_source       text           CHECK (delivery_fee_source IN ('FIXED_DEFAULT', 'DISTANCE', 'MANUAL')),
+  ADD COLUMN delivery_distance_meters  integer        CHECK (delivery_distance_meters >= 0),
+  ADD COLUMN delivery_price_per_km     numeric(10,2)  CHECK (delivery_price_per_km > 0),
+  ADD COLUMN delivery_minimum_fee      numeric(12,2)  CHECK (delivery_minimum_fee >= 0);
+ALTER TABLE orders
+  ADD CONSTRAINT ck_orders_delivery_fee_source CHECK (delivery_fee_source IS NULL OR fulfillment_type = 'DELIVERY'),
+  ADD CONSTRAINT ck_orders_delivery_distance CHECK (
+        (delivery_distance_meters IS NULL) = (delivery_price_per_km IS NULL)
+    AND (delivery_price_per_km IS NULL) = (delivery_minimum_fee IS NULL)
+    AND (delivery_fee_source IS DISTINCT FROM 'DISTANCE' OR delivery_distance_meters IS NOT NULL));
+
+-- RLS: tabelas de tenant
+DO $$
+DECLARE
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['delivery_quotes', 'geocode_cache_entries'] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format(
+      'CREATE POLICY tenant_isolation ON %I TO almoseis_app '
+      'USING (tenant_id = app_tenant_id()) WITH CHECK (tenant_id = app_tenant_id())', t);
+    EXECUTE format(
+      'CREATE POLICY platform_access ON %I TO almoseis_platform USING (true) WITH CHECK (true)', t);
+  END LOOP;
+END $$;
+
+-- Grants (tabelas novas). Retenção (ADR-0052 item 5): o job de plataforma apaga cotações e cache vencidos.
+GRANT SELECT ON delivery_quotes, geocode_cache_entries TO almoseis_app, almoseis_platform;
+GRANT INSERT ON delivery_quotes, geocode_cache_entries TO almoseis_app;
+GRANT UPDATE ON geocode_cache_entries TO almoseis_app;
+GRANT DELETE ON delivery_quotes, geocode_cache_entries TO almoseis_platform;
 ```

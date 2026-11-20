@@ -33,5 +33,7 @@ internal sealed class UpdateStorefrontRequestValidator : AbstractValidator<Updat
         RuleFor(x => x.Delivery.MaxDistanceKm).Matches(@"^[0-9]{1,3}(\.[0-9])?$").WithMessage("Distância em km com até uma casa, ex.: \"6.0\".")
             .Must(km => km is null || StorefrontDtos.ParseKm(km) > 0).WithMessage("A distância máxima deve ser maior que zero.")
             .When(x => x.Delivery is not null);
+        RuleFor(x => x.Location!.Latitude).InclusiveBetween(-90m, 90m).WithMessage("Latitude entre -90 e 90.").When(x => x.Location is not null);
+        RuleFor(x => x.Location!.Longitude).InclusiveBetween(-180m, 180m).WithMessage("Longitude entre -180 e 180.").When(x => x.Location is not null);
     }
 }

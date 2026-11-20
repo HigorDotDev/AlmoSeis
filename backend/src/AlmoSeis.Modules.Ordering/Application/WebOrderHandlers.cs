@@ -216,7 +216,8 @@ internal sealed record SubmitWebOrderCommand(
     IReadOnlyList<OrderItemInput> Items,
     ExpectedPaymentMethod? ExpectedPaymentMethod = null,
     Money? ChangeFor = null,
-    WebOrderRiskFlag? RiskFlag = null);
+    WebOrderRiskFlag? RiskFlag = null,
+    DeliveryPricing? Pricing = null);
 
 internal sealed class SubmitWebOrderHandler(WebOrderSubmitter submitter) : ICommandHandler<SubmitWebOrderCommand, Guid>
 {
@@ -244,7 +245,7 @@ internal sealed class WebOrderSubmitter(
             ids.New(), tenant.TenantId!.Value,
             new NewOrder(
                 OrderType.Marmita, command.FulfillmentType, null, command.CustomerName, command.CustomerPhone, command.DeliveryAddress,
-                command.DeliveryFee, null, null, command.Notes, resolved, []),
+                command.DeliveryFee, null, null, command.Notes, resolved, [], command.Pricing),
             day.Id, day.BusinessDate, now + options.Value.AcceptanceWindow, ids.New, now,
             new WebOrderExtras(command.ExpectedPaymentMethod, command.ChangeFor, command.RiskFlag));
         db.Add(order);

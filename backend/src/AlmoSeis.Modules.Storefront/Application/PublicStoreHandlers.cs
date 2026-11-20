@@ -2,11 +2,13 @@ using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Security;
 using AlmoSeis.Infrastructure.Tenancy;
 using AlmoSeis.Modules.Catalog.Contracts;
+using AlmoSeis.Modules.Identity.Contracts;
 using AlmoSeis.Modules.Menu.Contracts;
 using AlmoSeis.Modules.Storefront.Contracts;
 using AlmoSeis.Modules.Storefront.Domain;
 using AlmoSeis.SharedKernel.Application;
 using AlmoSeis.SharedKernel.Errors;
+using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -43,7 +45,8 @@ internal sealed class StorefrontGate(
     AppDbContext db,
     ITenantContext tenant,
     StorefrontStatusCalculator status,
-    PublicMenuBuilder menus) : IStorefrontGate
+    PublicMenuBuilder menus,
+    IMapsAvailability maps) : IStorefrontGate
 {
     public async Task<StorefrontOrderingContext> GetAsync(CancellationToken cancellationToken)
     {
@@ -53,7 +56,7 @@ internal sealed class StorefrontGate(
         var slug = await UpdateStorefrontHandler.CurrentSlugAsync(db, tenantId, cancellationToken);
         return new StorefrontOrderingContext(
             storeStatus, slug, settings.PublicName, settings.ContactPhone, settings.PublicAddress,
-            settings.OffersPickup, settings.DeliveryAvailableOnPage, date);
+            settings.OffersPickup, settings.IsDeliveryAvailableOnPage(maps.IsConfigured), date);
     }
 
     public Task<PublicMenuDto?> GetMenuAsync(DateOnly businessDate, CancellationToken cancellationToken) =>
@@ -102,6 +105,8 @@ internal sealed class GetPublicStoreQueryHandler(
     ITenantContext tenant,
     StorefrontStatusCalculator status,
     PublicMenuBuilder menus,
+    IMapsAvailability maps,
+    ITenantSettingsReader tenantSettings,
     IOptions<TurnstileOptions> turnstile) : IQueryHandler<GetPublicStoreQuery, PublicStoreDto>, IPublicHandler
 {
     public const string OperatorName = "AlmoSeis";
@@ -120,25 +125,48 @@ internal sealed class GetPublicStoreQueryHandler(
         }
 
         var menu = date is { } businessDate ? await menus.BuildAsync(businessDate, cancellationToken) : null;
+        var delivery = settings.IsDeliveryAvailableOnPage(maps.IsConfigured);
         return new PublicStoreDto(
             slug, storeStatus, settings.PublicName, settings.PublicAddress, settings.ContactPhone, settings.HoursText,
-            settings.OffersPickup, settings.DeliveryAvailableOnPage, DeliveryRule(settings),
-            new PublicPrivacyDto(settings.PublicName, settings.ContactPhone, OperatorName, ThirdParties(turnstile.Value)),
+            settings.OffersPickup, delivery, delivery ? await DeliveryRuleAsync(settings, cancellationToken) : null,
+            new PublicPrivacyDto(settings.PublicName, settings.ContactPhone, OperatorName, ThirdParties(settings, delivery)),
             date, menu, PublicOrderLimits.Dto);
     }
 
-    /// A regra da taxa só aparece quando a entrega pela página existe (fatia 4).
-    private static PublicDeliveryRuleDto? DeliveryRule(StorefrontSettings s) =>
-        s.DeliveryAvailableOnPage && s.PricePerKm is { } perKm
-            ? new PublicDeliveryRuleDto(perKm, s.MinimumDeliveryFee, StorefrontDtos.FormatKm(s.MaxDeliveryDistanceKm))
-            : null;
+    /// A regra da taxa só aparece com a entrega pela página disponível.
+    private async Task<PublicDeliveryRuleDto> DeliveryRuleAsync(StorefrontSettings s, CancellationToken cancellationToken) =>
+        s.DeliveryFeeMode == DeliveryFeeMode.Fixed
+            ? new PublicDeliveryRuleDto(DeliveryFeeMode.Fixed, null, null, null, (await tenantSettings.GetAsync(cancellationToken)).DefaultDeliveryFee)
+            : new PublicDeliveryRuleDto(DeliveryFeeMode.Distance, s.PricePerKm, s.MinimumDeliveryFee, StorefrontDtos.FormatKm(s.MaxDeliveryDistanceKm), null);
 
-    private static IReadOnlyList<string> ThirdParties(TurnstileOptions turnstile) => turnstile.Enabled ? ["ANTI_BOT"] : [];
+    /// `MAPS` quando o endereço do cliente vai a um provedor externo (ADR-0052 itens 1 e 8).
+    private IReadOnlyList<string> ThirdParties(StorefrontSettings s, bool delivery)
+    {
+        var parties = new List<string>();
+        if (turnstile.Value.Enabled)
+        {
+            parties.Add("ANTI_BOT");
+        }
+
+        if (delivery && s.DeliveryFeeMode == DeliveryFeeMode.Distance && maps.IsExternal)
+        {
+            parties.Add("MAPS");
+        }
+
+        return parties;
+    }
 }
 
-/// POST /public/stores/{slug}/delivery-quotes (ADR-0048 item 8). O contrato já existe; a cotação por distância é da
-/// fatia 4. Até lá, com a página aberta, a resposta é `422 DeliveryUnavailable` e a página oferece só retirada.
-internal sealed class DeliveryQuoteHandler(AppDbContext db, ITenantContext tenant, StorefrontStatusCalculator status)
+/// POST /public/stores/{slug}/delivery-quotes (06 §6.19, ADR-0048 item 8). Ordem: página `OPEN` (`StoreUnavailable`) →
+/// Turnstile (`CaptchaFailed`; fora do ar segue, ADR-0045 item 12) → entrega disponível (`DeliveryUnavailable`) →
+/// endereço encontrado e exato (`422` em `address.*`) → rota (`OutOfDeliveryArea` sem rota ou fora do raio) → grava a
+/// cotação por 15 min. Provedor fora do ar → `DeliveryUnavailable`, e a página oferece retirada.
+internal sealed class DeliveryQuoteHandler(
+    AppDbContext db,
+    ITenantContext tenant,
+    StorefrontStatusCalculator status,
+    ITurnstileVerifier turnstile,
+    DeliveryQuoteCalculator calculator)
     : ICommandHandler<DeliveryQuoteCommand, DeliveryQuoteDto>, IPublicHandler
 {
     public async Task<DeliveryQuoteDto> HandleAsync(DeliveryQuoteCommand command, CancellationToken cancellationToken)
@@ -150,6 +178,29 @@ internal sealed class DeliveryQuoteHandler(AppDbContext db, ITenantContext tenan
             throw StoreErrors.Unavailable(storeStatus);
         }
 
-        throw new BusinessException(ErrorCodes.DeliveryUnavailable);
+        if (await turnstile.VerifyAsync(command.TurnstileToken, command.ClientIp, cancellationToken) == TurnstileOutcome.Failed)
+        {
+            throw new BusinessException(ErrorCodes.CaptchaFailed);
+        }
+
+        var quote = await calculator.QuoteAsync(settings, command.Request.Address, "address", cancellationToken);
+        db.Add(quote);
+        return quote.ToDto();
+    }
+}
+
+/// Endereço da cotação (06 §6.19): os mesmos limites do endereço do envio.
+internal sealed class DeliveryQuoteRequestValidator : AbstractValidator<DeliveryQuoteRequest>
+{
+    public DeliveryQuoteRequestValidator()
+    {
+        RuleFor(x => x.Address).NotNull().WithMessage("Informe o endereço de entrega.");
+        RuleFor(x => x.Address.Street).NotEmpty().WithMessage("Informe a rua.").MaximumLength(120).When(x => x.Address is not null);
+        RuleFor(x => x.Address.Number).MaximumLength(10).When(x => x.Address is not null);
+        RuleFor(x => x.Address.Complement).MaximumLength(60).When(x => x.Address is not null);
+        RuleFor(x => x.Address.Neighborhood).MaximumLength(60).When(x => x.Address is not null);
+        RuleFor(x => x.Address.City).MaximumLength(80).When(x => x.Address is not null);
+        RuleFor(x => x.Address.ZipCode).Matches(@"^[0-9]{5}-?[0-9]{3}$").WithMessage("CEP com 8 dígitos.").When(x => x.Address is not null);
+        RuleFor(x => x.Address.Reference).MaximumLength(120).When(x => x.Address is not null);
     }
 }

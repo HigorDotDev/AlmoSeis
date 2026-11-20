@@ -44,15 +44,20 @@ public sealed class PublicStoresController : ControllerBase
         return Created($"{PublicRoutes.Tracking}/{placed.TrackingToken}", placed);
     }
 
-    /// Cotação da taxa por distância (ADR-0048). Nesta fatia responde `422 DeliveryUnavailable`.
+    /// Cotação da taxa de entrega (ADR-0048 item 8): `201` com a cotação de 15 min. Turnstile como no envio (ADR-0045 item 12).
     [HttpPost("delivery-quotes")]
     [AllowAnonymous]
     public async Task<ActionResult<DeliveryQuoteDto>> QuoteDelivery(
         string slug,
         [FromBody] DeliveryQuoteRequest request,
+        [FromHeader(Name = PublicRoutes.TurnstileHeader)] string? turnstileToken,
         [FromServices] ICommandHandler<DeliveryQuoteCommand, DeliveryQuoteDto> handler,
-        CancellationToken cancellationToken) =>
-        Ok(await handler.HandleAsync(new DeliveryQuoteCommand(request), cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        var quote = await handler.HandleAsync(
+            new DeliveryQuoteCommand(request, turnstileToken, HttpContext.Connection.RemoteIpAddress?.ToString()), cancellationToken);
+        return StatusCode(StatusCodes.Status201Created, quote);
+    }
 }
 
 /// Acompanhamento pelo cliente (06 §6.19, ADR-0047). O tenant vem do token (só o hash é consultado).

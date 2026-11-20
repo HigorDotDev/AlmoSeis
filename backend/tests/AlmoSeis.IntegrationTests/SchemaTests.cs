@@ -26,8 +26,8 @@ public sealed class SchemaTests(PostgresFixture db)
         await using var reader = await command.ExecuteReaderAsync(Ct);
         await reader.ReadAsync(Ct);
 
-        reader.GetInt64(0).ShouldBe(40, "tabelas de 05-ddl.md");
-        reader.GetInt64(1).ShouldBe(76, "políticas de RLS de 05 §5.12 e §5.17");
+        reader.GetInt64(0).ShouldBe(42, "tabelas de 05-ddl.md");
+        reader.GetInt64(1).ShouldBe(80, "políticas de RLS de 05 §5.12 e §5.17");
     }
 
     /// O mesmo teste de fumaça do 05 §5.16, agora sobre o schema criado pela migration.
@@ -50,7 +50,7 @@ public sealed class SchemaTests(PostgresFixture db)
 
         await transaction.RollbackAsync(Ct); // não deixa dados para os outros testes
 
-        notices.Count(n => n.StartsWith("ok:", StringComparison.Ordinal)).ShouldBe(41, string.Join(" | ", notices));
+        notices.Count(n => n.StartsWith("ok:", StringComparison.Ordinal)).ShouldBe(45, string.Join(" | ", notices));
     }
 
     /// 0003 (ADR-0046) num banco com pedidos: o backfill roda com a RLS `FORCE` de `orders` (o banco vazio dos outros

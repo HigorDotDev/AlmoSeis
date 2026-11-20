@@ -58,7 +58,10 @@ internal sealed class CreateOrderHandler(
             ids.New(), tenant.TenantId!.Value,
             new NewOrder(
                 command.OrderType, command.FulfillmentType, customer.CustomerId, customer.Name, customer.Phone, customer.Address, fee,
-                command.TableLabel, command.TabNumber, command.Notes, resolvedItems, weighings),
+                command.TableLabel, command.TabNumber, command.Notes, resolvedItems, weighings,
+                command.FulfillmentType == FulfillmentType.Delivery
+                    ? new DeliveryPricing(fee == config.DefaultDeliveryFee ? DeliveryFeeSource.FixedDefault : DeliveryFeeSource.Manual)
+                    : null),
             day.Id, day.BusinessDate, number, tenant.EmployeeId!.Value, ids.New, time.GetUtcNow());
         db.Add(order);
 

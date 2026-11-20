@@ -45,6 +45,9 @@ public sealed class ApiFactory(PostgresFixture db, Action<IServiceCollection>? s
             ["Cors:PublicPageOrigins:0"] = PublicPageOrigin,
             ["WebOrders:RetentionJobEnabled"] = "false",
             ["Turnstile:Enabled"] = "false",
+            // Taxa por distância (ADR-0048): provedor determinístico, sem rede; retenção só por RunOnceAsync.
+            ["Maps:Provider"] = "Fake",
+            ["Maps:RetentionJobEnabled"] = "false",
         }));
         if (services is not null)
         {

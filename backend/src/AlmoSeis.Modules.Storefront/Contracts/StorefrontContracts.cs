@@ -19,11 +19,27 @@ public enum StoreStatus
     Unavailable,
 }
 
-/// ADR-0048 item 1. Usado a partir da fatia 4 (taxa por distância).
+/// ADR-0048 item 1. `DISTANCE`: rota × preço por km com mínimo; `FIXED`: a taxa padrão do ADR-0021, sem mapa.
 public enum DeliveryFeeMode
 {
     Distance,
     Fixed,
+}
+
+/// O que falta para a página oferecer entrega (ADR-0048 item 3), na ordem em que o app mostra.
+public enum PageDeliveryRequirement
+{
+    /// `offersDelivery` ou `isDeliveryEnabled` desligado.
+    DeliveryOff,
+
+    /// Modo `DISTANCE` sem preço por km.
+    PricePerKm,
+
+    /// Modo `DISTANCE` sem o ponto do restaurante confirmado no mapa.
+    ConfirmedLocation,
+
+    /// Modo `DISTANCE` sem provedor de mapas configurado na API (`Maps:Provider = None`).
+    MapsProvider,
 }
 
 // ---------- Restaurante: GET/PUT /storefront (06 §6.18) ----------
@@ -31,8 +47,13 @@ public enum DeliveryFeeMode
 public sealed record StorefrontAddressDto(
     string? Street, string? Number, string? Complement, string? Neighborhood, string? City, string? State, string? ZipCode);
 
-/// Ponto confirmado no mapa (ADR-0048 item 3). Nulo até a fatia 4.
-public sealed record StorefrontLocationDto(decimal Latitude, decimal Longitude);
+/// Ponto do restaurante (ADR-0048 item 3), com 6 casas. No GET: o ponto geocodificado ao salvar o endereço
+/// (`isConfirmed: false`) ou o confirmado/arrastado pelo proprietário (`isConfirmed: true`). No PUT: o ponto que o app
+/// mostrou no mapa; nulo mantém o atual. Mudar o endereço descarta o ponto enviado e geocodifica de novo.
+public sealed record StorefrontLocationDto(decimal Latitude, decimal Longitude, bool IsConfirmed);
+
+/// Situação da entrega pela página, para o app explicar o que falta ("Confirme o ponto do restaurante no mapa").
+public sealed record PageDeliveryStatusDto(bool Available, IReadOnlyList<PageDeliveryRequirement> Missing);
 
 /// Regra da taxa da página (ADR-0048). `maxDistanceKm` com uma casa ("6.0"), como a distância mostrada ao cliente.
 public sealed record StorefrontDeliveryDto(DeliveryFeeMode FeeMode, Money? PricePerKm, Money MinimumFee, string? MaxDistanceKm);
@@ -52,6 +73,7 @@ public sealed record StorefrontDto(
     StorefrontAddressDto Address,
     StorefrontLocationDto? Location,
     StorefrontDeliveryDto Delivery,
+    PageDeliveryStatusDto PageDelivery,
     StoreStatus Status,
     DateTimeOffset UpdatedAt) : IVersionedDto;
 
@@ -69,7 +91,8 @@ public sealed record UpdateStorefrontRequest(
     string? ContactPhone,
     string? HoursText,
     StorefrontAddressDto Address,
-    StorefrontDeliveryDto Delivery);
+    StorefrontDeliveryDto Delivery,
+    StorefrontLocationDto? Location = null);
 
 public sealed record UpdateStorefrontCommand(UpdateStorefrontRequest Request);
 
@@ -77,12 +100,13 @@ public sealed record UpdateStorefrontCommand(UpdateStorefrontRequest Request);
 
 public sealed record PublicStoreAddressDto(string Street, string? Number, string? Complement, string? Neighborhood, string? City, string? State);
 
-/// Regra da taxa em dados, para a página escrever "R$ 0,80/km, mínimo R$ 3,00, até 6 km". Nula até a fatia 4.
-public sealed record PublicDeliveryRuleDto(Money PricePerKm, Money MinimumFee, string? MaxDistanceKm);
+/// Regra da taxa em dados, para a página escrever "R$ 0,80/km, mínimo R$ 3,00, até 6 km" (`DISTANCE`) ou "Entrega
+/// R$ 5,00" (`FIXED`). Nula quando a página não oferece entrega.
+public sealed record PublicDeliveryRuleDto(DeliveryFeeMode FeeMode, Money? PricePerKm, Money? MinimumFee, string? MaxDistanceKm, Money? FixedFee);
 
 /// Aviso de privacidade (ADR-0052 item 1): o restaurante é o controlador e a AlmoSeis, a operadora. O texto é da página
-/// (sob revisão jurídica); a API dá os dados variáveis. `thirdParties`: `ANTI_BOT` (Cloudflare Turnstile); `MAPS` entra
-/// com a taxa por distância (fatia 4) e `PAYMENTS` com o pagamento online (Fase 2).
+/// (sob revisão jurídica); a API dá os dados variáveis. `thirdParties`: `ANTI_BOT` (Cloudflare Turnstile), `MAPS`
+/// (geocodificação e rota num provedor externo, com a entrega por distância ligada) e `PAYMENTS` (Fase 2).
 public sealed record PublicPrivacyDto(string ControllerName, string? ControllerPhone, string OperatorName, IReadOnlyList<string> ThirdParties);
 
 public sealed record PublicMarmitaSizeDto(Guid Id, string Name, Money Price);
@@ -120,17 +144,33 @@ public sealed record PublicStoreDto(
 
 public sealed record GetPublicStoreQuery(string Slug);
 
-// ---------- Público: POST /public/stores/{slug}/delivery-quotes (ADR-0048; fatia 4) ----------
+// ---------- Público: POST /public/stores/{slug}/delivery-quotes (06 §6.19, ADR-0048) ----------
 
+/// Endereço do cliente. `city` nula = a cidade do restaurante; a UF é sempre a do restaurante (entrega local).
+/// `complement` e `reference` não entram na geocodificação nem no hash do endereço.
 public sealed record PublicAddressInput(
     string Street, string? Number, string? Complement, string? Neighborhood, string? City, string? ZipCode, string? Reference);
 
 public sealed record DeliveryQuoteRequest(PublicAddressInput Address);
 
-public sealed record DeliveryQuoteCommand(DeliveryQuoteRequest Request);
+/// `turnstileToken` do header `X-Turnstile-Token` (ADR-0045 item 12); `clientIp` só para o Turnstile.
+public sealed record DeliveryQuoteCommand(DeliveryQuoteRequest Request, string? TurnstileToken = null, string? ClientIp = null);
 
-/// Formato da cotação da fatia 4. Nesta fatia a rota responde `422 DeliveryUnavailable`.
-public sealed record DeliveryQuoteDto(Guid QuoteId, string FormattedAddress, string DistanceKm, Money DeliveryFee, DateTimeOffset ExpiresAt);
+/// Cotação válida por 15 min (ADR-0048 item 8). `distanceKm` com uma casa (`"4.5"`), nula no modo `FIXED`.
+public sealed record DeliveryQuoteDto(Guid QuoteId, string FormattedAddress, string? DistanceKm, Money DeliveryFee, DateTimeOffset ExpiresAt);
+
+/// Taxa conferida no envio do pedido (ADR-0048 itens 10 e 20): o snapshot que o pedido grava.
+public sealed record RedeemedDeliveryQuote(
+    Guid QuoteId, DeliveryFeeMode FeeMode, Money DeliveryFee, int? DistanceMeters, Money? PricePerKm, Money? MinimumFee);
+
+/// Envio do pedido com entrega pela página (usada pelo Ordering). Cotação válida, do mesmo endereço e com a
+/// configuração de quando foi feita → a taxa dela. Vencida, de outro endereço ou com a configuração mudada → recalcula:
+/// mesma taxa → segue; taxa diferente → `409 DeliveryQuoteChanged` com a cotação nova em `quote` (já gravada).
+/// Sem cotação, ou cotação inexistente/de outro tenant → `422` em `deliveryQuoteId`.
+public interface IDeliveryQuoteRedeemer
+{
+    Task<RedeemedDeliveryQuote> RedeemAsync(Guid? quoteId, PublicAddressInput address, CancellationToken cancellationToken);
+}
 
 // ---------- Portas ----------
 

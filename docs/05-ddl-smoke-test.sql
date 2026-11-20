@@ -304,6 +304,30 @@ DO $$ BEGIN
   RAISE NOTICE 'ok: idempotencia anonima da pagina';
 END $$;
 
+-- ===== Taxa de entrega por distância (ADR-0048, migration 0005) =====
+INSERT INTO delivery_quotes (id, tenant_id, address_hash, formatted_address, latitude, longitude, fee_mode, distance_meters, distance_km,
+                             price_per_km, minimum_fee, delivery_fee, settings_version, created_at, expires_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000e01', 'aaaaaaaa-0000-0000-0000-000000000001', repeat('e', 64), 'Rua das Palmeiras, 45 - Centro',
+        -18.912300, -48.270100, 'DISTANCE', 4480, 4.5, 0.80, 3.00, 3.60, 1, now(), now() + interval '15 minutes');
+INSERT INTO geocode_cache_entries (tenant_id, address_hash, latitude, longitude, geocoded_at, expires_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000001', repeat('e', 64), -18.912300, -48.270100, now(), now() + interval '30 days');
+
+DO $$ BEGIN
+  INSERT INTO delivery_quotes (id, tenant_id, address_hash, formatted_address, fee_mode, delivery_fee, settings_version, created_at, expires_at)
+  VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', repeat('f', 64), 'Rua X, 1', 'DISTANCE', 3.00, 1, now(), now() + interval '15 minutes');
+  RAISE EXCEPTION 'FALHOU: cotacao por distancia sem distancia aceita';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: cotacao por distancia exige ponto, metros e regra'; END $$;
+
+DO $$ BEGIN
+  UPDATE storefront_settings SET location_confirmed_at = now() WHERE tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001';
+  RAISE EXCEPTION 'FALHOU: confirmacao sem ponto aceita';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: confirmacao do ponto exige o ponto'; END $$;
+
+DO $$ BEGIN
+  UPDATE orders SET delivery_fee_source = 'FIXED_DEFAULT' WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c02';
+  RAISE EXCEPTION 'FALHOU: origem da taxa fora de entrega aceita';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: origem da taxa so em entrega'; END $$;
+
 -- ===== Tenant B =====
 SELECT set_config('app.tenant_id', 'bbbbbbbb-0000-0000-0000-000000000002', false),
        set_config('app.user_id',   'bbbbbbbb-0000-0000-0000-0000000000b2', false);
@@ -338,6 +362,12 @@ DO $$ BEGIN
           'MARMITA', 'APP', 'PICKUP', 'x', 1, 0, 1, 'OPEN', now(), 'PENDING', now(), 'aaaaaaaa-0000-0000-0000-0000000000e1', now(), now());
   RAISE EXCEPTION 'FALHOU: tenant B gravou com tenant_id de A';
 EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'ok: WITH CHECK impede gravar em outro tenant'; END $$;
+
+DO $$ BEGIN
+  IF (SELECT count(*) FROM delivery_quotes) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve cotacao de A'; END IF;
+  IF (SELECT count(*) FROM geocode_cache_entries) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve o cache de A'; END IF;
+  RAISE NOTICE 'ok: cotacao e cache de geocodificacao isolados';
+END $$;
 
 -- Página: slug e token têm leitura aberta (a resolução vem antes do tenant); perfil e hash do IP ficam isolados
 DO $$ BEGIN

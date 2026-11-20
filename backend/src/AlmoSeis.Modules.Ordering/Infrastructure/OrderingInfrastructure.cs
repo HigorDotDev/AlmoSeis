@@ -45,6 +45,7 @@ internal sealed class OrderingModelConfiguration : IModuleModelConfiguration
                     v => v == null ? null : JsonSerializer.Serialize(v, AddressJson),
                     v => v == null ? null : JsonSerializer.Deserialize<DeliveryAddressDto>(v, AddressJson));
             b.Property(x => x.RejectionMessage).HasMaxLength(200);
+            b.Property(x => x.DeliveryPricePerKm).HasPrecision(10, 2);
             b.HasMany(x => x.Items).WithOne().HasForeignKey(i => i.OrderId);
             b.HasMany(x => x.Weighings).WithOne().HasForeignKey(w => w.OrderId);
             b.HasMany(x => x.ChangeEvents).WithOne().HasForeignKey(e => e.OrderId);

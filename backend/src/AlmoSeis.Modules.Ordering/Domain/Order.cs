@@ -36,6 +36,18 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     public string? TabNumber { get; private set; }
     public string? Notes { get; private set; }
     public Money DeliveryFee { get; private set; }
+
+    /// Origem da taxa e snapshot da regra por distância (ADR-0048 item 20). Nulos fora de entrega.
+    public DeliveryFeeSource? DeliveryFeeSource { get; private set; }
+    public int? DeliveryDistanceMeters { get; private set; }
+    public Money? DeliveryPricePerKm { get; private set; }
+    public Money? DeliveryMinimumFee { get; private set; }
+
+    /// "4.5" (uma casa, como a página mostrou) enquanto a taxa é a calculada pela distância.
+    public string? DeliveryDistanceKm =>
+        DeliveryFeeSource == Contracts.DeliveryFeeSource.Distance && DeliveryDistanceMeters is { } meters
+            ? Math.Round(meters / 1000m, 1, MidpointRounding.AwayFromZero).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)
+            : null;
     public Money ItemsTotal { get; private set; }
     public Money WeighingsTotal { get; private set; }
     public Money TotalAmount { get; private set; }
@@ -157,6 +169,7 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
             UpdatedAt = now,
         };
 
+        order.ApplyDeliveryPricing(data.FulfillmentType == FulfillmentType.Delivery ? data.Pricing ?? new DeliveryPricing(Contracts.DeliveryFeeSource.FixedDefault) : null);
         order.AddInitialLines(data, createdBy, newId, now);
         order.Raise(new OrderCreated(id, orderNumber, order.OrderType, order.Label, now));
         return order;
@@ -219,6 +232,7 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
             UpdatedAt = now,
         };
 
+        order.ApplyDeliveryPricing(data.FulfillmentType == FulfillmentType.Delivery ? data.Pricing ?? new DeliveryPricing(Contracts.DeliveryFeeSource.FixedDefault) : null);
         order.AddInitialLines(data, by: null, newId, now);
         order.EnsureChangeFor();
         order.Raise(new OrderAwaitingAcceptance(
@@ -525,6 +539,19 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
         if (!anyChange)
         {
             return;
+        }
+
+        if (fulfillmentChanged)
+        {
+            // Taxa ou endereço mexidos no app: a taxa deixa de ser a calculada pela página (o snapshot da distância fica
+            // como histórico). Fora de entrega, sem origem (ADR-0048 item 19).
+            var stayingDelivery = FulfillmentType == FulfillmentType.Delivery;
+            var source = fee == defaultDeliveryFee ? Contracts.DeliveryFeeSource.FixedDefault : Contracts.DeliveryFeeSource.Manual;
+            ApplyDeliveryPricing(fulfillment != FulfillmentType.Delivery
+                ? null
+                : stayingDelivery
+                    ? new DeliveryPricing(source, DeliveryDistanceMeters, DeliveryPricePerKm, DeliveryMinimumFee)
+                    : new DeliveryPricing(source));
         }
 
         CustomerName = customerName;
@@ -937,6 +964,19 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
         }
     }
 
+    private void ApplyDeliveryPricing(DeliveryPricing? pricing)
+    {
+        if (pricing is { Source: Contracts.DeliveryFeeSource.Distance } && (pricing.DistanceMeters is null || pricing.PricePerKm is null || pricing.MinimumFee is null))
+        {
+            throw new ArgumentException("Taxa por distância exige metros, preço por km e mínimo.", nameof(pricing));
+        }
+
+        DeliveryFeeSource = pricing?.Source;
+        DeliveryDistanceMeters = pricing?.DistanceMeters;
+        DeliveryPricePerKm = pricing?.PricePerKm;
+        DeliveryMinimumFee = pricing?.MinimumFee;
+    }
+
     private static void EnsureDelivery(FulfillmentType fulfillment, DeliveryAddressDto? address, Money fee)
     {
         if (fulfillment == FulfillmentType.Delivery && address is null)
@@ -1162,7 +1202,11 @@ internal sealed record NewOrder(
     string? TabNumber,
     string? Notes,
     IReadOnlyList<NewItem> Items,
-    IReadOnlyList<NewWeighing> Weighings);
+    IReadOnlyList<NewWeighing> Weighings,
+    DeliveryPricing? Pricing = null);
+
+/// Origem da taxa de entrega e snapshot da regra por distância (ADR-0048 item 20).
+internal sealed record DeliveryPricing(DeliveryFeeSource Source, int? DistanceMeters = null, Money? PricePerKm = null, Money? MinimumFee = null);
 
 internal sealed record OrderDetailsChanges(
     Optional<string?> CustomerName,
