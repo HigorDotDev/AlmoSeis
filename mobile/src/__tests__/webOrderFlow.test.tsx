@@ -71,6 +71,8 @@ const webOrder: Order = {
   changeFor: '50.00',
   riskFlag: null,
   deliveryFee: '5.00',
+  deliveryFeeSource: 'FIXED_DEFAULT',
+  deliveryDistanceKm: null,
   itemsTotal: '40.00',
   weighingsTotal: '0.00',
   totalAmount: '45.00',

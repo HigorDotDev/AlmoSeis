@@ -42,7 +42,7 @@ import { useCanWrite, useSession } from '@/stores/session';
 import { orderLabel } from '../components';
 import { isDispatched } from '../fulfillment';
 import { summarizeOrder, useCancelOrder, useOrder, useRemoveItem, useRemoveWeighing, useUpdateItem } from '../hooks';
-import { AcceptanceCountdown, acceptanceOutcomeText, AcceptRejectActions, FulfillmentActions, PhoneLine, WebOrderPaymentInfo } from '../webOrderComponents';
+import { AcceptanceCountdown, acceptanceOutcomeText, AcceptRejectActions, DistanceFeeLine, FulfillmentActions, PhoneLine, WebOrderPaymentInfo } from '../webOrderComponents';
 import { orderNumberLabel } from '../webOrders';
 
 /** 08 §8.9 `orders/[id]`. */
@@ -88,6 +88,7 @@ function OrderHeader({ order: o, pending }: { order: Order; pending: boolean }) 
           {o.deliveryAddress.reference ? ` · ${o.deliveryAddress.reference}` : ''}
         </Text>
       ) : null}
+      <DistanceFeeLine order={o} />
       <Text variant="small" muted>
         {formatBusinessDate(o.businessDate)} · {formatTime(o.createdAt, timeZone)} · {o.createdBy ? `por ${o.createdBy.displayName}` : 'pelo site'}
       </Text>

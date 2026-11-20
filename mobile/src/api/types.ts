@@ -435,6 +435,7 @@ export type ItemKind = 'MARMITA' | 'PF' | 'BEVERAGE' | 'ADDON';
 /** `APP`: criado no app; `WEB`: página de pedidos (EP-002, ADR-0046). */
 export type OrderOrigin = 'APP' | 'WEB';
 export type WebOrderRiskFlag = 'CAPTCHA_UNAVAILABLE';
+export type DeliveryFeeSource = 'FIXED_DEFAULT' | 'DISTANCE' | 'MANUAL';
 /** ADR-0046 item 1. `AWAITING_PAYMENT` é reservado à Fase 2. */
 export type AcceptanceStatus = 'AWAITING_PAYMENT' | 'AWAITING_ACCEPTANCE' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED' | 'WITHDRAWN';
 /** ADR-0046 item 2: só em `DELIVERY`/`PICKUP` aceitos. */
@@ -520,6 +521,10 @@ export interface Order {
   /** `CAPTCHA_UNAVAILABLE`: o anti-robô não respondeu no envio (ADR-0045 item 12). */
   riskFlag: WebOrderRiskFlag | null;
   deliveryFee: MoneyString;
+  /** ADR-0048 item 20, só em entrega: `null` fora de entrega e nas entregas antigas. */
+  deliveryFeeSource: DeliveryFeeSource | null;
+  /** `"4.5"` só enquanto a origem for `DISTANCE`. */
+  deliveryDistanceKm: string | null;
   itemsTotal: MoneyString;
   weighingsTotal: MoneyString;
   totalAmount: MoneyString;
@@ -957,11 +962,29 @@ export interface Storefront {
   contactPhone: string | null;
   hoursText: string | null;
   address: StorefrontAddress;
-  location: { latitude: number; longitude: number } | null;
+  /** Ponto do restaurante (ADR-0048 item 3), 6 casas. Geocodificado ao salvar o endereço, nasce `isConfirmed: false`. */
+  location: StorefrontLocation | null;
   delivery: StorefrontDelivery;
+  /** Se a página oferece entrega agora e, se não, o que falta (na ordem do servidor). */
+  pageDelivery: { available: boolean; missing: PageDeliveryMissing[] };
   status: StoreStatus;
   updatedAt: Instant;
 }
 
 /** `PUT /storefront` [M]: substitui a configuração inteira (06 §6.18). */
-export type UpdateStorefrontBody = Omit<Storefront, 'version' | 'previousSlugs' | 'location' | 'status' | 'updatedAt'>;
+export interface StorefrontLocation {
+  latitude: number;
+  longitude: number;
+  isConfirmed: boolean;
+}
+
+/** `DELIVERY_OFF`, `PRICE_PER_KM`, `CONFIRMED_LOCATION`, `MAPS_PROVIDER` (os três últimos só no modo `DISTANCE`). */
+export type PageDeliveryMissing = 'DELIVERY_OFF' | 'PRICE_PER_KM' | 'CONFIRMED_LOCATION' | 'MAPS_PROVIDER';
+
+/**
+ * `PUT /storefront` [M]: substitui a configuração inteira (06 §6.18). Sem `location` (ou `null`), o ponto salvo e a
+ * confirmação ficam como estão; mudar o `address` descarta o ponto e a API geocodifica de novo.
+ */
+export type UpdateStorefrontBody = Omit<Storefront, 'version' | 'previousSlugs' | 'location' | 'pageDelivery' | 'status' | 'updatedAt'> & {
+  location?: StorefrontLocation | null;
+};

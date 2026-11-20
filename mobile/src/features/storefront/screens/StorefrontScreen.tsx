@@ -5,10 +5,10 @@
  */
 import { router, Stack } from 'expo-router';
 import { useState } from 'react';
-import { Switch, View } from 'react-native';
+import { Linking, Switch, View } from 'react-native';
 
 import { errorMessage, isApiError } from '@/api/errors';
-import type { Storefront, UpdateStorefrontBody } from '@/api/types';
+import type { DeliveryFeeMode, Storefront, UpdateStorefrontBody } from '@/api/types';
 import {
   Banner,
   Button,
@@ -18,6 +18,7 @@ import {
   Row,
   Screen,
   Section,
+  SegmentedControl,
   Skeleton,
   Text,
   TextField,
@@ -26,9 +27,11 @@ import {
 } from '@/components/ui';
 import { PUBLIC_PAGE_BASE_URL } from '@/config';
 import { confirmAction } from '@/lib/confirm';
+import { formatBRL } from '@/lib/money';
 import { maskBR } from '@/lib/phone';
 import { shareLink } from '@/lib/share';
 import { useIsOnline } from '@/stores/connectivity';
+import { useSettings } from '@/features/session/hooks';
 import { useCanWrite, usePermission } from '@/stores/session';
 import { toast } from '@/stores/toast';
 
@@ -36,13 +39,17 @@ import { useStorefront, useUpdateStorefront } from '../hooks';
 import { canPrintQr, printQr } from '../printQr';
 import { QrCode } from '../QrCode';
 import {
+  formatCoordinate,
   formErrors,
   formFromStorefront,
   HOURS_TEXT_MAX,
   isFormDirty,
+  mapsUrl,
   maskZipCode,
   normalizeSlugInput,
+  pageDeliveryText,
   pageUrl,
+  parseCoordinate,
   PUBLIC_NAME_MAX,
   SLUG_MAX,
   shareMessage,
@@ -97,7 +104,7 @@ function StorefrontView({ storefront: s, toggle, save }: { storefront: Storefron
 
   const set = <K extends keyof StorefrontForm>(key: K, value: StorefrontForm[K]) => setForm((f) => ({ ...f, [key]: value }));
 
-  const runToggle = (overrides: Partial<Pick<UpdateStorefrontBody, 'isPageActive' | 'isAcceptingOrders'>>, done: string) => {
+  const runToggle = (overrides: Partial<Pick<UpdateStorefrontBody, 'isPageActive' | 'isAcceptingOrders' | 'isDeliveryEnabled' | 'location'>>, done: string) => {
     save.reset();
     toggle.mutate({ body: toUpdateBody(s, null, overrides), version: s.version }, { onSuccess: () => toast(done, 'success') });
   };
@@ -136,6 +143,23 @@ function StorefrontView({ storefront: s, toggle, save }: { storefront: Storefron
           },
     );
 
+  const onToggleDeliveryPaused = (paused: boolean) =>
+    confirmAction(
+      paused
+        ? {
+            title: 'Pausar entrega pela página?',
+            message: 'A página continua aceitando retirada. Ninguém consegue pedir entrega até você retomar.',
+            confirmText: 'Pausar entrega',
+            onConfirm: () => runToggle({ isDeliveryEnabled: false }, 'Entrega pela página pausada'),
+          }
+        : {
+            title: 'Retomar entrega pela página?',
+            message: 'A página volta a oferecer entrega, se o resto da configuração estiver completo.',
+            confirmText: 'Retomar entrega',
+            onConfirm: () => runToggle({ isDeliveryEnabled: true }, 'Entrega pela página retomada'),
+          },
+    );
+
   const localErrors = formErrors(form);
   const serverError = save.error;
   const fieldError = (field: string) => (tried ? localErrors[field] : undefined) ?? (isApiError(serverError) ? serverError.fieldError(field) : undefined);
@@ -169,7 +193,7 @@ function StorefrontView({ storefront: s, toggle, save }: { storefront: Storefron
         <Card>
           <ToggleRow
             label="Página ativa"
-            hint="Desativada, o link mostra “indisponível”."
+            hint={s.isPageActive ? 'Ativa: quem abre o link vê o cardápio do dia e pode pedir.' : 'Desativada: o link mostra “indisponível”.'}
             value={s.isPageActive}
             disabled={!canEdit || !online || dirty || toggle.isPending}
             onChange={onToggleActive}
@@ -181,6 +205,15 @@ function StorefrontView({ storefront: s, toggle, save }: { storefront: Storefron
             disabled={!canEdit || !online || dirty || toggle.isPending}
             onChange={onTogglePaused}
           />
+          {s.offersDelivery ? (
+            <ToggleRow
+              label="Pausar entrega"
+              hint={s.isDeliveryEnabled ? 'Para quando faltar entregador: a página fica só com retirada.' : 'Pausada: a página oferece só retirada.'}
+              value={!s.isDeliveryEnabled}
+              disabled={!canEdit || !online || dirty || toggle.isPending}
+              onChange={onToggleDeliveryPaused}
+            />
+          ) : null}
           {dirty && canEdit ? <Text variant="small" muted>Salve ou desfaça as alterações abaixo antes de ativar ou pausar.</Text> : null}
           {toggle.error ? <Banner tone="danger" text={storefrontErrorText(toggle.error)} /> : null}
         </Card>
@@ -267,15 +300,15 @@ function StorefrontView({ storefront: s, toggle, save }: { storefront: Storefron
       <Section title="Retirada e entrega">
         <ToggleRow label="Retirada no balcão" value={form.offersPickup} disabled={!canEdit} onChange={(v) => set('offersPickup', v)} />
         {fieldError('offersPickup') ? <Text variant="small" style={{ color: c.danger }}>{fieldError('offersPickup')}</Text> : null}
-        {!form.offersPickup ? <Banner tone="warning" text="Sem retirada, a página não recebe pedidos: a entrega ainda não está disponível." /> : null}
-        <ToggleRow label="Entrega" hint="Disponível em breve: taxa por distância." value={form.offersDelivery} disabled onChange={() => {}} />
-        <MoneyInput label="Preço por km" value={s.delivery.pricePerKm ?? '0.00'} onChange={() => {}} editable={false} />
-        <MoneyInput label="Taxa mínima" value={s.delivery.minimumFee} onChange={() => {}} editable={false} />
-        <TextField label="Raio máximo (km)" value={s.delivery.maxDistanceKm ? s.delivery.maxDistanceKm.replace('.', ',') : ''} placeholder="—" editable={false} />
-        <Text variant="small" muted>
-          Até lá, a página só aceita retirada.
-        </Text>
+        {!form.offersPickup && !s.pageDelivery.available ? <Banner tone="warning" text="Sem retirada e sem entrega disponível, a página não recebe pedidos." /> : null}
+        <ToggleRow label="Entrega" hint="O cliente informa o endereço e a página calcula a taxa." value={form.offersDelivery} disabled={!canEdit} onChange={(v) => set('offersDelivery', v)} />
+        {form.offersDelivery ? <DeliveryFields form={form} set={set} canEdit={canEdit} fieldError={fieldError} /> : null}
+        <PageDeliveryStatus storefront={s} />
       </Section>
+
+      {form.offersDelivery && form.feeMode === 'DISTANCE' ? (
+        <LocationSection storefront={s} canEdit={canEdit && online && !dirty && !toggle.isPending} dirty={dirty} onSave={(location, done) => runToggle({ location }, done)} />
+      ) : null}
 
       {serverError ? <Banner tone="danger" text={storefrontErrorText(serverError)} /> : null}
       {tried && Object.keys(localErrors).length > 0 ? <Banner tone="danger" text="Confira os campos destacados." /> : null}
@@ -332,7 +365,11 @@ function LinkSection({ storefront: s, url }: { storefront: Storefront; url: stri
         <Text selectable variant="subtitle" testID="storefront-url">
           {url}
         </Text>
-        {s.status === 'UNAVAILABLE' ? <Text variant="small" muted>Enquanto a página estiver desativada, quem abrir o link verá “indisponível”.</Text> : null}
+        {s.status === 'UNAVAILABLE' ? (
+          <Text variant="small" muted>
+            {s.isPageActive ? 'Enquanto a página estiver indisponível, quem abrir o link verá “indisponível”.' : 'Enquanto a página estiver desativada, quem abrir o link verá “indisponível”.'}
+          </Text>
+        ) : null}
         <Row style={{ flexWrap: 'wrap' }}>
           <Button title="Compartilhar link" icon="share-social-outline" onPress={() => void share()} style={{ flexGrow: 1 }} />
           <Button title={showQr ? 'Esconder QR code' : 'Mostrar QR code'} icon="qr-code-outline" variant="secondary" onPress={() => setShowQr(!showQr)} style={{ flexGrow: 1 }} />
@@ -373,5 +410,155 @@ function ToggleRow({ label, hint, value, disabled, onChange }: { label: string; 
       </View>
       <Switch value={value} onValueChange={onChange} disabled={disabled} accessibilityLabel={label} />
     </Row>
+  );
+}
+
+type SetField = <K extends keyof StorefrontForm>(key: K, value: StorefrontForm[K]) => void;
+
+const FEE_MODES: { value: DeliveryFeeMode; label: string }[] = [
+  { value: 'DISTANCE', label: 'Por distância' },
+  { value: 'FIXED', label: 'Taxa fixa' },
+];
+
+/** Regra da taxa (ADR-0048): por distância (km × preço, com mínimo e raio opcional) ou a taxa fixa do estabelecimento. */
+function DeliveryFields({ form, set, canEdit, fieldError }: { form: StorefrontForm; set: SetField; canEdit: boolean; fieldError: (f: string) => string | undefined }) {
+  const settings = useSettings();
+  return (
+    <View style={{ gap: space.md }}>
+      {canEdit ? (
+        <SegmentedControl value={form.feeMode} onChange={(v) => set('feeMode', v)} options={FEE_MODES} />
+      ) : (
+        <Text>Taxa: {FEE_MODES.find((m) => m.value === form.feeMode)?.label}</Text>
+      )}
+      {form.feeMode === 'DISTANCE' ? (
+        <>
+          <MoneyInput label="Preço por km" value={form.pricePerKm} onChange={(v) => set('pricePerKm', v)} editable={canEdit} error={fieldError('delivery.pricePerKm')} testID="price-per-km" />
+          <MoneyInput label="Taxa mínima" value={form.minimumFee} onChange={(v) => set('minimumFee', v)} editable={canEdit} error={fieldError('delivery.minimumFee')} testID="minimum-fee" />
+          <TextField
+            label="Raio máximo em km (opcional)"
+            value={form.maxDistanceKm}
+            onChangeText={(t) => set('maxDistanceKm', t.replace(/[^0-9,.]/g, '').slice(0, 5))}
+            editable={canEdit}
+            keyboardType="decimal-pad"
+            placeholder="Sem limite"
+            error={fieldError('delivery.maxDistanceKm')}
+            hint="A taxa é a distância da rota × o preço por km, nunca abaixo da mínima."
+          />
+        </>
+      ) : (
+        <Text variant="small" muted>
+          {settings.data
+            ? `Toda entrega pela página cobra ${formatBRL(settings.data.defaultDeliveryFee)}, a taxa padrão de "Configuração de preços". Sem mapa nem cálculo de distância.`
+            : 'Toda entrega pela página cobra a taxa padrão de "Configuração de preços".'}
+        </Text>
+      )}
+    </View>
+  );
+}
+
+/** `pageDelivery` (06 §6.18): se a página oferece entrega agora e, se não, o que falta. Reflete o que está salvo. */
+function PageDeliveryStatus({ storefront: s }: { storefront: Storefront }) {
+  if (s.pageDelivery.available) return <Banner tone="success" text="A página oferece entrega agora." />;
+  if (!s.offersDelivery) return null;
+  const { steps, provider } = pageDeliveryText(s.pageDelivery);
+  return (
+    <View style={{ gap: space.sm }} testID="page-delivery-missing">
+      {steps ? <Banner tone="info" text={steps} /> : null}
+      {provider ? <Banner tone="warning" text={provider} /> : null}
+    </View>
+  );
+}
+
+/**
+ * Ponto do restaurante (ADR-0048 item 3), sem módulo nativo de mapa: as coordenadas, "Ver no mapa" (Google Maps no
+ * navegador ou no app de mapas) e "Confirmar este ponto". Correção à mão em modo avançado. Mudar o endereço apaga o
+ * ponto e a API geocodifica de novo; o formulário nunca manda o ponto (sem `location`, o servidor o mantém).
+ */
+function LocationSection({
+  storefront: s,
+  canEdit,
+  dirty,
+  onSave,
+}: {
+  storefront: Storefront;
+  canEdit: boolean;
+  dirty: boolean;
+  onSave: (location: { latitude: number; longitude: number; isConfirmed: boolean }, done: string) => void;
+}) {
+  const manage = usePermission('storefront.manage');
+  const l = s.location;
+  const [advanced, setAdvanced] = useState(false);
+  const [lat, setLat] = useState(l ? formatCoordinate(l.latitude) : '');
+  const [lng, setLng] = useState(l ? formatCoordinate(l.longitude) : '');
+  const latitude = parseCoordinate(lat, 90);
+  const longitude = parseCoordinate(lng, 180);
+
+  const confirm = () => {
+    if (!l) return;
+    confirmAction({
+      title: 'Confirmar o ponto do restaurante?',
+      message: `As distâncias das entregas serão medidas a partir de ${formatCoordinate(l.latitude)}, ${formatCoordinate(l.longitude)}. Confira no mapa antes.`,
+      confirmText: 'Confirmar ponto',
+      onConfirm: () => onSave({ latitude: l.latitude, longitude: l.longitude, isConfirmed: true }, 'Ponto confirmado'),
+    });
+  };
+
+  const saveManual = () => {
+    if (latitude === null || longitude === null) return;
+    confirmAction({
+      title: 'Usar este ponto?',
+      message: `As distâncias das entregas serão medidas a partir de ${formatCoordinate(latitude)}, ${formatCoordinate(longitude)}.`,
+      confirmText: 'Usar e confirmar',
+      onConfirm: () => onSave({ latitude, longitude, isConfirmed: true }, 'Ponto confirmado'),
+    });
+  };
+
+  return (
+    <Section title="Ponto do restaurante">
+      <Card>
+        {l ? (
+          <>
+            <Text selectable testID="storefront-location" style={{ fontWeight: '700', fontVariant: ['tabular-nums'] }}>
+              {`${formatCoordinate(l.latitude)}, ${formatCoordinate(l.longitude)}`}
+            </Text>
+            <Banner
+              tone={l.isConfirmed ? 'success' : 'warning'}
+              text={l.isConfirmed ? 'Ponto confirmado: as distâncias saem daqui.' : 'Ponto encontrado pelo endereço, ainda não confirmado. Veja no mapa e confirme.'}
+            />
+          </>
+        ) : (
+          <Banner tone="info" text="Sem ponto: salve o endereço completo para localizarmos o restaurante, ou informe as coordenadas no modo avançado." />
+        )}
+        <Row style={{ flexWrap: 'wrap' }}>
+          {l ? <Button title="Ver no mapa" icon="map-outline" variant="secondary" onPress={() => void Linking.openURL(mapsUrl(l))} style={{ flexGrow: 1 }} /> : null}
+          {manage && l && !l.isConfirmed ? <Button title="Confirmar este ponto" icon="checkmark" disabled={!canEdit} onPress={confirm} style={{ flexGrow: 1 }} /> : null}
+        </Row>
+        {manage && dirty ? (
+          <Text variant="small" muted>
+            Salve ou desfaça as alterações antes de mexer no ponto.
+          </Text>
+        ) : null}
+        {manage ? <Button title={advanced ? 'Esconder correção manual' : 'Corrigir o ponto à mão (avançado)'} variant="ghost" onPress={() => setAdvanced(!advanced)} /> : null}
+        {manage && advanced ? (
+          <View style={{ gap: space.sm }}>
+            <Text variant="small" muted>
+              No Google Maps, toque e segure no lugar exato do restaurante e copie os números (latitude, longitude).
+            </Text>
+            <Row style={{ alignItems: 'flex-start' }}>
+              <View style={{ flex: 1 }}>
+                <TextField label="Latitude" value={lat} onChangeText={setLat} keyboardType="numbers-and-punctuation" error={lat.trim() && latitude === null ? 'Entre -90 e 90.' : null} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <TextField label="Longitude" value={lng} onChangeText={setLng} keyboardType="numbers-and-punctuation" error={lng.trim() && longitude === null ? 'Entre -180 e 180.' : null} />
+              </View>
+            </Row>
+            {latitude !== null && longitude !== null ? (
+              <Button title="Ver este ponto no mapa" icon="map-outline" variant="secondary" onPress={() => void Linking.openURL(mapsUrl({ latitude, longitude }))} />
+            ) : null}
+            <Button title="Usar este ponto" disabled={!canEdit || latitude === null || longitude === null} onPress={saveManual} />
+          </View>
+        ) : null}
+      </Card>
+    </Section>
   );
 }

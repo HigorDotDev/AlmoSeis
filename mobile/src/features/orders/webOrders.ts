@@ -88,5 +88,14 @@ export function expectedPaymentText(o: Pick<Order, 'expectedPaymentMethod' | 'ch
   }
 }
 
+/**
+ * Taxa calculada pela página (ADR-0048 item 20): "Entrega · 4,5 km · taxa R$ 3,60". Só com `deliveryFeeSource =
+ * DISTANCE`; editada no app (`MANUAL`) ou padrão (`FIXED_DEFAULT`) não mostra distância.
+ */
+export function distanceFeeText(o: Pick<Order, 'fulfillmentType' | 'deliveryFeeSource' | 'deliveryDistanceKm' | 'deliveryFee'>): string | null {
+  if (o.fulfillmentType !== 'DELIVERY' || o.deliveryFeeSource !== 'DISTANCE' || !o.deliveryDistanceKm) return null;
+  return `Entrega · ${o.deliveryDistanceKm.replace('.', ',')} km · taxa ${formatBRL(o.deliveryFee)}`;
+}
+
 /** ADR-0045 item 12: o anti-robô não respondeu no envio; o pedido entrou, mas merece um olhar a mais. */
 export const CAPTCHA_UNAVAILABLE_TEXT = 'Verificação anti-robô indisponível no envio';

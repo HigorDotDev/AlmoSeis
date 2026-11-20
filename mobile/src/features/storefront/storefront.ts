@@ -2,7 +2,8 @@
  * Regras de tela da página de pedidos (06 §6.18, ADR-0044). O servidor valida tudo de novo; aqui só se evita uma ida
  * à API com um erro óbvio e se monta o corpo do `PUT`, que substitui a configuração inteira.
  */
-import type { Storefront, StorefrontAddress, UpdateStorefrontBody } from '@/api/types';
+import type { DeliveryFeeMode, MoneyString, PageDeliveryMissing, Storefront, StorefrontAddress, StorefrontLocation, UpdateStorefrontBody } from '@/api/types';
+import { toCents } from '@/lib/money';
 import { formatPhone, toE164 } from '@/lib/phone';
 
 export const SLUG_MIN = 3;
@@ -68,6 +69,12 @@ export interface StorefrontForm {
   zipCode: string;
   offersPickup: boolean;
   offersDelivery: boolean;
+  feeMode: DeliveryFeeMode;
+  /** `'0.00'` = sem preço (vai `null`). */
+  pricePerKm: MoneyString;
+  minimumFee: MoneyString;
+  /** Como digitado ("6", "6,5"); vazio = sem raio. */
+  maxDistanceKm: string;
 }
 
 export function formFromStorefront(s: Storefront): StorefrontForm {
@@ -86,6 +93,61 @@ export function formFromStorefront(s: Storefront): StorefrontForm {
     zipCode: a.zipCode ? maskZipCode(a.zipCode) : '',
     offersPickup: s.offersPickup,
     offersDelivery: s.offersDelivery,
+    feeMode: s.delivery.feeMode,
+    pricePerKm: s.delivery.pricePerKm ?? '0.00',
+    minimumFee: s.delivery.minimumFee,
+    maxDistanceKm: s.delivery.maxDistanceKm ? s.delivery.maxDistanceKm.replace('.', ',') : '',
+  };
+}
+
+/**
+ * Raio digitado → o formato da API (`"6.0"`, uma casa, `0.1` a `999.9`). Vazio → `null` (sem raio). Inválido →
+ * `undefined`.
+ */
+export function parseKm(text: string): string | null | undefined {
+  const t = text.trim().replace(',', '.');
+  if (!t) return null;
+  const m = /^(\d{1,3})(?:\.(\d))?$/.exec(t);
+  if (!m) return undefined;
+  const km = `${Number(m[1])}.${m[2] ?? '0'}`;
+  return km === '0.0' ? undefined : km;
+}
+
+/** Coordenada digitada (ponto ou vírgula) → número com 6 casas, dentro do limite; senão `null`. */
+export function parseCoordinate(text: string, limit: 90 | 180): number | null {
+  const t = text.trim().replace(',', '.');
+  if (!/^-?\d{1,3}(\.\d+)?$/.test(t)) return null;
+  const v = Math.round(Number(t) * 1e6) / 1e6;
+  return Math.abs(v) <= limit ? v : null;
+}
+
+export function formatCoordinate(v: number): string {
+  return v.toFixed(6);
+}
+
+/** Link que abre o ponto no Google Maps (navegador ou app de mapas), sem módulo nativo. */
+export function mapsUrl(l: Pick<StorefrontLocation, 'latitude' | 'longitude'>): string {
+  return `https://www.google.com/maps/search/?api=1&query=${formatCoordinate(l.latitude)},${formatCoordinate(l.longitude)}`;
+}
+
+const missingText: Record<PageDeliveryMissing, string | null> = {
+  DELIVERY_OFF: 'ligue a entrega',
+  PRICE_PER_KM: 'informe o preço por km',
+  CONFIRMED_LOCATION: 'confirme o ponto do restaurante',
+  MAPS_PROVIDER: null,
+};
+
+/**
+ * `pageDelivery.missing` em linguagem de balcão: "Para entregar pela página: ligue a entrega, informe o preço por km
+ * e confirme o ponto do restaurante." `MAPS_PROVIDER` é do servidor e vira um aviso à parte.
+ */
+export function pageDeliveryText(p: Storefront['pageDelivery']): { steps: string | null; provider: string | null } {
+  if (p.available) return { steps: null, provider: null };
+  const parts = p.missing.map((m) => missingText[m]).filter((t): t is string => !!t);
+  const joined = parts.length <= 1 ? (parts[0] ?? '') : `${parts.slice(0, -1).join(', ')} e ${parts.at(-1)}`;
+  return {
+    steps: joined ? `Para entregar pela página: ${joined}.` : null,
+    provider: p.missing.includes('MAPS_PROVIDER') ? 'Cálculo de distância não configurado no servidor.' : null,
   };
 }
 
@@ -109,6 +171,7 @@ export function formErrors(form: StorefrontForm): Record<string, string> {
   if (form.state.trim() && !/^[A-Za-z]{2}$/.test(form.state.trim())) errors['address.state'] = 'UF com 2 letras, ex.: MG.';
   if (form.zipCode.trim() && form.zipCode.replace(/\D/g, '').length !== 8) errors['address.zipCode'] = 'CEP com 8 dígitos.';
   if (!form.offersPickup && !form.offersDelivery) errors.offersPickup = 'Ofereça entrega, retirada ou as duas.';
+  if (parseKm(form.maxDistanceKm) === undefined) errors['delivery.maxDistanceKm'] = 'Raio em km, de 0,1 a 999,9 (ex.: 6 ou 6,5).';
   return errors;
 }
 
@@ -116,9 +179,14 @@ const orNull = (v: string) => (v.trim() ? v.trim() : null);
 
 /**
  * Corpo do `PUT /storefront` (06 §6.18). Sem `form`, repete a configuração do servidor: é o que as chaves rápidas
- * ("ativar", "pausar") mandam, trocando só a chave (`overrides`). A regra da taxa (fatia 4) vai sempre como está.
+ * ("ativar", "pausar", "pausar entrega", "confirmar ponto") mandam, trocando só a chave (`overrides`). Sem `location`
+ * no corpo, o servidor mantém o ponto salvo; o formulário nunca manda o ponto.
  */
-export function toUpdateBody(s: Storefront, form?: StorefrontForm | null, overrides: Partial<Pick<UpdateStorefrontBody, 'isPageActive' | 'isAcceptingOrders'>> = {}): UpdateStorefrontBody {
+export function toUpdateBody(
+  s: Storefront,
+  form?: StorefrontForm | null,
+  overrides: Partial<Pick<UpdateStorefrontBody, 'isPageActive' | 'isAcceptingOrders' | 'isDeliveryEnabled' | 'location'>> = {},
+): UpdateStorefrontBody {
   const base: UpdateStorefrontBody = {
     slug: s.slug,
     publicName: s.publicName,
@@ -149,6 +217,12 @@ export function toUpdateBody(s: Storefront, form?: StorefrontForm | null, overri
           city: orNull(form.city),
           state: form.state.trim() ? form.state.trim().toUpperCase() : null,
           zipCode: orNull(form.zipCode),
+        },
+        delivery: {
+          feeMode: form.feeMode,
+          pricePerKm: toCents(form.pricePerKm) > 0 ? form.pricePerKm : null,
+          minimumFee: form.minimumFee,
+          maxDistanceKm: parseKm(form.maxDistanceKm) ?? null,
         },
       }
     : base;

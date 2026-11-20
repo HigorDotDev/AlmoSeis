@@ -6,15 +6,27 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
+import { Linking } from 'react-native';
 
 import { configureApiClient } from '@/api/client';
 import type { Me, Product, Storefront } from '@/api/types';
 import { ProductFormScreen } from '@/features/catalog/screens/CatalogScreens';
-import { expectedPaymentText } from '@/features/orders/webOrders';
+import { distanceFeeText, expectedPaymentText } from '@/features/orders/webOrders';
 import { WebOrderPaymentInfo } from '@/features/orders/webOrderComponents';
 import { qrMatrix } from '@/features/storefront/qrMatrix';
 import { CONFLICT_TEXT, StorefrontScreen } from '@/features/storefront/screens/StorefrontScreen';
-import { formErrors, formFromStorefront, normalizeSlugInput, slugProblem, storeStatusInfo, toUpdateBody } from '@/features/storefront/storefront';
+import {
+  formErrors,
+  formFromStorefront,
+  mapsUrl,
+  normalizeSlugInput,
+  pageDeliveryText,
+  parseCoordinate,
+  parseKm,
+  slugProblem,
+  storeStatusInfo,
+  toUpdateBody,
+} from '@/features/storefront/storefront';
 import { shareLink as shareLinkWeb } from '@/lib/share.web';
 import { useConnectivity } from '@/stores/connectivity';
 import { useSession } from '@/stores/session';
@@ -44,6 +56,7 @@ const base: Storefront = {
   address: { street: null, number: null, complement: null, neighborhood: null, city: null, state: null, zipCode: null },
   location: null,
   delivery: { feeMode: 'DISTANCE', pricePerKm: '0.80', minimumFee: '3.00', maxDistanceKm: '6.0' },
+  pageDelivery: { available: false, missing: ['CONFIRMED_LOCATION'] },
   status: 'UNAVAILABLE',
   updatedAt: '2026-10-27T09:30:00Z',
 };
@@ -99,6 +112,7 @@ beforeEach(() => {
     }
     if (path === '/storefront') return json(200, current, { ETag: `"${current.version}"` });
     if (path === '/products/p1') return json(200, product, { ETag: '"2"' });
+    if (path === '/tenant/settings') return json(200, { version: 1, defaultDeliveryFee: '5.00', kiloPricePerKg: null, enabledPaymentMethods: ['CASH'], sharedDeviceIdleSeconds: 300 });
     return json(404, { errorCode: 'NotFound' });
   }) as unknown as typeof fetch;
 });
@@ -179,7 +193,7 @@ describe('tela "Página de pedidos"', () => {
     expect(await screen.findByText(/Sua página está: Desativada/)).toBeTruthy();
     expect(screen.getByTestId('storefront-url').props.children).toBe('http://localhost:3000/marmitaria-da-ana');
     expect(screen.getByText(/Links antigos que ainda levam para cá: marmitaria-ana/)).toBeTruthy();
-    expect(screen.getByText('Disponível em breve: taxa por distância.')).toBeTruthy();
+    expect(screen.queryByText(/Disponível em breve/)).toBeNull();
     await fireEvent.press(screen.getByText('Mostrar QR code'));
     expect(screen.getByTestId('storefront-qr')).toBeTruthy();
     await act(async () => {
@@ -320,5 +334,124 @@ describe('pedido do site: forma de pagamento esperada e riskFlag', () => {
     await render(<WebOrderPaymentInfo order={{ expectedPaymentMethod: null, changeFor: null, riskFlag: null }} />);
     expect(screen.queryByTestId('expected-payment')).toBeNull();
     expect(screen.queryByTestId('risk-flag')).toBeNull();
+  });
+});
+
+describe('fatia 4: entrega por distância e ponto do restaurante (06 §6.18, ADR-0048)', () => {
+  const unconfirmed: Storefront = {
+    ...base,
+    isPageActive: true,
+    status: 'OPEN',
+    address: { street: 'Rua das Flores', number: '123', complement: null, neighborhood: 'Centro', city: 'Uberlândia', state: 'MG', zipCode: '38400000' },
+    location: { latitude: -18.918512, longitude: -48.277003, isConfirmed: false },
+    pageDelivery: { available: false, missing: ['CONFIRMED_LOCATION'] },
+  };
+
+  it('o que falta em linguagem simples; MAPS_PROVIDER à parte', () => {
+    expect(pageDeliveryText({ available: false, missing: ['DELIVERY_OFF', 'PRICE_PER_KM', 'CONFIRMED_LOCATION'] }).steps).toBe(
+      'Para entregar pela página: ligue a entrega, informe o preço por km e confirme o ponto do restaurante.',
+    );
+    expect(pageDeliveryText({ available: false, missing: ['CONFIRMED_LOCATION'] }).steps).toBe('Para entregar pela página: confirme o ponto do restaurante.');
+    expect(pageDeliveryText({ available: false, missing: ['MAPS_PROVIDER'] })).toEqual({ steps: null, provider: 'Cálculo de distância não configurado no servidor.' });
+    expect(pageDeliveryText({ available: true, missing: [] })).toEqual({ steps: null, provider: null });
+  });
+
+  it('raio e coordenadas digitados', () => {
+    expect(parseKm('6')).toBe('6.0');
+    expect(parseKm('6,5')).toBe('6.5');
+    expect(parseKm('')).toBeNull();
+    expect(parseKm('0')).toBeUndefined();
+    expect(parseKm('6,55')).toBeUndefined();
+    expect(parseCoordinate('-18,9185123', 90)).toBe(-18.918512);
+    expect(parseCoordinate('91', 90)).toBeNull();
+    expect(mapsUrl({ latitude: -18.918512, longitude: -48.277003 })).toBe('https://www.google.com/maps/search/?api=1&query=-18.918512,-48.277003');
+  });
+
+  it('bug: depois de ativar, o texto da chave diz que a página está ativa', async () => {
+    writeHandler = (body) => json(200, { ...current, ...(body as object), version: 4, status: 'OPEN' }, { ETag: '"4"' });
+    signIn(['orders.view', 'storefront.manage']);
+    await renderWith(<StorefrontScreen />);
+    expect(await screen.findByText('Desativada: o link mostra “indisponível”.')).toBeTruthy();
+    await act(async () => {
+      await fireEvent(screen.getByLabelText('Página ativa'), 'valueChange', true);
+    });
+    expect(await screen.findByText('Ativa: quem abre o link vê o cardápio do dia e pode pedir.')).toBeTruthy();
+    expect(screen.queryByText('Desativada: o link mostra “indisponível”.')).toBeNull();
+    expect(screen.getByText(/Sua página está: Aberta/)).toBeTruthy();
+  });
+
+  it('ponto não confirmado: coordenadas, "Ver no mapa" e "Confirmar este ponto" com o objeto inteiro', async () => {
+    current = unconfirmed;
+    const open = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+    writeHandler = (body) => json(200, { ...current, version: 4, location: { ...(body as Storefront).location!, isConfirmed: true }, pageDelivery: { available: true, missing: [] } }, { ETag: '"4"' });
+    signIn(['orders.view', 'storefront.manage']);
+    await renderWith(<StorefrontScreen />);
+    expect(await screen.findByText('-18.918512, -48.277003')).toBeTruthy();
+    expect(screen.getByText('Para entregar pela página: confirme o ponto do restaurante.')).toBeTruthy();
+    await fireEvent.press(screen.getByText('Ver no mapa'));
+    expect(open).toHaveBeenCalledWith('https://www.google.com/maps/search/?api=1&query=-18.918512,-48.277003');
+    await act(async () => {
+      await fireEvent.press(screen.getByText('Confirmar este ponto'));
+    });
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]!.body).toEqual({ ...toUpdateBody(unconfirmed), location: { latitude: -18.918512, longitude: -48.277003, isConfirmed: true } });
+    expect(writes[0]!.headers['If-Match']).toBe('"3"');
+    expect(await screen.findByText('A página oferece entrega agora.')).toBeTruthy();
+    expect(screen.queryByText('Confirmar este ponto')).toBeNull();
+    open.mockRestore();
+  });
+
+  it('correção à mão (avançado): manda o ponto digitado, confirmado', async () => {
+    current = unconfirmed;
+    signIn(['orders.view', 'storefront.manage']);
+    await renderWith(<StorefrontScreen />);
+    await screen.findByText('-18.918512, -48.277003');
+    await fireEvent.press(screen.getByText('Corrigir o ponto à mão (avançado)'));
+    await fireEvent.changeText(screen.getByLabelText('Latitude'), '-18,9190001');
+    await fireEvent.changeText(screen.getByLabelText('Longitude'), '-48.2775');
+    await act(async () => {
+      await fireEvent.press(screen.getByText('Usar este ponto'));
+    });
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect((writes[0]!.body as { location: unknown }).location).toEqual({ latitude: -18.919, longitude: -48.2775, isConfirmed: true });
+  });
+
+  it('salvar a regra da taxa: preço, mínima e raio; o formulário não manda o ponto', async () => {
+    current = unconfirmed;
+    signIn(['orders.view', 'storefront.manage']);
+    await renderWith(<StorefrontScreen />);
+    await screen.findByText('-18.918512, -48.277003');
+    await fireEvent.changeText(screen.getByTestId('price-per-km'), '120');
+    await fireEvent.changeText(screen.getByLabelText('Raio máximo em km (opcional)'), '8,5');
+    // Com edição pendente, o ponto não pode ser confirmado (o PUT levaria a edição pela metade).
+    expect(screen.getByText('Salve ou desfaça as alterações antes de mexer no ponto.')).toBeTruthy();
+    await act(async () => {
+      await fireEvent.press(screen.getByText('Salvar'));
+    });
+    await waitFor(() => expect(writes).toHaveLength(1));
+    const body = writes[0]!.body as Record<string, unknown>;
+    expect(body.delivery).toEqual({ feeMode: 'DISTANCE', pricePerKm: '1.20', minimumFee: '3.00', maxDistanceKm: '8.5' });
+    expect('location' in body).toBe(false);
+  });
+
+  it('taxa fixa: usa a taxa padrão e esconde o ponto', async () => {
+    current = unconfirmed;
+    signIn(['orders.view', 'storefront.manage']);
+    await renderWith(<StorefrontScreen />);
+    await screen.findByText('-18.918512, -48.277003');
+    await fireEvent.press(screen.getByText('Taxa fixa'));
+    expect(await screen.findByText(/cobra R\$ 5,00, a taxa padrão/)).toBeTruthy();
+    expect(screen.queryByText('Ponto do restaurante')).toBeNull();
+    await act(async () => {
+      await fireEvent.press(screen.getByText('Salvar'));
+    });
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect((writes[0]!.body as { delivery: { feeMode: string } }).delivery.feeMode).toBe('FIXED');
+  });
+
+  it('pedido com taxa pela distância: "Entrega · 4,5 km · taxa R$ 3,60"', () => {
+    expect(distanceFeeText({ fulfillmentType: 'DELIVERY', deliveryFeeSource: 'DISTANCE', deliveryDistanceKm: '4.5', deliveryFee: '3.60' })).toBe('Entrega · 4,5 km · taxa R$ 3,60');
+    expect(distanceFeeText({ fulfillmentType: 'DELIVERY', deliveryFeeSource: 'MANUAL', deliveryDistanceKm: null, deliveryFee: '5.00' })).toBeNull();
+    expect(distanceFeeText({ fulfillmentType: 'PICKUP', deliveryFeeSource: null, deliveryDistanceKm: null, deliveryFee: '0.00' })).toBeNull();
   });
 });

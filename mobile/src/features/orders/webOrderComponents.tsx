@@ -39,6 +39,7 @@ import {
   acceptanceConflictText,
   CAPTCHA_UNAVAILABLE_TEXT,
   countdown,
+  distanceFeeText,
   ESTIMATED_MINUTES,
   expectedPaymentText,
   orderNumberLabel,
@@ -168,6 +169,7 @@ export function WebOrderDetails({ order: o }: { order: Order }) {
           {o.deliveryAddress.reference ? ` · ${o.deliveryAddress.reference}` : ''}
         </Text>
       ) : null}
+      <DistanceFeeLine order={o} />
       {o.customer?.phoneNumber ? <PhoneLine phone={o.customer.phoneNumber} unverified={o.origin === 'WEB'} /> : null}
       {o.notes ? <Text style={{ color: c.danger, fontWeight: '600' }}>Obs.: {o.notes}</Text> : null}
       <WebOrderPaymentInfo order={o} />
@@ -203,6 +205,16 @@ export function WebOrderPaymentInfo({ order: o }: { order: Pick<Order, 'expected
       ) : null}
     </View>
   );
+}
+
+/** "Entrega · 4,5 km · taxa R$ 3,60" quando a taxa veio da cotação da página (ADR-0048 item 20). */
+export function DistanceFeeLine({ order }: { order: Pick<Order, 'fulfillmentType' | 'deliveryFeeSource' | 'deliveryDistanceKm' | 'deliveryFee'> }) {
+  const text = distanceFeeText(order);
+  return text ? (
+    <Text variant="small" testID="distance-fee" style={{ fontWeight: '600' }}>
+      {text}
+    </Text>
+  ) : null;
 }
 
 /** ADR-0044: o telefone do pedido do site não é verificado. */
