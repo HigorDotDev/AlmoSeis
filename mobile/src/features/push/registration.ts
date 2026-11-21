@@ -5,7 +5,7 @@
  * informa o token, a instalação e a opção "Avisar pedidos do site com o app fechado".
  */
 import { pushTokenApi } from '@/api/endpoints/tenant';
-import { errorMessage } from '@/api/errors';
+import { errorMessage, isApiError } from '@/api/errors';
 import { APP_PLATFORM } from '@/config';
 import { metaRepo } from '@/db/metaRepo';
 import { usePreferences } from '@/stores/preferences';
@@ -94,6 +94,12 @@ async function syncOnce({ force = false, now = Date.now() }: { force?: boolean; 
     status.set({ registration: data, unavailable: null, errorMessage: null });
     await metaRepo.set(REGISTERED_KEY, me.tenant.id);
   } catch (e) {
+    if (isApiError(e, 'PushTokenInUse')) {
+      // 409 (06 §6.1): o token está com outra instalação em outro estabelecimento. Sem erro na tela e sem mexer no
+      // estado local; a próxima abertura tenta de novo, sem esperar as 12 h (o registro de lá some no logout ou em 30 dias).
+      last = null;
+      return;
+    }
     // Sem rede ou recusa: tenta de novo na próxima abertura ou volta ao primeiro plano.
     status.set({ unavailable: 'error', errorMessage: errorMessage(e) });
   }

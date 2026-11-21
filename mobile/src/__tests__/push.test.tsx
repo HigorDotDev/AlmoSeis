@@ -198,6 +198,23 @@ describe('registro (PUT /devices/push-token)', () => {
     expect(puts()[2]!.body).toMatchObject({ expoPushToken: 'ExponentPushToken[novo]' });
   });
 
+  it('409 PushTokenInUse: sem erro, estado local mantido e nova tentativa na próxima abertura, sem as 12 h', async () => {
+    await syncPushRegistration();
+    expect(puts()).toHaveLength(1);
+    putResponse = () =>
+      new Response(JSON.stringify({ status: 409, errorCode: 'PushTokenInUse', title: 'PushTokenInUse' }), { status: 409, headers: { 'Content-Type': 'application/problem+json' } });
+    await syncPushRegistration({ force: true });
+    expect(puts()).toHaveLength(2);
+    expect(usePushStatus.getState()).toMatchObject({ registration, unavailable: null, errorMessage: null });
+    expect(memory.meta.get('pushRegisteredTenant')).toBe(TENANT);
+    // Próxima abertura (sem force, mesmos dados, dentro das 12 h): tenta de novo.
+    putResponse = () => json(200, registration);
+    await syncPushRegistration();
+    expect(puts()).toHaveLength(3);
+    await syncPushRegistration();
+    expect(puts()).toHaveLength(3);
+  });
+
   it('sem permissão não registra; se este aparelho tinha registrado, apaga', async () => {
     mockN.permission = { status: 'denied', canAskAgain: false };
     await syncPushRegistration();
