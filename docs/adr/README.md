@@ -96,11 +96,13 @@ Complementos: ADR-0027 (`deviceSecret` do aparelho compartilhado) e ADR-0028 (pe
 | [0048](0048-taxa-entrega-por-distancia.md) | Taxa = `max(km × preço/km, mínimo)`, rota de carro sem trânsito, km com 1 casa, cotação de 15 min, sem entrega se o provedor falhar (refina 0021) | Proposto |
 | [0049](0049-push-pedidos-da-pagina.md) | Push (Expo → FCM/APNs) para pedido do site aguardando aceite, sem dado pessoal (substitui em parte 0036) | Proposto |
 | [0050](0050-pagamento-online-split-asaas.md) | Fase 2: cobrança emitida pela subconta do restaurante com split da comissão, `IOrderPaymentGateway`, `apiKey` no Key Vault, online fora do caixa físico | Proposto |
-| [0051](0051-projeto-web-nextjs-hospedagem.md) | Next.js em `web/`, `packages/shared`, Container App `almoseis-web` com Cloudflare na frente | Proposto |
+| [0051](0051-projeto-web-nextjs-hospedagem.md) | Next.js em `web/`, `packages/shared` (ainda não criado), Container App `almoseis-web` com Cloudflare na frente | Proposto |
 | [0052](0052-lgpd-cliente-da-pagina.md) | Aviso de privacidade na página, anonimização dos pedidos não aceitos em 7 dias, dados só no navegador (complementa 0024) | Proposto |
 | [0053](0053-app-restaurante-navegador-desktop.md) | App do restaurante também no navegador do desktop: mesma base `mobile/` exportada para web (PWA) em `app.{dominio}`; refresh e `deviceSecret` em cookie `HttpOnly` só para `X-App-Platform: WEB`, CORS por lista, rascunhos em IndexedDB, 426 recarrega a página, Web Push depois (complementa 0001, 0010, 0027, 0035, 0036) | Proposto |
 
-Afetados (linha de referência no próprio ADR): 0001, 0016, 0021, 0026, 0036. Também complementados, sem linha própria: 0006, 0013, 0022, 0023/0039, 0024, 0028, 0033, 0041; e, pelo 0053, 0010, 0017, 0027, 0035 e 0049.
+Afetados (linha de referência no próprio ADR): 0001, 0016, 0021, 0026, 0036. Também complementados, sem linha própria: 0006, 0013, 0022, 0023/0039, 0024, 0028, 0041; e, pelo 0053, 0010, 0017, 0027, 0035 e 0049.
+
+Em 2026-11-20, os ADRs 0044 a 0053 foram alinhados à implementação das fatias 1 a 5 do EP-002 (até o commit `2f65bff`), e continuam `Proposto`. Os ADRs 0026 (item 10: funções `SECURITY DEFINER`, `store_slugs` com leitura aberta, correção de dados com `NO FORCE`/`FORCE`), 0029 (módulos Storefront e Notifications, portas e os dois laços do `OutboxDispatcher`) e 0033 (itens 7 a 9: segredo fora do corpo guardado, preparação antes da transação, chave anônima, aceite e desistência) mantêm o status `Aceito` e ganharam a linha "Complementado em 2026-11-20".
 
 ## Impacto no modelo do épico (§6)
 

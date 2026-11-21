@@ -2,6 +2,7 @@
 
 - **Status:** Proposto
 - **Data:** 2026-11-19
+- **Atualizado:** 2026-11-20. Nada mudou nesta rodada (EP-002, fatias 1 a 5, até o commit `2f65bff`), exceto uma nota no §1.5: `packages/shared` não foi criado (ADR-0051 item 3).
 - **Origem:** decisão do dono do produto em 2026-11-19 (o app do restaurante no computador do balcão, pelo navegador, em vez de um app Windows nativo); EP-002, Fase 1, RF-216; spike de `expo export --platform web` feito na mesma data
 - **Relacionados:** ADR-0001 (complementado), ADR-0010, ADR-0017, ADR-0024, ADR-0027, ADR-0035, ADR-0036, ADR-0037, ADR-0041, ADR-0049, ADR-0051
 
@@ -28,7 +29,7 @@ Sem esta decisão, cada agente adaptaria o app à web do seu jeito: tokens em `l
 2. As diferenças de plataforma ficam em arquivos `.web.ts` atrás da **mesma interface** do arquivo nativo: armazenamento seguro, banco local, som, tela ligada e identificador de instalação. As telas não testam `Platform.OS`, salvo no layout. O `Platform.OS` fica para diferenças só visuais.
 3. **Instalável como PWA** no Chrome e no Edge, com manifesto (nome, ícones, cor, `display: standalone`), ícone na área de trabalho e janela própria. Não há cache do app para uso offline (§7).
 4. **Mesmas telas, mesmas permissões e mesmas regras.** Nenhuma regra de negócio, permissão ou cálculo muda por plataforma. Janelas com largura ≥ 720 px usam o layout de tablet que já existe (por exemplo, a cozinha em 3 colunas, `08-mobile.md` §8.9).
-5. **Não é o projeto `web/`** do ADR-0051 (página pública do consumidor, Next.js). Os dois não compartilham rota, build, deploy nem sessão. O único código comum é o de `packages/shared`.
+5. **Não é o projeto `web/`** do ADR-0051 (página pública do consumidor, Next.js). Os dois não compartilham rota, build, deploy nem sessão. O único código comum é o de `packages/shared`. *(2026-11-20: o pacote ainda não existe, ADR-0051 item 3. Hoje os dois projetos não compartilham nenhum código.)*
 6. **App Windows nativo** (Tauri ou Electron embrulhando o mesmo build web) só no futuro, se for preciso acesso a hardware (impressora de comanda, balança). Isso pede um ADR próprio.
 
 ### 2. Onde é servido

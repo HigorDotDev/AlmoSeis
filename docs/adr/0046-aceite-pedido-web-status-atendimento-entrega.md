@@ -2,6 +2,7 @@
 
 - **Status:** Proposto
 - **Data:** 2026-11-19
+- **Atualizado:** 2026-11-20, alinhado à implementação das fatias 1 a 5 do EP-002 (até o commit `2f65bff`). Ver "Implementação (2026-11-20)".
 - **Origem:** EP-002, RF-206 e RF-207; decisões do dono do produto (itens 2 e 6) em 2026-11-19
 - **Relacionados:** ADR-0005, ADR-0006 (refinado), ADR-0007, ADR-0019, ADR-0022, ADR-0023/ADR-0039 (refinados), ADR-0028 (complementado), ADR-0031, ADR-0032, ADR-0044, ADR-0047, ADR-0049, ADR-0050
 
@@ -98,8 +99,8 @@ Hoje o pedido tem três dimensões independentes: produção (`OPEN`/`IN_PROGRES
     | `DELIVERED` / `PICKED_UP` | passo anterior | correção de toque errado, com confirmação; auditada |
 
     Quando a produção não está concluída, o app oferece **"Concluir e marcar como saiu/retirado"**, uma única operação no servidor que exige `production.update` e `orders.fulfillment.update` e faz as duas transições na mesma transação.
-19. **Item acrescentado depois que o pedido saiu** (*a confirmar*): com `FulfillmentStatus` em `OUT_FOR_DELIVERY`, `DELIVERED` ou `PICKED_UP`, incluir item → `409 OrderAlreadyDispatched`. O atendente cria outro pedido. A regra RN-007.10 (voltar para `IN_PROGRESS`) continua valendo enquanto o pedido está `PENDING`.
-20. **Vale também para pedidos de entrega e retirada criados no app** (recomendação; *a confirmar*). O uso é opcional: se ninguém marcar, o pedido fica `PENDING` e nada é bloqueado. O fechamento só informa "N entregas sem marcação de entregue".
+19. **Item acrescentado depois que o pedido saiu** (*a confirmar*): com `FulfillmentStatus` em `OUT_FOR_DELIVERY`, `DELIVERED` ou `PICKED_UP`, incluir item → `409 OrderAlreadyDispatched`. O atendente cria outro pedido. A regra RN-007.10 (voltar para `IN_PROGRESS`) continua valendo enquanto o pedido está `PENDING`. *(2026-11-20: também trocar entrega ↔ retirada é bloqueado; ver "Implementação".)*
+20. **Vale também para pedidos de entrega e retirada criados no app** (decisão do usuário, registrada em 2026-11-20). O uso é opcional: se ninguém marcar, o pedido fica `PENDING` e nada é bloqueado. O fechamento só informa "N entregas sem marcação de entregue".
 
 **Identificação no app**
 
@@ -146,3 +147,28 @@ Hoje o pedido tem três dimensões independentes: produção (`OPEN`/`IN_PROGRES
 - Todas as consultas de cozinha, fechamento, pendências por cliente e listas de pedidos passam a filtrar `AcceptanceStatus = ACCEPTED`. Teste obrigatório: um pedido recusado nunca aparece no fechamento.
 - O resumo do fechamento ganha um indicador informativo "Pedidos do site recusados/expirados" (quantidade), fora do vendido.
 - Revisitar o prazo de 10 minutos e o limite do item 19 depois de duas semanas de piloto.
+
+## Implementação (2026-11-20)
+
+Decisões tomadas onde o texto acima deixava espaço. Contrato em `docs/06-contratos-api.md` §6.9, §6.11, §6.14 e §6.16. Notas de código em `docs/07-backend.md` §7.8 e §7.13.
+
+- **"Saiu para entrega" e "Retirado"** (item 18) exigem `ProductionStatus = COMPLETED`. Sem isso, a resposta é `409 ProductionNotCompleted`.
+  - A alternativa é `completeProduction: true` no `PATCH /orders/{id}/fulfillment`. Essa opção exige também `production.update` (senão, `403 PermissionDenied`) e conclui a produção e o atendimento numa versão só.
+- **O que fica bloqueado depois da saída** (item 19), com `OUT_FOR_DELIVERY`, `DELIVERED` ou `PICKED_UP`:
+  - bloqueados: **incluir item** e **trocar entrega ↔ retirada**, ambos com `409 OrderAlreadyDispatched`;
+  - continuam permitidos, dentro das regras comuns (pedido quitado continua bloqueado, ADR-0007): mudar a quantidade ou a observação de um item, removê-lo, editar a taxa (com `orders.delivery-fee.edit`), pagar e estornar;
+  - **"Voltou sem entregar"** (`OUT_FOR_DELIVERY` → `PENDING`) libera de novo a inclusão de itens.
+- **Ordem dos erros no aceite e na recusa:**
+  1. prazo vencido → `409 WebOrderExpired`;
+  2. `If-Match` → `409 VersionConflict` com `current`;
+  3. estado → `409 OrderNotAwaitingAcceptance`.
+
+  O job muda a versão ao expirar. Sem essa ordem, o aceite tardio veria só um `VersionConflict`. Já o "Já aceito por Ana" (item 9) precisa do `current` do 409.
+- **Corrida aceite × expiração** (item 16): a disputa é pela `version`, sem trava pessimista. O número do dia só é consumido depois das validações. Se o aceite perde, o rollback devolve o número ao contador, e a sequência continua sem buracos (item 8).
+- **Eventos** (item 23): o `OrderCreated` do pedido do site sai **no aceite com `label: null`**, sem o nome do cliente. Nenhum evento leva dado pessoal.
+- **Recusa** (item 24): a auditoria `OrderRejected` leva **só o `reasonCode`**. O texto livre fica no pedido e nunca vai para a auditoria (ADR-0052 item 7).
+- **Listas** (consequências): `GET /orders` filtra `acceptanceStatus = ACCEPTED` **por padrão**. A faixa "Novos do site" usa `?acceptanceStatus=AWAITING_ACCEPTANCE`, e os não aceitos têm filtro próprio.
+- **Fechamento** (item 13, item 20 e consequências): o snapshot ganha colunas informativas, fora do vendido: `not_accepted_count`, `auto_rejected_count` e `unmarked_delivery_count`. `not_accepted_count` inclui os recusados pela própria finalização. Fechamentos antigos ficam com 0.
+- **Lembrete aos 3 min** (item 15): é uma mensagem do outbox agendada (`available_at`), gravada junto com o pedido. Nenhum job mexe no pedido para marcar o lembrete, porque isso subiria a versão e o `If-Match` do aceite daria `409` (ADR-0049).
+- **Expand/contract da migration 0003:** ficou **pendente** e está registrado em `docs/09-devops.md` §9.4. Por enquanto, o banco aceita pedido aceito sem `accepted_at` e entrega/retirada sem `fulfillment_status`, como a API anterior grava durante o deploy. O código trata o nulo como "aceito na criação" e `PENDING`. Preencher os dados e apertar os `CHECK`s fica para a release seguinte.
+- **Pedidos do app** (item 20): por decisão do usuário, o atendimento ("Saiu", "Entregue", "Retirado") vale também para entrega e retirada criadas no app. O uso é opcional: sem marcação, o pedido fica `PENDING` e nada é bloqueado. A Q-10 fica respondida.

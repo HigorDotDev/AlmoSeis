@@ -572,7 +572,7 @@ Precisam de decisão do usuário antes do código que depende delas ir para prod
 | Q-05 | N | **Raio máximo de entrega:** existe? opcional? qual padrão? | Opcional, sem padrão | 0048 |
 | Q-06 | N | **Prazo de aceite** e o lembrete | 10 min, lembrete aos 3 min | 0046 |
 | Q-07 | T | **Domínio** da página e da API | Lacuna. Estrutura: `{dominio}`, `api.{dominio}`, `homolog.{dominio}` | 0051 |
-| Q-08 | T | **Termos do Google** (exibir resultado sem mapa, cache de 30 dias, atribuição) e escolha final do provedor de mapas | Google se os termos permitirem; senão Mapbox ou OSRM | 0048 |
+| Q-08 | T | **Termos do Google** (exibir resultado sem mapa, cache de 30 dias, atribuição) e escolha final do provedor de mapas | Google se os termos permitirem; senão Mapbox ou OSRM. *(2026-11-20: o cache implementado é de 7 dias; ver Q-31)* | 0048 |
 | Q-09 | N/T | **Adequação BaaS / white label no Asaas** após o período de avaliação (10 subcontas, R$ 2.000 cada, 60 dias); custo de criação de subconta | Iniciar a conversa com o Asaas antes da Fase 2 | 0050 |
 | Q-10 | N | Os status **"Saiu para entrega"/"Entregue"** valem para pedidos de entrega do app? | Sim, com uso opcional | 0046 |
 | Q-11 | N | **CPF do pagador** se o Asaas exigir na Fase 2 | Pedir só no "Pagar agora" | 0050 |
@@ -594,3 +594,8 @@ Precisam de decisão do usuário antes do código que depende delas ir para prod
 | Q-27 | T | **Abrir o app web sem internet** (*service worker* com cache do app) | Não no MVP. Com a aba aberta, vale o ADR-0010 | 0010, 0053 |
 | Q-28 | N | **Firefox e Safari**: bloquear ou só avisar? | Só avisar ("Navegador não testado") | 0053 |
 | Q-29 | T | **Bibliotecas na web**: fallback do `react-native-tab-view` sem `react-native-pager-view`, `expo-keep-awake` e `expo-audio` na web | Confirmar no spike; se faltar, `.web.ts` próprio | 0053 |
+| Q-30 | N | **Quando pedir a permissão de notificação** (ADR-0049 item 6, "no primeiro uso da página de pedidos"). A implementação mostra a explicação na faixa "Novos do site" (quando há pedido aguardando) e na tela de configuração "Página de pedidos", só para quem tem `orders.accept`. É essa a intenção, ou só na tela de configuração? | Manter os dois pontos: quem atende vê o pedido do site antes de abrir a configuração | 0049 |
+| Q-31 | N/T | **Provedor de mapas em produção e termos do Google sobre cache.** Hoje `Maps:Provider = None` em produção (sem entrega por distância). Com o Google: os termos permitem guardar coordenadas (4 casas) e **metros de rota** por 7 dias? Exigem mapa do Google ou atribuição ao mostrar o resultado? | Verificar os termos antes de ligar o Google. Se o cache de rota não for permitido, `Maps:RouteCacheDays = 0` (custo maior por cotação); se o Google não servir, OSRM/Nominatim auto-hospedado | 0048, 0052 |
+| Q-32 | T | **Ícone da notificação no Android** (pequeno, monocromático) e cor do canal `web-orders`. Não foram definidos na fatia 5 | Ícone próprio monocromático, definido pelo `ux-agent`, antes do build do piloto | 0049 |
+| Q-33 | N | **Logo e foto de capa no perfil público.** Ficaram fora desta fase (o contrato não tem os campos), e o `og:image` usa a foto do primeiro prato do dia. Entram na Fase 1? | Logo antes do piloto (prévia do WhatsApp e acompanhamento); capa depois | 0044, 0047, 0051 |
+| Q-34 | N | **Formas de pagamento habilitadas no perfil público.** O perfil não mostra `enabledPaymentMethods`, e a página só descobre que uma forma está desabilitada no envio (`422 PaymentMethodDisabled`). Mostrar no perfil? | Sim: a página oferece só as formas habilitadas | 0044 |

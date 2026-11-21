@@ -2,6 +2,7 @@
 
 - **Status:** Proposto
 - **Data:** 2026-11-19
+- **Atualizado:** 2026-11-20, texto alinhado à implementação das fatias 1 a 5 do EP-002 (até o commit `2f65bff`). Ver "Implementação (2026-11-20)".
 - **Origem:** EP-002 (`docs/11-epico-ep002.md`), RF-201 a RF-203 e RF-205; decisões do dono do produto em 2026-11-19
 - **Relacionados:** ADR-0001 (continua valendo para o restaurante), ADR-0005, ADR-0016 (substituído em parte), ADR-0017, ADR-0019, ADR-0020, ADR-0021, ADR-0038, ADR-0045, ADR-0046, ADR-0048, ADR-0051, ADR-0052
 
@@ -34,7 +35,7 @@ Sem uma regra, ficam abertos: o que a página vende, de onde vem o cardápio, qu
    |---|---|---|
    | `OPEN` | página ativa + expediente aberto + não pausada + dentro da janela de horário (se configurada) + assinatura com escrita liberada | cardápio e botão de pedir |
    | `CLOSED` | sem expediente aberto, ou fora da janela | "Fechado agora" + horário informativo; cardápio não é mostrado |
-   | `PAUSED` | `IsAcceptingOrders = false` | "Não estamos recebendo pedidos pela página agora" |
+   | `PAUSED` | `IsAcceptingOrders = false` | "Não estamos recebendo pedidos pela página agora", com o cardápio para consulta e o envio recusado *(2026-11-20)* |
    | `UNAVAILABLE` | página inativa, ou assinatura `SUSPENDED`/`CANCELED` (ADR-0017) | "Página indisponível" (sem dizer o motivo) |
 
 7. **Janela de horário opcional** (`OrderingHours`, por dia da semana). Serve para o caso real do expediente esquecido aberto à noite: sem janela, a página aceitaria pedido às 2h. Na Fase 1 é opcional. Para ligar o pagamento online (Fase 2, ADR-0050) recomendamos torná-la obrigatória (*a confirmar*).
@@ -44,14 +45,14 @@ Sem uma regra, ficam abertos: o que a página vende, de onde vem o cardápio, qu
 
 9. Campos visíveis: nome público (padrão `Tenant.Name`), logo (R2, ADR-0037), foto de capa opcional, endereço do restaurante (rua, número, bairro, cidade/UF), telefone/WhatsApp de contato opcional, texto curto de horário (informativo), modos oferecidos (entrega e/ou retirada) e a **regra da taxa** em texto ("R$ 0,80/km, mínimo R$ 3,00, até 6 km", ADR-0048).
 10. Nunca são públicos: documento, funcionários, valores do caixa, pedidos de outros clientes, clientes cadastrados.
-11. `IsPageActive` liga ou desliga a página inteira. **Recomendação:** a página nasce **inativa** no cadastro, com o slug já reservado. Para ativar, o app exige endereço do restaurante confirmado (ADR-0048) e pelo menos 1 tamanho de marmita ativo (*a confirmar se a página deve nascer ativa*).
+11. `IsPageActive` liga ou desliga a página inteira. **Recomendação:** a página nasce **inativa** no cadastro, com o slug já reservado. Para ativar, o app exige endereço do restaurante completo e pelo menos 1 tamanho de marmita ativo (*a confirmar se a página deve nascer ativa*). *(2026-11-20: era "endereço confirmado". O ponto confirmado no mapa passou a ser exigido só para a entrega por distância, ADR-0048 item 3.)*
 
 **Slug**
 
 12. Gerado do nome no cadastro (ADR-0018): minúsculas, sem acento, espaços e símbolos viram `-` ("Marmitaria da Dona Zélia" → `marmitaria-da-dona-zelia`).
 13. Caracteres: `a-z`, `0-9` e `-`; de 3 a 40 caracteres; não começa nem termina com `-`; sem `--`; não pode ser só número.
 14. **Único global**, incluindo os slugs antigos. Em colisão, o gerador tenta `-{cidade}` e depois `-2`, `-3`…
-15. **Editável** pelo `storefront.manage` (ADR-0046). O slug antigo continua **redirecionando (301)** para o novo e fica reservado para o mesmo tenant. Máximo de 5 slugs antigos por tenant. Depois que o tenant é anonimizado (ADR-0024, 90 dias após `CANCELED`), os slugs ficam bloqueados por mais **12 meses** antes de voltar a ficar livres, para que um link antigo no WhatsApp não aponte para outro restaurante.
+15. **Editável** pelo `storefront.manage` (ADR-0046). O slug antigo continua **redirecionando (301; 308 em POST)** para o novo e fica reservado para o mesmo tenant. Máximo de 5 slugs antigos por tenant. Voltar a um antigo o reativa. Depois que o tenant é anonimizado (ADR-0024, 90 dias após `CANCELED`), os slugs ficam bloqueados por mais **12 meses** antes de voltar a ficar livres, para que um link antigo no WhatsApp não aponte para outro restaurante.
 16. **Lista de reservados** (pensando no marketplace na raiz do domínio, Fase 3): `api`, `app`, `admin`, `www`, `web`, `static`, `assets`, `_next`, `cdn`, `img`, `login`, `entrar`, `sair`, `cadastro`, `conta`, `minha-conta`, `restaurantes`, `restaurante`, `cidades`, `cidade`, `categorias`, `perto-de-mim`, `buscar`, `busca`, `pedido`, `pedidos`, `p`, `r`, `s`, `ajuda`, `suporte`, `contato`, `termos`, `privacidade`, `lgpd`, `blog`, `sobre`, `precos`, `planos`, `parceiros`, `almoseis`, `health`, `status`, `webhooks`, `sitemap.xml`, `robots.txt`, `favicon.ico`, `.well-known`. Mais uma lista de palavras ofensivas. A lista vive em código e é coberta por teste.
 17. Rotas do marketplace futuro ficam **sob prefixos reservados** (`/restaurantes`, `/cidades/{cidade}`), nunca na raiz. A raiz `/{slug}` é só do restaurante.
 
@@ -77,3 +78,30 @@ Sem uma regra, ficam abertos: o que a página vende, de onde vem o cardápio, qu
 - O app ganha a tela "Página de pedidos" (configuração, slug, compartilhar link e QR code) e o selo "Site" nos pedidos.
 - O ADR-0001 continua valendo: o restaurante segue sem dashboard web. A página não tem área do restaurante.
 - Revisitar os limites (20 marmitas, pedido só de bebidas) depois do piloto.
+
+## Implementação (2026-11-20)
+
+O que a implementação decidiu onde o texto acima deixava espaço, e o que ficou fora desta fase. Contrato em `docs/06-contratos-api.md` §6.18 e §6.19.
+
+- **Página nasce inativa** (item 11, Q-12): o autocadastro cria `storefront_settings` inativa e reserva o slug na mesma transação (`ITenantCreatedListener`). Para ativar (`isPageActive: true`), o `PUT /storefront` exige:
+  - endereço **completo**: rua, número, bairro, cidade e UF;
+  - pelo menos **1 tamanho de marmita ativo**.
+
+  O ponto confirmado no mapa **não** é exigido para ativar. Ele só é exigido para a entrega por distância aparecer (ADR-0048 item 3, `pageDelivery.missing`).
+- **Estados** (item 6), nesta ordem: `UNAVAILABLE`, `CLOSED`, `PAUSED`, `OPEN`.
+  - `PAUSED` **mostra o cardápio** para consulta e recusa o envio e a cotação com `409 StoreUnavailable` (extensão `storeStatus`, sem o motivo).
+  - `UNAVAILABLE` devolve só `slug`, `status`, `name` e `limits`.
+  - `CLOSED` não mostra cardápio.
+- **Janela de horário** (item 7): **fora desta fase**. O estado não considera `OrderingHours`, e `CLOSED` é só "sem expediente aberto". O texto livre de horário (`hoursText`) é informativo. A Q-18 continua aberta para a Fase 2.
+- **Perfil público** (item 9): **logo e foto de capa ficaram fora desta fase** e não estão no contrato (Q-33). O resto do item 9 foi implementado: nome, endereço, contato, horário, modos e regra da taxa (`deliveryRule`).
+  - As **formas de pagamento habilitadas não aparecem** no perfil público. Uma forma desabilitada só é recusada no envio (`422 PaymentMethodDisabled`, Q-34).
+- **`isVisibleOnPage`** (item 5): vale só para **bebidas e adicionais**. Pratos e acompanhamentos seguem o cardápio do dia. Nasce `true` e muda pelo `PATCH` do produto.
+- **Slug** (item 15):
+  - até **5 slugs antigos** por tenant, ou seja, 5 trocas. Depois disso, só pelo suporte;
+  - **voltar a um slug antigo** do próprio tenant o reativa e não conta como troca nova;
+  - slug antigo ou com maiúsculas: `301` em GET e `308` em POST (o `308` preserva método e corpo);
+  - a quarentena de 12 meses (`blocked_until`) existe no schema e será preenchida pelo job de retenção do ADR-0024, quando ele existir.
+- **Endereço do cliente** (item 18): o pedido guarda rua, número, complemento, bairro e referência. A **cidade não entra** no `deliveryAddress` do pedido: ela só serve à cotação (ADR-0048).
+- **Recálculo** (item 21): o carrinho é conferido duas vezes.
+  - Antes de gravar, contra o cardápio público, o que devolve `409 CartChanged` com o carrinho recalculado.
+  - Depois de gravar, o total, os itens e a taxa do pedido gravado precisam bater com o carrinho conferido. Senão, também `409 CartChanged`, e nada é gravado.

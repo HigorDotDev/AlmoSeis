@@ -4,6 +4,7 @@
 - **Data:** 2026-10-27
 - **Origem:** Inconsistência entre EP-001 §5.1 ("monólito modular") e §5.3 (estrutura só por camadas)
 - **Relacionados:** ADR-0002, ADR-0031
+- **Complementado em 2026-11-20** (implementação do EP-002, fatias 1 a 5; ADR-0044 a ADR-0049, Propostos): módulos Storefront e Notifications, portas entre módulos e peças transversais novas. Ver a seção "Complemento (2026-11-20)".
 
 ## Contexto
 
@@ -58,3 +59,25 @@ A estrutura do §5.3 separa o código **por camada** (`Restaurant.Application/Or
 - **Sem `Result<T>`:** erros de negócio são `BusinessException` com um `ErrorCode` que espelha o catálogo de `06-contratos-api.md` §6.1, mapeado para `ProblemDetails` num único handler.
 - **Tempo:** `TimeProvider` da BCL, sem abstração própria (`ITimeProvider` sai do SharedKernel).
 - **Fora:** FluentAssertions (licença comercial), AutoMapper e Serilog (logs via `ILogger` + OpenTelemetry).
+
+## Complemento (2026-11-20, EP-002, detalhado em `docs/07-backend.md` §7.1, §7.3, §7.4, §7.7 e §7.10)
+
+- **Módulos novos:**
+  - `AlmoSeis.Modules.Storefront`: perfil público, slug, estado da página, cardápio da página, taxa por distância e provedores de mapas (ADR-0044, ADR-0048);
+  - `AlmoSeis.Modules.Notifications`: push dos pedidos do site pela Expo (ADR-0049).
+- **Ordem entre módulos** (sem ciclo): `Identity`, `Catalog` ← `Menu` ← `Closing` ← **`Storefront`** ← `Ordering` ← `Payments`. **`Notifications`** fica acima do `Ordering`. O Storefront lê catálogo, cardápio, expediente e assinatura. O Ordering usa o Storefront pelo `IStorefrontGate` e pelo `IDeliveryQuoteRedeemer`.
+- **Portas declaradas no módulo de baixo e implementadas no de cima**, para o de baixo chamar sem referenciar:
+  - `ITenantCreatedListener` (Identity → Storefront): o autocadastro cria a página inativa com o slug, na mesma transação;
+  - `IDeviceAccessListener` (Identity → Notifications): logout, troca de tenant, `AccessRevoked` e revogação do aparelho apagam o registro de push, na transação de quem chamou;
+  - `IWebOrderAcceptanceReader` (Ordering, lido pelo Notifications): antes de enviar, confere se o pedido ainda aguarda aceite e está no prazo.
+- **Peças transversais novas** (Infrastructure e Api):
+  - `IReplaySecretSource`: campo da resposta com segredo do cliente que não fica no `response_body` da idempotência e é recomposto no reenvio a partir do `resource_id` (ADR-0033 item 7);
+  - `IIdempotentPreparation` e `[Idempotent(Public, ReplaySecret, Preparation)]`: passo de preparação antes da transação, depois de um `FindCompletedAsync` só de leitura (ADR-0033 item 8);
+  - `ITrackingTokenIssuer`: token de acompanhamento derivado por HMAC (ADR-0047);
+  - `PublicTenantMiddleware`: o tenant das rotas `/public/*` vem do slug ou do token (ADR-0045). `PublicStoreQuotaMiddleware`: cota de cotações por **tenant resolvido** (300/dia), contada depois de o slug virar tenant.
+- **`OutboxDispatcher` com dois laços independentes**, cada um a cada 250 ms com `FOR UPDATE SKIP LOCKED`:
+  - **tempo real** (sem `IOutboxConsumer`): publica no SignalR e marca `processed_at` numa transação curta;
+  - **consumidores externos** (push pela Expo, imagem antiga no R2): reserva o lote numa transação curta (`attempts + 1`, `available_at = agora + 120 s`, `Outbox:ConsumerLeaseSeconds`). Depois chama cada consumidor **fora** de qualquer transação e grava o resultado de cada mensagem num `UPDATE` próprio. Se a réplica cair no meio, outra pega a mensagem quando a reserva vence.
+  - Uma chamada HTTP lenta não segura `FOR UPDATE` nem atrasa os eventos de tempo real. O envelope ganha `AvailableAt` (`outbox_messages.available_at`) para mensagens agendadas.
+- **Regra geral:** nenhuma chamada HTTP externa (Turnstile, mapas, Expo, R2) acontece com a transação da requisição aberta, com o `IN_PROGRESS` da idempotência ou com advisory locks. Exceção registrada: `POST /public/stores/{slug}/delivery-quotes` chama Turnstile e mapas dentro da transação do decorator. Ela não tem idempotência nem advisory lock, e grava só a cotação.
+- **Testes de arquitetura novos:** controllers públicos só recebem handlers `IPublicHandler`, e todo `IPublicHandler` é usado por eles. Jobs de plataforma de módulo (`AlmoSeis.Modules.X.Jobs`) podem usar `PlatformDbContext` só para achar candidatos entre tenants (gravando no contexto de cada tenant) ou para apagar dado técnico vencido.
