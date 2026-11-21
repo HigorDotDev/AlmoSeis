@@ -87,9 +87,11 @@ internal sealed class R2ObjectStorage(IOptions<R2Options> options, TimeProvider 
             Key = storageKey,
             Verb = HttpVerb.PUT,
             ContentType = contentType,
-            // O SDK faz `X-Amz-Expires` = round(`Expires` − relógio dele, em segundos). Meio segundo a mais absorve até 1 s
-            // entre o nosso instante e o da assinatura (GC, máquina carregada), e a URL vale exatamente `UploadUrlMinutes`.
-            Expires = expiresAt.UtcDateTime.AddMilliseconds(500),
+            // O SDK faz `X-Amz-Expires` = round(`Expires` − relógio dele, em segundos), e o relógio dele é o do sistema, não
+            // o `TimeProvider`. Medir a partir do relógio do sistema, com meio segundo de folga para a assinatura, faz a
+            // URL valer exatamente `UploadUrlMinutes`, por mais que o nosso instante esteja atrasado (GC, máquina carregada).
+            // Exceção deliberada ao `TimeProvider` injetado (02 §2.2): aqui importa o relógio do SDK.
+            Expires = TimeProvider.System.GetUtcNow().UtcDateTime.AddMinutes(o.UploadUrlMinutes).AddMilliseconds(500),
             Protocol = Protocol.HTTPS,
         });
         return new UploadUrl(url, "PUT", new Dictionary<string, string> { ["Content-Type"] = contentType }, expiresAt);

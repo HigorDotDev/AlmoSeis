@@ -16,11 +16,12 @@ public sealed class R2OptionsTests
 
     /// O SDK calcula `X-Amz-Expires` = `Expires` − o relógio dele, em segundos arredondados (`Convert.ToInt64`). Se o
     /// instante do `TimeProvider` ficar mais de 0,5 s atrás do relógio do SDK na assinatura (a criação preguiçosa do
-    /// cliente na primeira chamada, uma pausa do GC), saía `899`. Aqui o relógio da aplicação está 0,7 s atrasado.
+    /// cliente na primeira chamada, uma pausa do GC), saía `899`. Aqui o relógio da aplicação chega a 3 s atrasado.
     [Theory]
     [InlineData(0)]
     [InlineData(700)]
     [InlineData(950)]
+    [InlineData(3000)]
     public void Presigned_upload_url_expires_in_exactly_the_configured_minutes(int clockLagMilliseconds)
     {
         var options = Microsoft.Extensions.Options.Options.Create(new R2Options
