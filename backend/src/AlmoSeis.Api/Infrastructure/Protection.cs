@@ -51,6 +51,10 @@ public sealed class RateLimitSettings
     public const string Section = "RateLimiting";
 
     public bool Enabled { get; set; } = true;
+
+    /// Cotações de entrega por **estabelecimento** e dia (ADR-0045 item 11), contadas depois de o slug virar tenant
+    /// (`PublicStoreQuotaMiddleware`): slug antigo, maiúsculas e slug inexistente não abrem cotas novas.
+    public int PublicQuotesPerStorePerDay { get; set; } = 300;
 }
 
 /// ADR-0041: limites dos endpoints públicos, em memória, por réplica, com janela deslizante. Endpoints autenticados
@@ -79,31 +83,33 @@ internal static class RateLimitPolicies
                 Limit(http => IsPublicRead(http) && !PublicRoutes.IsRenderer(http) ? $"public-read:{Ip(http)}" : null, 120, TimeSpan.FromMinutes(1)),
                 Limit(http => IsPublicQuote(http) ? $"public-quote-min:{Ip(http)}" : null, 10, TimeSpan.FromMinutes(1)),
                 Limit(http => IsPublicQuote(http) ? $"public-quote-day:{Ip(http)}" : null, 60, TimeSpan.FromDays(1)),
-                Limit(http => IsPublicQuote(http) ? $"public-quote-store:{StoreSlug(http)}" : null, 300, TimeSpan.FromDays(1)),
                 Limit(http => IsPublicOrder(http) ? $"public-order-min:{Ip(http)}" : null, 5, TimeSpan.FromMinutes(1)),
                 Limit(http => IsPublicOrder(http) ? $"public-order-hour:{Ip(http)}" : null, 20, TimeSpan.FromHours(1)),
                 Limit(http => IsPublicTracking(http) ? $"public-tracking:{Ip(http)}" : null, 60, TimeSpan.FromMinutes(1)));
 
-            o.OnRejected = async (context, cancellationToken) =>
-            {
-                var http = context.HttpContext;
-                var retry = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var after) ? after : TimeSpan.FromSeconds(60);
-                http.Response.Headers.RetryAfter = ((int)Math.Ceiling(retry.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
-                http.Response.StatusCode = ErrorCodes.TooManyRequests.HttpStatus;
-                var problem = new ProblemDetails
-                {
-                    Type = ErrorCodes.TooManyRequests.TypeUri,
-                    Title = ErrorCodes.TooManyRequests.Title,
-                    Status = ErrorCodes.TooManyRequests.HttpStatus,
-                    Instance = http.Request.Path,
-                };
-                problem.Extensions["errorCode"] = ErrorCodes.TooManyRequests.Code;
-                problem.Extensions["traceId"] = System.Diagnostics.Activity.Current?.Id ?? http.TraceIdentifier;
-                await http.RequestServices.GetRequiredService<IProblemDetailsService>()
-                    .WriteAsync(new ProblemDetailsContext { HttpContext = http, ProblemDetails = problem });
-            };
+            o.OnRejected = (context, cancellationToken) => WriteTooManyRequestsAsync(context.HttpContext, context.Lease);
         });
+        services.AddSingleton<PublicStoreQuotaLimiter>();
         return services;
+    }
+
+    /// `429 TooManyRequests` com `Retry-After` (do limitador; sem a informação, 60 s).
+    public static async ValueTask WriteTooManyRequestsAsync(HttpContext http, RateLimitLease lease)
+    {
+        var retry = lease.TryGetMetadata(MetadataName.RetryAfter, out var after) ? after : TimeSpan.FromSeconds(60);
+        http.Response.Headers.RetryAfter = ((int)Math.Ceiling(retry.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        http.Response.StatusCode = ErrorCodes.TooManyRequests.HttpStatus;
+        var problem = new ProblemDetails
+        {
+            Type = ErrorCodes.TooManyRequests.TypeUri,
+            Title = ErrorCodes.TooManyRequests.Title,
+            Status = ErrorCodes.TooManyRequests.HttpStatus,
+            Instance = http.Request.Path,
+        };
+        problem.Extensions["errorCode"] = ErrorCodes.TooManyRequests.Code;
+        problem.Extensions["traceId"] = System.Diagnostics.Activity.Current?.Id ?? http.TraceIdentifier;
+        await http.RequestServices.GetRequiredService<IProblemDetailsService>()
+            .WriteAsync(new ProblemDetailsContext { HttpContext = http, ProblemDetails = problem });
     }
 
     /// Chave nula = a rota não é desta política.
@@ -126,7 +132,7 @@ internal static class RateLimitPolicies
 
     private static bool IsPublicRead(HttpContext http) => HttpMethods.IsGet(http.Request.Method) && Starts(http, PublicRoutes.Stores);
 
-    private static bool IsPublicQuote(HttpContext http) =>
+    public static bool IsPublicQuote(HttpContext http) =>
         HttpMethods.IsPost(http.Request.Method) && Starts(http, PublicRoutes.Stores) && Ends(http, "/delivery-quotes");
 
     private static bool IsPublicOrder(HttpContext http) =>
@@ -137,9 +143,6 @@ internal static class RateLimitPolicies
 
     private static bool Ends(HttpContext http, string suffix) =>
         http.Request.Path.Value!.TrimEnd('/').EndsWith(suffix, StringComparison.OrdinalIgnoreCase);
-
-    private static string StoreSlug(HttpContext http) =>
-        http.Request.Path.Value!.Split('/', StringSplitOptions.RemoveEmptyEntries) is [_, _, _, _, var slug, ..] ? slug.ToLowerInvariant() : "unknown";
 
     private static bool IsPin(HttpContext http) =>
         Starts(http, "/api/v1/auth/pin-login")
@@ -155,6 +158,43 @@ internal static class RateLimitPolicies
     private static bool Starts(HttpContext http, string prefix) => http.Request.Path.StartsWithSegments(prefix, StringComparison.OrdinalIgnoreCase);
 
     private static string Ip(HttpContext http) => http.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+}
+
+/// Cota diária de cotações por estabelecimento (ADR-0045 item 11), em memória e por réplica como os outros limites
+/// (ADR-0041). Partição pelo tenant já resolvido.
+internal sealed class PublicStoreQuotaLimiter(IOptionsMonitor<RateLimitSettings> settings) : IDisposable
+{
+    private readonly PartitionedRateLimiter<Guid> _limiter = PartitionedRateLimiter.Create<Guid, Guid>(tenantId =>
+        RateLimitPartition.GetSlidingWindowLimiter(tenantId, _ => new SlidingWindowRateLimiterOptions
+        {
+            PermitLimit = settings.CurrentValue.PublicQuotesPerStorePerDay,
+            Window = TimeSpan.FromDays(1),
+            SegmentsPerWindow = 6,
+            QueueLimit = 0,
+        }));
+
+    public RateLimitLease Acquire(Guid tenantId) => _limiter.AttemptAcquire(tenantId);
+
+    public void Dispose() => _limiter.Dispose();
+}
+
+/// Depois do `PublicTenantMiddleware`: a cota da cotação conta por tenant, não pelo texto do slug (07 §7.2).
+internal sealed class PublicStoreQuotaMiddleware(RequestDelegate next, PublicStoreQuotaLimiter limiter, IOptionsMonitor<RateLimitSettings> settings)
+{
+    public async Task InvokeAsync(HttpContext context, AlmoSeis.Infrastructure.Tenancy.ITenantContext tenant)
+    {
+        if (settings.CurrentValue.Enabled && RateLimitPolicies.IsPublicQuote(context) && tenant.TenantId is { } tenantId)
+        {
+            using var lease = limiter.Acquire(tenantId);
+            if (!lease.IsAcquired)
+            {
+                await RateLimitPolicies.WriteTooManyRequestsAsync(context, lease);
+                return;
+            }
+        }
+
+        await next(context);
+    }
 }
 
 /// Lê `login`/`installationId` do corpo JSON das rotas públicas limitadas, antes do rate limiter (ADR-0041:

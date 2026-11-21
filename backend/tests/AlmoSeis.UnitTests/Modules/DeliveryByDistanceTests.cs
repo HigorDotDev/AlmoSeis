@@ -62,8 +62,11 @@ public sealed class DeliveryAddressKeyTests
 {
     private static readonly Guid Tenant = Guid.NewGuid();
 
-    private static DeliveryAddressKey Key(string street, string? number = "45", string? neighborhood = "Centro", string? city = null, string? complement = null, Guid? tenant = null) =>
-        DeliveryAddressKey.Create(tenant ?? Tenant, new PublicAddressInput(street, number, complement, neighborhood, city, null, null), "Uberlândia", "MG");
+    private static readonly byte[] Secret = Encoding.UTF8.GetBytes("segredo-de-teste-com-32-caracteres!!");
+
+    private static DeliveryAddressKey Key(
+        string street, string? number = "45", string? neighborhood = "Centro", string? city = null, string? complement = null, Guid? tenant = null, byte[]? secret = null) =>
+        DeliveryAddressKey.Create(tenant ?? Tenant, new PublicAddressInput(street, number, complement, neighborhood, city, null, null), "Uberlândia", "MG", secret ?? Secret);
 
     [Fact]
     public void Case_accents_punctuation_and_street_type_abbreviation_do_not_matter()
@@ -88,6 +91,26 @@ public sealed class DeliveryAddressKeyTests
     [Fact]
     public void Display_is_what_the_customer_typed() =>
         Key("Rua das Palmeiras").Display.ShouldBe("Rua das Palmeiras, 45 - Centro, Uberlândia - MG");
+
+    /// 05 §5.17 0007: HMAC com `Maps:AddressHashSecret`. Sem o segredo, o hash não é recalculável a partir de uma lista de
+    /// endereços (o SHA-256 simples do tenant + endereço era).
+    [Fact]
+    public void Hash_is_keyed_by_the_secret()
+    {
+        var key = Key("Rua das Palmeiras");
+        Key("Rua das Palmeiras", secret: Encoding.UTF8.GetBytes("outro-segredo-com-trinta-e-dois-chars")).Hash.ShouldNotBe(key.Hash);
+        var unkeyed = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(Tenant.ToString("N") + ":" + key.Normalized)));
+        key.Hash.ShouldNotBe(unkeyed);
+        key.Hash.Length.ShouldBe(64);
+    }
+
+    /// 4 casas no cache (cerca de 11 m); a cotação corrente usa o ponto exato.
+    [Fact]
+    public void Cache_keeps_four_decimals()
+    {
+        var coarse = GeocodeCacheEntry.Coarse(new GeoPoint(-18.912345m, -48.270155m));
+        coarse.ShouldBe(new GeoPoint(-18.9123m, -48.2702m));
+    }
 }
 
 /// Localização do restaurante e o que falta para a entrega pela página (ADR-0048 item 3).
@@ -341,8 +364,24 @@ public sealed class MapsProviderTests
         Validate(new MapsOptions { Provider = MapsProvider.Fake }, "Production").Failed.ShouldBeTrue();
         Validate(new MapsOptions { Provider = MapsProvider.Fake }, "Development").Succeeded.ShouldBeTrue();
         Validate(new MapsOptions { Provider = MapsProvider.Osm, Osm = { UserAgent = "app (fulano@example.com)" } }, "Development").Failed.ShouldBeTrue();
-        Validate(new MapsOptions { Provider = MapsProvider.None }, "Production").Succeeded.ShouldBeTrue();
+        Validate(new MapsOptions { Provider = MapsProvider.None, AddressHashSecret = Secret32 }, "Production").Succeeded.ShouldBeTrue();
     }
+
+    /// 05 §5.17 0007: fora de Development, o hash do endereço exige o segredo (Key Vault).
+    [Fact]
+    public void Address_hash_secret_is_required_outside_development()
+    {
+        static ValidateOptionsResult Validate(MapsOptions o, string environment) =>
+            new MapsOptionsValidator(new FakeEnvironment(environment)).Validate(null, o);
+
+        Validate(new MapsOptions { Provider = MapsProvider.None }, "Production").Failed.ShouldBeTrue();
+        Validate(new MapsOptions { Provider = MapsProvider.None }, "Staging").Failed.ShouldBeTrue();
+        Validate(new MapsOptions { Provider = MapsProvider.None, AddressHashSecret = "curto" }, "Production").Failed.ShouldBeTrue();
+        Validate(new MapsOptions { Provider = MapsProvider.None }, "Development").Succeeded.ShouldBeTrue();
+        new MapsOptions().GeocodeCacheDays.ShouldBe(7);
+    }
+
+    private const string Secret32 = "segredo-do-endereco-com-32-caracteres";
 
     private sealed class FakeServer(Func<HttpRequestMessage, string> respond, HttpStatusCode status = HttpStatusCode.OK) : HttpMessageHandler
     {

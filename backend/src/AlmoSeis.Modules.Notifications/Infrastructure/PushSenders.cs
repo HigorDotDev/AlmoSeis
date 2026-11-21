@@ -141,8 +141,16 @@ internal sealed class FakePushSender(ILogger<FakePushSender> logger) : IPushSend
     /// Expo simulada fora do ar (testes): as próximas `calls` chamadas de envio com esse token falham.
     public void FailFor(string token, int calls) => _failures[token] = calls;
 
-    public Task<IReadOnlyList<PushTicket>> SendAsync(IReadOnlyList<PushMessage> messages, CancellationToken cancellationToken)
+    /// Expo simulada lenta (testes): o envio espera esta tarefa antes de responder.
+    public Func<Task>? BeforeSend { get; set; }
+
+    public async Task<IReadOnlyList<PushTicket>> SendAsync(IReadOnlyList<PushMessage> messages, CancellationToken cancellationToken)
     {
+        if (BeforeSend is { } wait)
+        {
+            await wait();
+        }
+
         foreach (var message in messages)
         {
             if (_failures.TryGetValue(message.To, out var left) && left > 0)
@@ -166,7 +174,7 @@ internal sealed class FakePushSender(ILogger<FakePushSender> logger) : IPushSend
             tickets.Add(new PushTicket($"fake-{Interlocked.Increment(ref _sequence)}-{Guid.NewGuid():N}", null));
         }
 
-        return Task.FromResult<IReadOnlyList<PushTicket>>(tickets);
+        return tickets;
     }
 
     public Task<IReadOnlyDictionary<string, PushReceipt>> GetReceiptsAsync(IReadOnlyList<string> ticketIds, CancellationToken cancellationToken) =>

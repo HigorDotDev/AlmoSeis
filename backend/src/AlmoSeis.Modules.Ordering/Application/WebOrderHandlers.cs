@@ -89,11 +89,11 @@ internal sealed class RejectOrderHandler(
         order.Reject(command.Request.ReasonCode, command.Request.Message, tenant.EmployeeId!.Value, now);
         audit.Add("OrderRejected", order.SyncEntityType, order.Id, order.Id,
             before: new { acceptanceStatus = "AWAITING_ACCEPTANCE" },
+            // Só o código: o texto livre da recusa pode ter dado do cliente e fica só no pedido (ADR-0052 item 7).
             after: new
             {
                 acceptanceStatus = "REJECTED",
                 reasonCode = UpperSnakeEnumConverter<RejectionReason>.ToText(order.RejectionReasonCode!.Value),
-                message = order.RejectionMessage,
             });
         return await dtos.BuildAsync(order, cancellationToken);
     }
@@ -188,8 +188,9 @@ internal sealed class WithdrawWebOrderHandler(WebOrderWithdrawal withdrawal) : I
     }
 }
 
-/// Desistência (ADR-0046 item 17): `WITHDRAWN` com auditoria `WEB`, sem ator. Prazo vencido → `WebOrderExpired`; já
-/// aceito, recusado ou desistido → `OrderNotAwaitingAcceptance`.
+/// Desistência (ADR-0046 item 17): `WITHDRAWN` com auditoria `WEB`, sem ator. Idempotente pelo estado: o pedido que já é
+/// desistência volta como está, sem nova auditoria nem evento (a página repete o `POST` quando a resposta se perde).
+/// Prazo vencido → `WebOrderExpired`; aceito ou recusado → `OrderNotAwaitingAcceptance`.
 internal sealed class WebOrderWithdrawal(AppDbContext db, IBusinessDayReader businessDays, IAuditWriter audit, TimeProvider time)
 {
     public async Task<Order> WithdrawAsync(Guid orderId, CancellationToken cancellationToken)
@@ -197,6 +198,11 @@ internal sealed class WebOrderWithdrawal(AppDbContext db, IBusinessDayReader bus
         // FOR SHARE no expediente, como toda escrita de venda: a finalização do fechamento não corre ao mesmo tempo.
         await businessDays.GetOpenAsync(cancellationToken);
         var order = await OrderRules.LoadAsync(db, orderId, cancellationToken);
+        if (order.AcceptanceStatus == AcceptanceStatus.Withdrawn)
+        {
+            return order;
+        }
+
         var before = UpperSnakeEnumConverter<AcceptanceStatus>.ToText(order.AcceptanceStatus);
         order.Withdraw(time.GetUtcNow());
 

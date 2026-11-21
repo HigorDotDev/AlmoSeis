@@ -25,6 +25,7 @@ internal sealed class DeliveryQuoteCalculator(
     IMapsAvailability maps,
     ITenantSettingsReader tenantSettings,
     GeocodeCacheWriter cache,
+    DeliveryAddressHashKey addressKey,
     IIdGenerator ids,
     IOptions<MapsOptions> options,
     TimeProvider time,
@@ -45,7 +46,7 @@ internal sealed class DeliveryQuoteCalculator(
         }
 
         var tenantId = tenant.TenantId!.Value;
-        var key = DeliveryAddressKey.Create(tenantId, address, settings.AddressCity, settings.AddressState);
+        var key = DeliveryAddressKey.Create(tenantId, address, settings.AddressCity, settings.AddressState, addressKey.Secret);
         var now = time.GetUtcNow();
         if (settings.DeliveryFeeMode == DeliveryFeeMode.Fixed)
         {
@@ -170,6 +171,8 @@ internal sealed class GeocodeCacheWriter(DetachedTenantWork detached, IOptions<M
 
         var expiresAt = geocodedAt + TimeSpan.FromDays(settings.GeocodeCacheDays);
         var routed = settings.RouteCacheDays > 0 ? route : null;
+        // 4 casas no cache (05 §5.17 0007); quem chamou continua com o ponto exato para a cotação corrente.
+        point = GeocodeCacheEntry.Coarse(point);
         decimal? originLatitude = routed?.Origin.Latitude, originLongitude = routed?.Origin.Longitude;
         int? meters = routed?.Meters;
         DateTimeOffset? routedAt = routed?.At;
@@ -206,6 +209,7 @@ internal sealed class DeliveryQuoteRedeemer(
     IMapsAvailability maps,
     DeliveryQuoteCalculator calculator,
     DetachedTenantWork detached,
+    DeliveryAddressHashKey addressKey,
     TimeProvider time) : IDeliveryQuoteRedeemer
 {
     public async Task<RedeemedDeliveryQuote> RedeemAsync(Guid? quoteId, PublicAddressInput address, CancellationToken cancellationToken)
@@ -226,7 +230,7 @@ internal sealed class DeliveryQuoteRedeemer(
             throw new BusinessException(ErrorCodes.DeliveryUnavailable);
         }
 
-        var key = DeliveryAddressKey.Create(tenantId, address, settings.AddressCity, settings.AddressState);
+        var key = DeliveryAddressKey.Create(tenantId, address, settings.AddressCity, settings.AddressState, addressKey.Secret);
         if (quote.IsValidAt(time.GetUtcNow()) && quote.AddressHash == key.Hash && quote.SettingsVersion == settings.Version)
         {
             return quote.ToRedeemed();

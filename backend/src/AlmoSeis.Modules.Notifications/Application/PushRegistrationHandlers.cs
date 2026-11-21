@@ -40,13 +40,21 @@ internal sealed class RegisterPushTokenHandler(
         // índice único do token.
         await db.Database.ExecuteSqlAsync($"SELECT pg_advisory_xact_lock(hashtextextended('push-token:' || {token}, 0))", cancellationToken);
 
-        // O mesmo aparelho em outro estabelecimento (troca sem logout) ou em outra instalação sai de lá: a sessão que
-        // comprova ter o token enxerga e apaga só os registros com ele (política `push_token_owner`, 05 §5.17 0006).
-        await db.Database.ExecuteSqlAsync($"SELECT set_config('app.push_token', {token}, true)", cancellationToken);
-        await db.Database.ExecuteSqlAsync(
-            $"DELETE FROM push_registrations WHERE expo_push_token = {token} AND NOT (tenant_id = {tenantId} AND installation_id = {command.InstallationId})",
-            cancellationToken);
-        await db.Database.ExecuteSqlAsync($"SELECT set_config('app.push_token', '', true)", cancellationToken);
+        // O mesmo aparelho em outro estabelecimento (troca sem logout) sai de lá pela função `release_push_token`
+        // (05 §5.17 0007): só quando o registro antigo é desta mesma instalação, sem a sessão enxergar a linha. O token
+        // de outra instalação em outro tenant não é liberado: quem só conhece a string não tira o aviso de ninguém.
+        var released = (await db.Database
+            .SqlQuery<int>($"SELECT release_push_token({token}, {command.InstallationId}) AS \"Value\"")
+            .ToListAsync(cancellationToken)).Single();
+        if (released < 0)
+        {
+            throw new BusinessException(ErrorCodes.PushTokenInUse);
+        }
+
+        // Outra instalação deste estabelecimento com o mesmo token (app reinstalado): filtro do EF + RLS de tenant.
+        await db.Set<PushRegistration>()
+            .Where(r => r.ExpoPushToken == token && r.InstallationId != command.InstallationId)
+            .ExecuteDeleteAsync(cancellationToken);
 
         // Aparelho compartilhado é de um estabelecimento só; fora dele, o título leva o nome quando o usuário tem mais de um.
         var showTenantName = tenant.SharedDeviceId is null && tenant.UserId is { } userId

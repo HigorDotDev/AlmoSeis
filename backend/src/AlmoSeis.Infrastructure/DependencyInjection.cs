@@ -13,6 +13,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
 namespace AlmoSeis.Infrastructure;
 
@@ -59,13 +60,15 @@ public static class DependencyInjection
         services.AddSingleton<IJwtTokenIssuer, JwtTokenIssuer>();
         services.AddSingleton<ISecretHasher, Sha256SecretHasher>();
 
-        // Página de pedidos (ADR-0045): Turnstile e hash do IP.
-        services.AddOptions<TurnstileOptions>().Bind(configuration.GetSection(TurnstileOptions.Section))
-            .Validate(o => !o.Enabled || !string.IsNullOrWhiteSpace(o.SecretKey), "Turnstile:SecretKey é obrigatório com Turnstile:Enabled.")
-            .ValidateOnStart();
+        // Página de pedidos (ADR-0045, ADR-0047): Turnstile, hash do IP e token de acompanhamento. Fora de Development, a
+        // API não sobe sem os segredos nem com a chave de teste do Turnstile.
+        services.AddOptions<TurnstileOptions>().Bind(configuration.GetSection(TurnstileOptions.Section)).ValidateOnStart();
+        services.AddSingleton<IValidateOptions<TurnstileOptions>, TurnstileOptionsValidator>();
         services.AddHttpClient<ITurnstileVerifier, TurnstileVerifier>();
-        services.AddOptions<PublicPageOptions>().Bind(configuration.GetSection(PublicPageOptions.Section));
+        services.AddOptions<PublicPageOptions>().Bind(configuration.GetSection(PublicPageOptions.Section)).ValidateOnStart();
+        services.AddSingleton<IValidateOptions<PublicPageOptions>, PublicPageOptionsValidator>();
         services.AddSingleton<IClientIpHasher, ClientIpHasher>();
+        services.AddSingleton<ITrackingTokenIssuer, TrackingTokenIssuer>();
 
         return services;
     }

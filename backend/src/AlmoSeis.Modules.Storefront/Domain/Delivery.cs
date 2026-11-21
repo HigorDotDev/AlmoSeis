@@ -32,8 +32,10 @@ internal static class DeliveryFeeRule
 /// Endereço do cliente normalizado (ADR-0048 itens 8, 10 e 11): a chave do cache e da conferência da cotação no envio.
 /// Rua, número, bairro, cidade, UF e CEP, sem acento, caixa ou pontuação; abreviações comuns do tipo de logradouro
 /// viram o nome inteiro ("R." → "rua", "Av." → "avenida"). Complemento e referência ficam de fora: não mudam a rota.
-/// O hash leva o tenant (o cache nunca é compartilhado entre restaurantes, ADR-0024) e é o único traço guardado no cache
-/// (ADR-0052 item 5: hash e coordenadas, não o texto).
+/// O hash é HMAC-SHA-256 com o segredo `Maps:AddressHashSecret` sobre o tenant e o endereço normalizado (05 §5.17 0007):
+/// sem o segredo, quem tem uma lista de endereços da cidade não recalcula o hash para descobrir quem pediu. Leva o tenant
+/// (o cache nunca é compartilhado entre restaurantes, ADR-0024) e é o único traço guardado no cache (ADR-0052 item 5:
+/// hash e coordenadas, não o texto).
 internal sealed record DeliveryAddressKey(string Normalized, string Hash, string Display, string Street, string? Number, string? Neighborhood, string? City, string? State, string? ZipCode)
 {
     private static readonly Dictionary<string, string> StreetTypes = new(StringComparer.Ordinal)
@@ -42,7 +44,7 @@ internal sealed record DeliveryAddressKey(string Normalized, string Hash, string
         ["rod"] = "rodovia", ["est"] = "estrada", ["pc"] = "praca", ["pca"] = "praca", ["pr"] = "praca", ["lg"] = "largo",
     };
 
-    public static DeliveryAddressKey Create(Guid tenantId, PublicAddressInput address, string? storeCity, string? storeState)
+    public static DeliveryAddressKey Create(Guid tenantId, PublicAddressInput address, string? storeCity, string? storeState, byte[] secret)
     {
         var street = Clean(address.Street) ?? string.Empty;
         var number = Clean(address.Number);
@@ -52,7 +54,7 @@ internal sealed record DeliveryAddressKey(string Normalized, string Hash, string
         var zip = Clean(address.ZipCode) is { } z && new string(z.Where(char.IsAsciiDigit).ToArray()) is { Length: > 0 } digits ? digits : null;
 
         var normalized = string.Join('|', NormalizeStreet(street), NormalizeNumber(number), Fold(neighborhood), Fold(city), Fold(state), zip ?? string.Empty);
-        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(tenantId.ToString("N") + ":" + normalized)));
+        var hash = Convert.ToHexStringLower(HMACSHA256.HashData(secret, Encoding.UTF8.GetBytes(tenantId.ToString("N") + ":" + normalized)));
 
         var display = new StringBuilder(street);
         if (number is not null)
@@ -204,8 +206,16 @@ internal sealed class DeliveryQuote : Entity, ITenantOwned
 
 /// Cache por tenant (ADR-0048 item 11, ADR-0052 item 5): hash do endereço → coordenadas (e a distância da rota a partir
 /// de um ponto do restaurante). Sem texto do endereço. Só resultado exato entra (aproximado nunca vira taxa).
+/// Coordenadas do cliente com 4 casas (`numeric(7,4)`, cerca de 11 m, 05 §5.17 0007): a cotação corrente usa o ponto
+/// exato do geocodificador; o cache guarda menos do que precisa para apontar a casa.
 internal sealed class GeocodeCacheEntry : ITenantOwned
 {
+    public const int CoordinateDecimals = 4;
+
+    public static GeoPoint Coarse(GeoPoint point) => new(
+        Math.Round(point.Latitude, CoordinateDecimals, MidpointRounding.AwayFromZero),
+        Math.Round(point.Longitude, CoordinateDecimals, MidpointRounding.AwayFromZero));
+
     private GeocodeCacheEntry()
     {
     }

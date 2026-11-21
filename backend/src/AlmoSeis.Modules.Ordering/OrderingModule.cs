@@ -39,6 +39,7 @@ public static class OrderingModule
         services.AddScoped<WebOrderWithdrawal>();
         services.AddScoped<TrackedOrderLoader>();
         services.AddScoped<ITrackingTokenResolver, TrackingTokenResolver>();
+        services.AddSingleton<AlmoSeis.Infrastructure.Idempotency.IReplaySecretSource, TrackingTokenReplaySource>();
         services.AddSingleton<WebOrderRetentionJob>();
         services.AddHostedService(sp => sp.GetRequiredService<WebOrderRetentionJob>());
         // O Payments registra a implementação real; até lá, pedidos sem pagamentos.

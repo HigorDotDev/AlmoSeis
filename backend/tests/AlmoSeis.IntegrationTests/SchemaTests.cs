@@ -27,7 +27,7 @@ public sealed class SchemaTests(PostgresFixture db)
         await reader.ReadAsync(Ct);
 
         reader.GetInt64(0).ShouldBe(44, "tabelas de 05-ddl.md");
-        reader.GetInt64(1).ShouldBe(86, "políticas de RLS de 05 §5.12 e §5.17");
+        reader.GetInt64(1).ShouldBe(87, "políticas de RLS de 05 §5.12 e §5.17");
     }
 
     /// O mesmo teste de fumaça do 05 §5.16, agora sobre o schema criado pela migration.

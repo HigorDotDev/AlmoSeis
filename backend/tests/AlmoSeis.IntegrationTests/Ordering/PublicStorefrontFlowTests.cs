@@ -313,7 +313,23 @@ public sealed class PublicStorefrontFlowTests(PostgresFixture db) : IDisposable
         var replayBody = await replay.ExpectAsync(HttpStatusCode.Created, _api);
 
         replay.Headers.GetValues("Idempotent-Replayed").Single().ShouldBe("true");
-        replayBody.GetProperty("trackingToken").GetString().ShouldBe(firstBody.GetProperty("trackingToken").GetString());
+        var token = firstBody.GetProperty("trackingToken").GetString()!;
+        replayBody.GetProperty("trackingToken").GetString().ShouldBe(token);
+        foreach (var property in firstBody.EnumerateObject())
+        {
+            replayBody.GetProperty(property.Name).GetRawText().ShouldBe(property.Value.GetRawText(), property.Name);
+        }
+
+        replayBody.EnumerateObject().Count().ShouldBe(firstBody.EnumerateObject().Count());
+
+        // ADR-0047: o token não fica em claro em lugar nenhum do banco, nem na resposta guardada da idempotência.
+        (await s.ScalarAsync<long>("SELECT count(*) FROM idempotency_records WHERE tenant_id = @t AND response_body::text LIKE '%' || @k || '%'", ("k", token)))
+            .ShouldBe(0);
+        (await s.ScalarAsync<long>("SELECT count(*) FROM idempotency_records WHERE tenant_id = @t AND user_id IS NULL AND response_body ? 'trackingToken'"))
+            .ShouldBe(0);
+        (await s.ScalarAsync<long>("SELECT count(*) FROM idempotency_records WHERE tenant_id = @t AND user_id IS NULL AND response_body ? 'totalAmount'"))
+            .ShouldBe(1, "o resto do corpo continua guardado");
+        await (await Public().GetAsync($"/api/v1/public/tracking/{token}", Ct)).ExpectAsync(HttpStatusCode.OK, _api);
         (await s.ScalarAsync<long>("SELECT count(*) FROM orders WHERE tenant_id = @t AND origin = 'WEB'")).ShouldBe(1);
         (await s.ScalarAsync<long>("SELECT count(*) FROM idempotency_records WHERE tenant_id = @t AND user_id IS NULL")).ShouldBe(1);
 
@@ -448,11 +464,122 @@ public sealed class PublicStorefrontFlowTests(PostgresFixture db) : IDisposable
         withdrawn.GetProperty("canWithdraw").GetBoolean().ShouldBeFalse();
         withdrawn.GetProperty("timeline").EnumerateArray().Last().GetProperty("step").GetString().ShouldBe("WITHDRAWN");
 
-        var again = await Public().PostAsync($"/api/v1/public/tracking/{token}/withdraw", null, Ct);
-        (await again.ExpectAsync(HttpStatusCode.Conflict, _api)).GetProperty("errorCode").GetString().ShouldBe("OrderNotAwaitingAcceptance");
+        // Repetir a desistência (a resposta se perdeu) devolve o acompanhamento atual, sem nova auditoria (idempotente pelo estado).
+        var again = await (await Public().PostAsync($"/api/v1/public/tracking/{token}/withdraw", null, Ct)).ExpectAsync(HttpStatusCode.OK, _api);
+        again.GetProperty("status").GetString().ShouldBe("WITHDRAWN");
+        again.GetProperty("version").GetInt32().ShouldBe(withdrawn.GetProperty("version").GetInt32());
 
         var audit = await s.ScalarAsync<string>("SELECT origin FROM audit_logs WHERE tenant_id = @t AND operation_type = 'WebOrderWithdrawn'");
         audit.ShouldBe("WEB");
+        (await s.ScalarAsync<long>("SELECT count(*) FROM audit_logs WHERE tenant_id = @t AND operation_type = 'WebOrderWithdrawn'")).ShouldBe(1);
+
+        // Pedido aceito não vira desistência.
+        var accepted = (await (await PlaceOrder(slug, Order(s, phone: "(34) 97777-6666"))).ExpectAsync(HttpStatusCode.Created, _api)).GetProperty("trackingToken").GetString()!;
+        await s.SqlAsync(
+            """
+            UPDATE orders SET acceptance_status = 'ACCEPTED', acceptance_deadline = acceptance_deadline, order_number = 999, accepted_at = now(),
+                   production_status = 'OPEN', fulfillment_status = 'PENDING', fulfillment_status_changed_at = now(), version = version + 1
+             WHERE tenant_id = @t AND customer_phone = '+5534977776666'
+            """);
+        var late = await Public().PostAsync($"/api/v1/public/tracking/{accepted}/withdraw", null, Ct);
+        (await late.ExpectAsync(HttpStatusCode.Conflict, _api)).GetProperty("errorCode").GetString().ShouldBe("OrderNotAwaitingAcceptance");
+    }
+
+
+    /// M1 da revisão: o `ETag` muda com o status calculado (prazo vencido antes do job, sem mudar a versão do pedido) e
+    /// com a configuração da página (o bloco `store`).
+    [Fact]
+    public async Task Tracking_etag_follows_the_computed_status_and_the_page_configuration()
+    {
+        var s = await OrderingScenario.CreateAsync(_api, db);
+        var slug = await ActivateAsync(s);
+        var token = (await (await PlaceOrder(slug, Order(s))).ExpectAsync(HttpStatusCode.Created, _api)).GetProperty("trackingToken").GetString()!;
+
+        async Task<(HttpStatusCode Status, string? ETag, JsonElement Body)> Get(string? ifNoneMatch)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, $"/api/v1/public/tracking/{token}");
+            if (ifNoneMatch is not null)
+            {
+                request.Headers.TryAddWithoutValidation("If-None-Match", ifNoneMatch);
+            }
+
+            var response = await Public().SendAsync(request, Ct);
+            var content = await response.Content.ReadAsStringAsync(Ct);
+            return (response.StatusCode, response.Headers.ETag?.Tag, content.Length == 0 ? default : JsonDocument.Parse(content).RootElement.Clone());
+        }
+
+        var first = await Get(null);
+        first.Status.ShouldBe(HttpStatusCode.OK);
+        (await Get(first.ETag)).Status.ShouldBe(HttpStatusCode.NotModified);
+
+        // Prazo vencido e o job ainda não rodou: a versão do pedido é a mesma, mas o status já é EXPIRED.
+        await s.SqlAsync("UPDATE orders SET acceptance_deadline = now() - interval '1 minute' WHERE tenant_id = @t AND origin = 'WEB'");
+        var expired = await Get(first.ETag);
+        expired.Status.ShouldBe(HttpStatusCode.OK);
+        expired.Body.GetProperty("status").GetString().ShouldBe("EXPIRED");
+        expired.Body.GetProperty("version").GetInt32().ShouldBe(first.Body.GetProperty("version").GetInt32());
+        expired.ETag.ShouldNotBe(first.ETag);
+        (await Get(expired.ETag)).Status.ShouldBe(HttpStatusCode.NotModified);
+
+        // O restaurante mudou o nome público: o bloco `store` mudou.
+        await s.SqlAsync("UPDATE storefront_settings SET public_name = 'Marmitaria Nova', version = version + 1 WHERE tenant_id = @t");
+        var renamed = await Get(expired.ETag);
+        renamed.Status.ShouldBe(HttpStatusCode.OK);
+        renamed.Body.GetProperty("store").GetProperty("name").GetString().ShouldBe("Marmitaria Nova");
+    }
+
+    /// I3 da revisão: o total gravado pelo resolvedor de itens do pedido é conferido contra o carrinho validado. Um cardápio
+    /// da página com outro preço (corrida com uma mudança de preço) dá `409 CartChanged`, e nada fica gravado.
+    [Fact]
+    public async Task Order_total_must_match_the_validated_cart()
+    {
+        using var api = new ApiFactory(db, services => services.Decorate<AlmoSeis.Modules.Storefront.Contracts.IStorefrontGate>(
+            (inner, _) => new PriceSkewedGate(inner)));
+        var s = await OrderingScenario.CreateAsync(api, db);
+        var slug = await ActivateAsync(s, api);
+
+        // A página "viu" a marmita M a 21,00 (o pedido grava 20,00): o cliente confirma 2 × (21,00 + 2,00) + 6,00 = 52,00.
+        var response = await api.CreateClient().PostIdempotentAsync($"/api/v1/public/stores/{slug}/orders", Order(s, expectedTotal: "52.00"), Guid.NewGuid());
+        var problem = await response.ExpectAsync(HttpStatusCode.Conflict, api);
+        problem.GetProperty("errorCode").GetString().ShouldBe("CartChanged");
+        (await s.ScalarAsync<long>("SELECT count(*) FROM orders WHERE tenant_id = @t AND origin = 'WEB'")).ShouldBe(0, "rollback");
+        (await s.ScalarAsync<long>("SELECT count(*) FROM idempotency_records WHERE tenant_id = @t AND user_id IS NULL")).ShouldBe(0);
+        (await s.ScalarAsync<long>("SELECT count(*) FROM order_tracking_tokens WHERE tenant_id = @t")).ShouldBe(0);
+    }
+
+    private sealed class PriceSkewedGate(AlmoSeis.Modules.Storefront.Contracts.IStorefrontGate inner) : AlmoSeis.Modules.Storefront.Contracts.IStorefrontGate
+    {
+        public Task<AlmoSeis.Modules.Storefront.Contracts.StorefrontOrderingContext> GetAsync(CancellationToken cancellationToken) => inner.GetAsync(cancellationToken);
+
+        public async Task<AlmoSeis.Modules.Storefront.Contracts.PublicMenuDto?> GetMenuAsync(DateOnly businessDate, CancellationToken cancellationToken) =>
+            await inner.GetMenuAsync(businessDate, cancellationToken) is { } menu
+                ? menu with { MarmitaSizes = menu.MarmitaSizes.Select(m => m with { Price = m.Price + AlmoSeis.SharedKernel.Domain.Money.Of(1m) }).ToList() }
+                : null;
+    }
+
+    /// M6 da revisão: a cota diária de cotações é por estabelecimento (tenant resolvido), não pelo texto do slug.
+    [Fact]
+    public async Task Quote_quota_is_per_store_not_per_slug_text()
+    {
+        using var api = new ApiFactory(db, services => services.Configure<RateLimitSettings>(o => (o.Enabled, o.PublicQuotesPerStorePerDay) = (true, 2)));
+        var a = await OrderingScenario.CreateAsync(api, db);
+        var b = await OrderingScenario.CreateAsync(api, db);
+        var slugA = await ActivateAsync(a, api);
+        var slugB = await ActivateAsync(b, api);
+        var client = api.CreateClient();
+
+        // Corpo inválido (422) também conta: a cota é de chamadas, e o limite por IP (10/min) não chega a disparar.
+        Task<HttpResponseMessage> Quote(string slug) =>
+            client.PostAsJsonAsync($"/api/v1/public/stores/{slug}/delivery-quotes", new { address = new { street = "" } }, Ct);
+
+        (await Quote(slugA)).StatusCode.ShouldBe(HttpStatusCode.UnprocessableEntity);
+        (await Quote(slugA.ToUpperInvariant())).StatusCode.ShouldBe(HttpStatusCode.UnprocessableEntity, "maiúsculas redirecionam para o mesmo tenant");
+        var limited = await Quote(slugA);
+        (await limited.ExpectAsync(HttpStatusCode.TooManyRequests, api)).GetProperty("errorCode").GetString().ShouldBe("TooManyRequests");
+        limited.Headers.RetryAfter.ShouldNotBeNull();
+        (await Quote(slugA.ToUpperInvariant())).StatusCode.ShouldBe(HttpStatusCode.TooManyRequests, "outro texto do mesmo slug não abre cota nova");
+
+        (await Quote(slugB)).StatusCode.ShouldBe(HttpStatusCode.UnprocessableEntity, "a cota de A não é a de B");
     }
 
     // ---------- Anti-abuso: Turnstile, rate limit, CORS ----------

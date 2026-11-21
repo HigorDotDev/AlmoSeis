@@ -32,13 +32,20 @@ public sealed class MapsOptions
     /// Tempo máximo de cada chamada ao provedor (ADR-0048 item 13).
     public int TimeoutSeconds { get; set; } = 3;
 
-    /// Coordenadas do endereço do cliente no cache por tenant. 30 dias: o limite que os termos do Google permitem para
-    /// latitude/longitude da Geocoding API (ADR-0048 item 11, *a confirmar no contrato*). 0 desliga o cache.
-    public int GeocodeCacheDays { get; set; } = 30;
+    /// Coordenadas do endereço do cliente (4 casas) no cache por tenant. 7 dias (05 §5.17 0007): o bastante para o
+    /// cliente que pede de novo na semana, com menos dado pessoal guardado; os termos do Google permitem até 30 (ADR-0048
+    /// item 11, *a confirmar no contrato*). 0 desliga o cache.
+    public int GeocodeCacheDays { get; set; } = 7;
 
-    /// Metros da rota guardados no cache, enquanto o ponto do restaurante não muda. 0 desliga (cada cotação nova chama a
-    /// Routes API), o que é o seguro se os termos do Google não permitirem guardar o resultado da rota.
-    public int RouteCacheDays { get; set; } = 30;
+    /// Metros da rota guardados no cache, enquanto o ponto do restaurante não muda (nunca além da linha do cache). 0
+    /// desliga (cada cotação nova chama a Routes API), o que é o seguro se os termos do Google não permitirem guardar o
+    /// resultado da rota.
+    public int RouteCacheDays { get; set; } = 7;
+
+    /// Segredo do HMAC do endereço normalizado (chave do cache e da conferência da cotação; 05 §5.17 0007). Key Vault;
+    /// obrigatório fora de Development, com pelo menos 32 caracteres. Vazio em Development → aleatório por processo (o
+    /// cache e as cotações em aberto não valem depois de reiniciar a API). Trocar o segredo invalida o cache inteiro.
+    public string AddressHashSecret { get; set; } = string.Empty;
 
     /// Limpeza das cotações (24 h depois de vencer) e do cache vencido (ADR-0052 item 5).
     public bool RetentionJobEnabled { get; set; } = true;
@@ -105,6 +112,11 @@ internal sealed class MapsOptionsValidator(IHostEnvironment environment) : IVali
             failures.Add("Maps:TimeoutSeconds entre 1 e 30.");
         }
 
+        if (!environment.IsDevelopment() && (string.IsNullOrWhiteSpace(options.AddressHashSecret) || options.AddressHashSecret.Length < 32))
+        {
+            failures.Add("Maps:AddressHashSecret é obrigatório fora de Development (Key Vault), com pelo menos 32 caracteres.");
+        }
+
         if (options.GeocodeCacheDays < 0 || options.RouteCacheDays < 0 || options.RetentionIntervalMinutes < 1)
         {
             failures.Add("Maps:GeocodeCacheDays e Maps:RouteCacheDays ≥ 0; Maps:RetentionIntervalMinutes ≥ 1.");
@@ -134,6 +146,16 @@ internal sealed class MapsOptionsValidator(IHostEnvironment environment) : IVali
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }
+}
+
+/// Segredo do hash do endereço (`Maps:AddressHashSecret`); vazio só em Development (o validador recusa nos outros).
+internal sealed class DeliveryAddressHashKey(IOptions<MapsOptions> options)
+{
+    private static readonly byte[] ProcessSecret = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+
+    public byte[] Secret { get; } = string.IsNullOrEmpty(options.Value.AddressHashSecret)
+        ? ProcessSecret
+        : System.Text.Encoding.UTF8.GetBytes(options.Value.AddressHashSecret);
 }
 
 internal sealed class MapsAvailability(IOptions<MapsOptions> options) : IMapsAvailability

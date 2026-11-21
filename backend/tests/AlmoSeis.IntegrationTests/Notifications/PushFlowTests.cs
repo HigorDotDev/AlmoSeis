@@ -172,7 +172,7 @@ public sealed class PushFlowTests(PostgresFixture db) : IDisposable
             if (attempt < 3)
             {
                 int.Parse(parts[2]).ShouldBeInRange(25, 31);
-                await s.SqlAsync("UPDATE outbox_messages SET available_at = now() WHERE tenant_id = @t AND payload->>'entityId' = @o::text AND available_at > now() + interval '10 seconds' AND payload->'data'->>'kind' = 'WEB_ORDER_AWAITING_ACCEPTANCE'", ("o", second));
+                await s.SqlAsync("UPDATE outbox_messages SET available_at = now() - interval '1 minute' WHERE tenant_id = @t AND payload->>'entityId' = @o::text AND available_at > now() + interval '10 seconds' AND payload->'data'->>'kind' = 'WEB_ORDER_AWAITING_ACCEPTANCE'", ("o", second));
             }
         }
 
@@ -282,8 +282,14 @@ public sealed class PushFlowTests(PostgresFixture db) : IDisposable
         (await Count(b, "SELECT count(*) FROM push_registrations WHERE tenant_id = @t")).ShouldBe(0);
         await (await Register(b.Owner.AccessToken(), tokenB)).ExpectAsync(HttpStatusCode.OK, _api);
 
-        // O mesmo aparelho (mesmo token) agora logado em B, sem logout em A: sai de A.
-        var moved = await _api.EmployeeTokenAsync(db, b.Owner, "CASHIER", "inst_moved");
+        // Quem só conhece a string do token de A, de outra instalação, não tira o aviso de A (05 §5.17 0007).
+        var stranger = await _api.EmployeeTokenAsync(db, b.Owner, "CASHIER", "inst_stranger");
+        (await (await Register(stranger, tokenA)).ExpectAsync(HttpStatusCode.Conflict, _api)).GetProperty("errorCode").GetString().ShouldBe("PushTokenInUse");
+        (await Count(a, "SELECT count(*) FROM push_registrations WHERE tenant_id = @t AND expo_push_token = @k", ("k", tokenA))).ShouldBe(1);
+        (await Count(b, "SELECT count(*) FROM push_registrations WHERE tenant_id = @t AND installation_id = 'inst_stranger'")).ShouldBe(0);
+
+        // O mesmo aparelho (mesma instalação, mesmo token) agora logado em B, sem logout em A: sai de A.
+        var moved = await _api.EmployeeTokenAsync(db, b.Owner, "CASHIER", InstallationOf(a.Owner.AccessToken()));
         await (await Register(moved, tokenA)).ExpectAsync(HttpStatusCode.OK, _api);
         (await Count(a, "SELECT count(*) FROM push_registrations WHERE tenant_id = @t")).ShouldBe(0);
         (await Count(b, "SELECT count(*) FROM push_registrations WHERE tenant_id = @t AND expo_push_token = @k", ("k", tokenA))).ShouldBe(1);
@@ -294,6 +300,100 @@ public sealed class PushFlowTests(PostgresFixture db) : IDisposable
         SentFor(orderA2).ShouldBeEmpty("o aparelho saiu de A");
         SentFor(orderB).Select(m => m.To).Order().ShouldBe(new[] { tokenA, tokenB }.Order());
         SentFor(orderB).ShouldAllBe(m => m.Data["tenantId"] == b.TenantId.ToString());
+    }
+
+    /// RLS da 0007: com a string do token de B, a sessão de A não enxerga nem apaga o registro de B, nem pela antiga
+    /// `app.push_token`; a função só libera o registro da mesma instalação e nunca devolve a linha.
+    [Fact]
+    public async Task Knowing_another_tenants_token_neither_reads_nor_deletes_its_registration()
+    {
+        var a = await OrderingScenario.CreateAsync(_api, db);
+        var b = await OrderingScenario.CreateAsync(_api, db);
+        var tokenB = NewToken();
+        await (await Register(b.Owner.AccessToken(), tokenB)).ExpectAsync(HttpStatusCode.OK, _api);
+        var installationB = InstallationOf(b.Owner.AccessToken());
+
+        await using var connection = new Npgsql.NpgsqlConnection(db.AppConnectionString);
+        await connection.OpenAsync(Ct);
+        async Task<object?> Scalar(string sql)
+        {
+            await using var command = new Npgsql.NpgsqlCommand(sql, connection);
+            command.Parameters.AddWithValue("t", a.TenantId.ToString());
+            command.Parameters.AddWithValue("k", tokenB);
+            command.Parameters.AddWithValue("i", installationB);
+            return await command.ExecuteScalarAsync(Ct);
+        }
+
+        await Scalar("SELECT set_config('app.tenant_id', @t, false), set_config('app.push_token', @k, false)");
+        ((long)(await Scalar("SELECT count(*) FROM push_registrations WHERE expo_push_token = @k"))!).ShouldBe(0, "A não vê o registro de B pelo token");
+        ((int)(await Scalar("WITH d AS (DELETE FROM push_registrations WHERE expo_push_token = @k RETURNING 1) SELECT count(*)::int FROM d"))!).ShouldBe(0);
+        ((int)(await Scalar("SELECT release_push_token(@k, 'inst_de_a')"))!).ShouldBe(-1, "outra instalação não libera");
+        (await Count(b, "SELECT count(*) FROM push_registrations WHERE tenant_id = @t AND expo_push_token = @k", ("k", tokenB))).ShouldBe(1);
+
+        // A mesma instalação (o aparelho de B que entrou em A) libera: 1 linha, sem ver nenhuma coluna dela.
+        ((int)(await Scalar("SELECT release_push_token(@k, @i)"))!).ShouldBe(1);
+        (await Count(b, "SELECT count(*) FROM push_registrations WHERE tenant_id = @t")).ShouldBe(0);
+        await Should.ThrowAsync<Npgsql.PostgresException>(() => Scalar("SELECT app_push_token()"));
+    }
+
+    /// 07 §7.10: o push roda fora da transação do lote. Com a Expo lenta, a mensagem reservada não fica travada
+    /// (`FOR UPDATE` já liberado) e o evento de tempo real do mesmo pedido sai antes de o push terminar.
+    [Fact]
+    public async Task Slow_push_neither_holds_the_batch_locks_nor_delays_realtime_events()
+    {
+        var s = await OrderingScenario.CreateAsync(_api, db);
+        var token = NewToken();
+        await (await Register(s.Owner.AccessToken(), token)).ExpectAsync(HttpStatusCode.OK, _api);
+        await DispatchAsync();
+
+        var orderId = await s.SubmitWebOrderAsync();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Push.BeforeSend = () =>
+        {
+            entered.TrySetResult();
+            return release.Task;
+        };
+
+        var dispatcher = _api.Services.GetRequiredService<OutboxDispatcher>();
+        Task<int> consumers;
+        try
+        {
+            consumers = dispatcher.DispatchConsumerBatchAsync(Ct);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+            // A Expo ainda não respondeu: outra sessão altera a mensagem do push sem esperar lock nenhum...
+            await s.SqlAsync(
+                """
+                SET lock_timeout = '1s';
+                UPDATE outbox_messages SET last_error = last_error
+                 WHERE tenant_id = @t AND event_type = 'WebOrderPushRequested' AND payload->>'entityId' = @o::text
+                """, ("o", orderId));
+            (await s.ScalarAsync<long>(
+                """
+                SELECT count(*) FROM outbox_messages
+                 WHERE tenant_id = @t AND event_type = 'WebOrderPushRequested' AND payload->>'entityId' = @o::text
+                   AND processed_at IS NULL AND attempts = 1 AND available_at > now() + interval '60 seconds'
+                """, ("o", orderId))).ShouldBe(1, "reservada com lease, fora da transação");
+
+            // ...e o laço de tempo real publica o evento do mesmo pedido enquanto o push espera.
+            (await dispatcher.DispatchRealtimeBatchAsync(Ct).WaitAsync(TimeSpan.FromSeconds(30), Ct)).ShouldBeGreaterThan(0);
+            (await Count(s,
+                "SELECT count(*) FROM outbox_messages WHERE tenant_id = @t AND event_type = 'OrderAwaitingAcceptance' AND processed_at IS NOT NULL AND payload->>'entityId' = @o::text",
+                ("o", orderId))).ShouldBe(1);
+            consumers.IsCompleted.ShouldBeFalse("o push ainda está esperando a Expo");
+        }
+        finally
+        {
+            Push.BeforeSend = null;
+            release.TrySetResult();
+        }
+
+        await consumers.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        SentFor(orderId).Count.ShouldBe(1);
+        (await Count(s,
+            "SELECT count(*) FROM outbox_messages WHERE tenant_id = @t AND event_type = 'WebOrderPushRequested' AND payload->'data'->>'kind' = 'WEB_ORDER_AWAITING_ACCEPTANCE' AND processed_at IS NOT NULL AND available_at IS NULL AND payload->>'entityId' = @o::text",
+            ("o", orderId))).ShouldBe(1);
     }
 
     [Fact]
@@ -407,7 +507,7 @@ public sealed class PushFlowTests(PostgresFixture db) : IDisposable
 
     private static Task MakeReminderDueAsync(OrderingScenario s, Guid orderId) =>
         s.SqlAsync(
-            "UPDATE outbox_messages SET available_at = now() - interval '1 second' WHERE tenant_id = @t AND payload->>'entityId' = @o::text AND payload->'data'->>'kind' = 'WEB_ORDER_REMINDER'",
+            "UPDATE outbox_messages SET available_at = now() - interval '1 minute' WHERE tenant_id = @t AND payload->>'entityId' = @o::text AND payload->'data'->>'kind' = 'WEB_ORDER_REMINDER'",
             ("o", orderId));
 
     private async Task AcceptAsync(OrderingScenario s, Guid orderId)

@@ -397,33 +397,41 @@ DO $$ BEGIN
   RAISE NOTICE 'ok: cotacao e cache de geocodificacao isolados';
 END $$;
 
--- Push: isolado; só quem comprova ter o token (o aparelho que trocou de estabelecimento) vê e apaga o registro de A
+-- Push: isolado. O mesmo token não mostra o registro de A; só a mesma instalação (o aparelho que trocou de
+-- estabelecimento) o libera, pela função da 0007, que não devolve a linha
 DO $$ BEGIN
   IF (SELECT count(*) FROM push_registrations) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve registro de push de A'; END IF;
   IF (SELECT count(*) FROM push_deliveries) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve entregas de push de A'; END IF;
   DELETE FROM push_registrations WHERE installation_id = 'inst_a';
-  IF FOUND THEN RAISE EXCEPTION 'FALHOU: tenant B apagou registro de push de A sem o token'; END IF;
+  IF FOUND THEN RAISE EXCEPTION 'FALHOU: tenant B apagou registro de push de A'; END IF;
   RAISE NOTICE 'ok: registro e entregas de push isolados';
 END $$;
 
 DO $$ BEGIN
-  PERFORM set_config('app.push_token', 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]', false);
-  IF (SELECT count(*) FROM push_registrations) <> 1 THEN RAISE EXCEPTION 'FALHOU: dono do token nao ve o registro'; END IF;
-  UPDATE push_registrations SET web_orders_enabled = false WHERE installation_id = 'inst_a';
-  IF FOUND THEN RAISE EXCEPTION 'FALHOU: tenant B alterou registro de push de A'; END IF;
-  DELETE FROM push_registrations WHERE expo_push_token = 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]';
-  IF NOT FOUND THEN RAISE EXCEPTION 'FALHOU: dono do token nao apagou o registro antigo'; END IF;
-  PERFORM set_config('app.push_token', '', false);
-  RAISE NOTICE 'ok: so o dono do token tira o aparelho do outro tenant';
+  IF (SELECT count(*) FROM push_registrations WHERE expo_push_token = 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]') <> 0 THEN
+    RAISE EXCEPTION 'FALHOU: tenant B ve o registro de A pelo token';
+  END IF;
+  IF release_push_token('ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]', 'inst_b') <> -1 THEN
+    RAISE EXCEPTION 'FALHOU: outra instalacao liberou o token de A';
+  END IF;
+  IF release_push_token('ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]', 'inst_a') <> 1 THEN
+    RAISE EXCEPTION 'FALHOU: a mesma instalacao nao liberou o token';
+  END IF;
+  RAISE NOTICE 'ok: so a mesma instalacao libera o token de push de outro tenant';
 END $$;
 
--- Página: slug e token têm leitura aberta (a resolução vem antes do tenant); perfil e hash do IP ficam isolados
+-- Página: o slug tem leitura aberta (a resolução vem antes do tenant); o token só pela função de resolução da 0007,
+-- que devolve o tenant e o prazo; perfil e hash do IP ficam isolados
 DO $$ BEGIN
   IF (SELECT count(*) FROM store_slugs WHERE slug = 'marmitaria-a') <> 1 THEN RAISE EXCEPTION 'FALHOU: slug de A nao resolvido'; END IF;
-  IF (SELECT count(*) FROM order_tracking_tokens WHERE token_hash = repeat('a', 64)) <> 1 THEN RAISE EXCEPTION 'FALHOU: token nao resolvido'; END IF;
+  IF (SELECT count(*) FROM order_tracking_tokens) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B le tokens de A'; END IF;
+  IF (SELECT tenant_id FROM resolve_tracking_token(repeat('a', 64))) IS DISTINCT FROM 'aaaaaaaa-0000-0000-0000-000000000001' THEN
+    RAISE EXCEPTION 'FALHOU: token nao resolvido';
+  END IF;
+  IF EXISTS (SELECT 1 FROM resolve_tracking_token(repeat('9', 64))) THEN RAISE EXCEPTION 'FALHOU: token inexistente resolvido'; END IF;
   IF (SELECT count(*) FROM storefront_settings) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve o perfil de A'; END IF;
   IF (SELECT count(*) FROM web_order_intakes) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve o IP de A'; END IF;
-  RAISE NOTICE 'ok: slug e token resolviveis; perfil e IP isolados';
+  RAISE NOTICE 'ok: slug e token resolviveis, token so por hash; perfil e IP isolados';
 END $$;
 
 DO $$ BEGIN

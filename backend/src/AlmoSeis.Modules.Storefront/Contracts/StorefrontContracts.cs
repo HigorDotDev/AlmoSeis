@@ -202,7 +202,8 @@ public sealed record StorefrontOrderingContext(
     PublicStoreAddressDto? Address,
     bool PickupAvailable,
     bool DeliveryAvailable,
-    DateOnly? BusinessDate);
+    DateOnly? BusinessDate,
+    int SettingsVersion = 0);
 
 public interface IStorefrontGate
 {

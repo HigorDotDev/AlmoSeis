@@ -56,7 +56,7 @@ internal sealed class StorefrontGate(
         var slug = await UpdateStorefrontHandler.CurrentSlugAsync(db, tenantId, cancellationToken);
         return new StorefrontOrderingContext(
             storeStatus, slug, settings.PublicName, settings.ContactPhone, settings.PublicAddress,
-            settings.OffersPickup, settings.IsDeliveryAvailableOnPage(maps.IsConfigured), date);
+            settings.OffersPickup, settings.IsDeliveryAvailableOnPage(maps.IsConfigured), date, settings.Version);
     }
 
     public Task<PublicMenuDto?> GetMenuAsync(DateOnly businessDate, CancellationToken cancellationToken) =>

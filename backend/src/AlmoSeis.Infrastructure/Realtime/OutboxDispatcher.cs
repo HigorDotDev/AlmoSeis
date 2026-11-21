@@ -43,11 +43,21 @@ public sealed class OutboxOptions
 
     /// Depois disso a mensagem fica parada com `last_error` (log de erro), sem novas tentativas.
     public int MaxAttempts { get; set; } = 10;
+
+    /// Reserva de uma mensagem de consumidor interno enquanto ele roda fora da transação (`available_at = agora + isto`).
+    /// Precisa passar do pior caso do consumidor (o push: lotes de 100 com até 5 s cada). Se a réplica cair no meio, outra
+    /// pega a mensagem depois disso, e o consumidor deduplica (`push_deliveries`; apagar a imagem antiga de novo é inócuo).
+    public int ConsumerLeaseSeconds { get; set; } = 120;
 }
 
-/// 07 §7.10: lê o outbox com `FOR UPDATE SKIP LOCKED` (seguro com várias réplicas), publica e marca processado.
-/// Entrega pelo menos uma vez; o app deduplica por `eventId`/`seq` (ADR-0031). Mensagem com `available_at` no futuro
-/// (agendada, ou nova tentativa com espera) fica para depois.
+/// 07 §7.10: dois laços independentes sobre o outbox, cada um com `FOR UPDATE SKIP LOCKED` (seguro com várias réplicas).
+/// - **Tempo real** (eventos sem consumidor interno): publica no SignalR e marca processado numa transação curta.
+/// - **Consumidores internos** (`IOutboxConsumer`: o push pela Expo, a imagem antiga no R2): reserva o lote numa
+///   transação curta (`attempts + 1`, `available_at = agora + lease`), confirma, chama o consumidor **fora** de qualquer
+///   transação e grava o resultado de cada mensagem numa instrução própria. Uma chamada HTTP lenta não segura locks nem
+///   atrasa os eventos de tempo real, que têm o próprio laço.
+/// Entrega pelo menos uma vez; o app deduplica por `eventId`/`seq` (ADR-0031) e cada consumidor deduplica o seu efeito.
+/// Mensagem com `available_at` no futuro (agendada, reservada ou nova tentativa com espera) fica para depois.
 public sealed class OutboxDispatcher(
     IServiceScopeFactory scopes,
     IRealtimePublisher publisher,
@@ -58,32 +68,45 @@ public sealed class OutboxDispatcher(
 {
     private readonly Dictionary<string, IOutboxConsumer> _consumers = consumers.ToDictionary(c => c.EventType);
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    private string[] ConsumerTypes => [.. _consumers.Keys];
+
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.Value.Enabled)
         {
-            return;
+            return Task.CompletedTask;
         }
 
+        return Task.WhenAll(
+            LoopAsync(DispatchRealtimeBatchAsync, "tempo real", stoppingToken),
+            LoopAsync(DispatchConsumerBatchAsync, "consumidores", stoppingToken));
+    }
+
+    private async Task LoopAsync(Func<CancellationToken, Task<int>> dispatch, string name, CancellationToken stoppingToken)
+    {
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(options.Value.PollMilliseconds), time);
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
             try
             {
-                while (await DispatchBatchAsync(stoppingToken) == options.Value.BatchSize)
+                while (await dispatch(stoppingToken) == options.Value.BatchSize)
                 {
                     // Lote cheio: há mais esperando, sem aguardar o próximo tick.
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                logger.LogError(ex, "Falha no dispatcher do outbox.");
+                logger.LogError(ex, "Falha no dispatcher do outbox ({Loop}).", name);
             }
         }
     }
 
-    /// Um lote numa transação. Público para os testes dispararem sem esperar o timer.
-    public async Task<int> DispatchBatchAsync(CancellationToken cancellationToken)
+    /// Os dois laços, um depois do outro. Público para os testes dispararem sem esperar o timer.
+    public async Task<int> DispatchBatchAsync(CancellationToken cancellationToken) =>
+        await DispatchRealtimeBatchAsync(cancellationToken) + await DispatchConsumerBatchAsync(cancellationToken);
+
+    /// Eventos sem consumidor interno: SignalR e `processed_at` numa transação curta (a publicação é em memória).
+    public async Task<int> DispatchRealtimeBatchAsync(CancellationToken cancellationToken)
     {
         await using var scope = scopes.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<PlatformDbContext>();
@@ -91,11 +114,13 @@ public sealed class OutboxDispatcher(
 
         var o = options.Value;
         var now = time.GetUtcNow();
+        var types = ConsumerTypes;
         var batch = await db.Set<OutboxMessage>()
             .FromSql($"""
                 SELECT * FROM outbox_messages
                  WHERE processed_at IS NULL AND attempts < {o.MaxAttempts}
                    AND (available_at IS NULL OR available_at <= {now})
+                   AND event_type <> ALL ({types})
                  ORDER BY occurred_at
                  LIMIT {o.BatchSize}
                    FOR UPDATE SKIP LOCKED
@@ -104,38 +129,18 @@ public sealed class OutboxDispatcher(
 
         foreach (var message in batch)
         {
-            _consumers.TryGetValue(message.EventType, out var consumer);
             try
             {
-                if (consumer is not null)
-                {
-                    using var envelope = System.Text.Json.JsonDocument.Parse(message.Payload);
-                    await consumer.HandleAsync(message.TenantId, envelope.RootElement, cancellationToken);
-                }
-                else
-                {
-                    await publisher.PublishAsync(message.TenantId, message.EventType, message.Payload, cancellationToken);
-                }
-
+                await publisher.PublishAsync(message.TenantId, message.EventType, message.Payload, cancellationToken);
                 message.ProcessedAt = time.GetUtcNow();
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 message.Attempts++;
-                message.LastError = ex.Message.Length > 500 ? ex.Message[..500] : ex.Message;
-                if (consumer?.MaxAttempts is { } consumerMax && message.Attempts >= consumerMax)
-                {
-                    // Desistência do próprio consumidor: sai da fila (a retenção apaga em 7 dias) com o erro guardado.
-                    message.ProcessedAt = time.GetUtcNow();
-                    logger.LogError(ex, "Mensagem {MessageId} ({EventType}) do outbox desistida após {Attempts} tentativas.", message.Id, message.EventType, message.Attempts);
-                }
-                else if (message.Attempts >= o.MaxAttempts)
+                message.LastError = Truncate(ex.Message);
+                if (message.Attempts >= o.MaxAttempts)
                 {
                     logger.LogError(ex, "Mensagem {MessageId} do outbox desistida após {Attempts} tentativas.", message.Id, message.Attempts);
-                }
-                else if (consumer?.RetryDelay is { } delay && delay > TimeSpan.Zero)
-                {
-                    message.AvailableAt = time.GetUtcNow() + delay;
                 }
             }
         }
@@ -144,9 +149,115 @@ public sealed class OutboxDispatcher(
         await transaction.CommitAsync(cancellationToken);
         return batch.Count;
     }
+
+    /// Mensagens dos consumidores internos: reserva curta, consumidor fora da transação, resultado por mensagem.
+    public async Task<int> DispatchConsumerBatchAsync(CancellationToken cancellationToken)
+    {
+        if (_consumers.Count == 0)
+        {
+            return 0;
+        }
+
+        var reserved = await ReserveAsync(cancellationToken);
+        foreach (var message in reserved)
+        {
+            var consumer = _consumers[message.EventType];
+            Exception? failure = null;
+            try
+            {
+                using var envelope = System.Text.Json.JsonDocument.Parse(message.Payload);
+                await consumer.HandleAsync(message.TenantId, envelope.RootElement, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                failure = ex;
+            }
+
+            // O que já aconteceu (o push saiu) é gravado mesmo com a parada pedida: sem o token de cancelamento.
+            await CompleteAsync(message, consumer, failure, CancellationToken.None);
+        }
+
+        return reserved.Count;
+    }
+
+    private async Task<List<ReservedMessage>> ReserveAsync(CancellationToken cancellationToken)
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<PlatformDbContext>();
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+
+        var o = options.Value;
+        var now = time.GetUtcNow();
+        var types = ConsumerTypes;
+        var batch = await db.Set<OutboxMessage>()
+            .FromSql($"""
+                SELECT * FROM outbox_messages
+                 WHERE processed_at IS NULL AND attempts < {o.MaxAttempts}
+                   AND (available_at IS NULL OR available_at <= {now})
+                   AND event_type = ANY ({types})
+                 ORDER BY occurred_at
+                 LIMIT {o.BatchSize}
+                   FOR UPDATE SKIP LOCKED
+                """)
+            .ToListAsync(cancellationToken);
+
+        var lease = now + TimeSpan.FromSeconds(o.ConsumerLeaseSeconds);
+        foreach (var message in batch)
+        {
+            // A tentativa conta na reserva: se a réplica cair no meio, a mensagem não volta para sempre.
+            message.Attempts++;
+            message.AvailableAt = lease;
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return batch.Select(m => new ReservedMessage(m.Id, m.TenantId, m.EventType, m.Payload, m.Attempts)).ToList();
+    }
+
+    /// Uma instrução por mensagem (transação implícita e curta), só se ninguém a concluiu nesse meio-tempo.
+    private async Task CompleteAsync(ReservedMessage message, IOutboxConsumer consumer, Exception? failure, CancellationToken cancellationToken)
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<PlatformDbContext>();
+        var now = time.GetUtcNow();
+
+        if (failure is null)
+        {
+            await db.Database.ExecuteSqlAsync(
+                $"UPDATE outbox_messages SET processed_at = {now}, available_at = NULL WHERE id = {message.Id} AND processed_at IS NULL",
+                cancellationToken);
+            return;
+        }
+
+        var error = Truncate(failure.Message);
+        DateTimeOffset? processedAt = null;
+        DateTimeOffset? availableAt = now + consumer.RetryDelay;
+        if (consumer.MaxAttempts is { } consumerMax && message.Attempts >= consumerMax)
+        {
+            // Desistência do próprio consumidor: sai da fila (a retenção apaga em 7 dias) com o erro guardado.
+            processedAt = now;
+            availableAt = null;
+            logger.LogError(failure, "Mensagem {MessageId} ({EventType}) do outbox desistida após {Attempts} tentativas.", message.Id, message.EventType, message.Attempts);
+        }
+        else if (message.Attempts >= options.Value.MaxAttempts)
+        {
+            logger.LogError(failure, "Mensagem {MessageId} do outbox desistida após {Attempts} tentativas.", message.Id, message.Attempts);
+        }
+
+        await db.Database.ExecuteSqlAsync(
+            $"""
+            UPDATE outbox_messages SET last_error = {error}, processed_at = {processedAt}, available_at = {availableAt}
+             WHERE id = {message.Id} AND processed_at IS NULL
+            """,
+            cancellationToken);
+    }
+
+    private static string Truncate(string message) => message.Length > 500 ? message[..500] : message;
+
+    private sealed record ReservedMessage(Guid Id, Guid TenantId, string EventType, string Payload, int Attempts);
 }
 
-/// 07 §7.11: limpeza diária do feed (7 dias), da idempotência expirada e do outbox processado.
+// 07 §7.11: limpeza diária do feed (7 dias), da idempotência expirada e do outbox processado.
 /// Advisory lock: uma execução por vez, mesmo com várias réplicas.
 public sealed class SyncRetentionJob(IServiceScopeFactory scopes, TimeProvider time, ILogger<SyncRetentionJob> logger) : BackgroundService
 {

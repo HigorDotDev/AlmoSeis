@@ -19,7 +19,18 @@ public sealed class IdempotencyOptions
 }
 
 /// Resposta guardada de uma operação concluída (ADR-0033).
-public sealed record StoredResponse(int Status, string? Body);
+public sealed record StoredResponse(int Status, string? Body, Guid? ResourceId = null);
+
+/// Campo da resposta que leva um segredo do cliente e por isso **não** fica no corpo guardado (ADR-0047: o token de
+/// acompanhamento só existe em hash). O filtro tira o campo antes de guardar e, no reenvio, pede o valor de novo a quem
+/// sabe recalculá-lo a partir do recurso criado (`resource_id`), no tenant da sessão.
+public interface IReplaySecretSource
+{
+    /// Nome do campo no JSON (camelCase), ex.: `trackingToken`.
+    string Field { get; }
+
+    string Recreate(Guid tenantId, Guid resourceId);
+}
 
 public abstract record IdempotencyBegin
 {
@@ -36,6 +47,10 @@ public interface IIdempotencyStore
 {
     /// `KeyReused` (422) e `OperationInProgress` (409) saem como BusinessException.
     Task<IdempotencyBegin> TryBeginAsync(Guid key, string endpoint, string requestHash, CancellationToken cancellationToken);
+
+    /// Sem transação nem gravação: a resposta de uma operação já concluída com a mesma chave, rota e corpo (nulo se não
+    /// há). Usado antes da transação nas rotas públicas, para o reenvio não repetir o Turnstile nem o mapa (07 §7.4).
+    Task<StoredResponse?> FindCompletedAsync(Guid key, string endpoint, string requestHash, CancellationToken cancellationToken);
 
     Task CompleteAsync(Guid key, int responseStatus, string? responseBody, Guid? resourceId, CancellationToken cancellationToken);
 }
@@ -85,15 +100,23 @@ internal sealed class IdempotencyStore(
         var existing = await db.Set<IdempotencyRecord>().AsNoTracking()
             .SingleAsync(r => r.Key == key, cancellationToken);
 
-        // Outro usuário (ou anônimo × autenticado), outra rota ou outro corpo: a chave não pode ser reaproveitada.
-        if (existing.UserId != userId || existing.Endpoint != endpoint || existing.RequestHash != requestHash)
-        {
-            throw new BusinessException(ErrorCodes.IdempotencyKeyReused);
-        }
-
         // Só registros COMPLETED ficam visíveis: o IN_PROGRESS de outra transação é desfeito ou concluído no commit dela.
-        return new IdempotencyBegin.Replay(new StoredResponse(existing.ResponseStatus!.Value, existing.ResponseBody));
+        return new IdempotencyBegin.Replay(Replayable(existing, userId, endpoint, requestHash));
     }
+
+    public async Task<StoredResponse?> FindCompletedAsync(Guid key, string endpoint, string requestHash, CancellationToken cancellationToken)
+    {
+        Guid? userId = tenant.IsAnonymous ? null : tenant.UserId;
+        var existing = await db.Set<IdempotencyRecord>().AsNoTracking()
+            .SingleOrDefaultAsync(r => r.Key == key && r.Status == "COMPLETED", cancellationToken);
+        return existing is null ? null : Replayable(existing, userId, endpoint, requestHash);
+    }
+
+    /// Outro usuário (ou anônimo × autenticado), outra rota ou outro corpo: a chave não pode ser reaproveitada.
+    private static StoredResponse Replayable(IdempotencyRecord existing, Guid? userId, string endpoint, string requestHash) =>
+        existing.UserId != userId || existing.Endpoint != endpoint || existing.RequestHash != requestHash
+            ? throw new BusinessException(ErrorCodes.IdempotencyKeyReused)
+            : new StoredResponse(existing.ResponseStatus!.Value, existing.ResponseBody, existing.ResourceId);
 
     public async Task CompleteAsync(Guid key, int responseStatus, string? responseBody, Guid? resourceId, CancellationToken cancellationToken)
     {

@@ -146,6 +146,7 @@ Conflito de versão (`409`) traz o estado atual em `current` (ADR-0034):
 | 403 | `CaptchaFailed` | envio pela página sem o token do Turnstile ou com token inválido, vencido ou repetido (ADR-0045 item 12) |
 | 429 | `TooManyPendingOrders` | o telefone já tem 2 pedidos aguardando aceite no restaurante, ou o IP já tem 3 (ADR-0045 item 13) |
 | 410 | `TrackingExpired` | acompanhamento com mais de 7 dias (ADR-0047 item 4) |
+| 409 | `PushTokenInUse` | `PUT /devices/push-token` com um token já registrado por **outra instalação** em outro estabelecimento (05 §5.17 0007, ADR-0049 item 4). O registro do outro aparelho não é tocado. O app não mostra erro: tenta de novo na próxima abertura (o registro antigo some no logout dele ou em 30 dias sem uso) |
 
 ---
 
@@ -457,7 +458,7 @@ O app registra o token do Expo da **instalação atual** no estabelecimento da s
 - `webOrdersEnabled`: a opção "Avisar pedidos do site com o app fechado" (item 6), ligada no primeiro registro. `null` ou ausente mantém a atual.
 - `receivesWebOrders` = a opção está ligada **e** o funcionário da sessão tem `orders.accept` agora. O token nunca volta na resposta.
 - Login por PIN (aparelho compartilhado): o registro fica ligado ao aparelho, e vale o último funcionário que entrou por PIN, mesmo depois do tempo ocioso.
-- O mesmo token registrado em outro estabelecimento (o aparelho trocou sem logout) ou em outra instalação sai de lá: um token tem um registro só. Push nunca vai para um aparelho registrado em outro tenant.
+- Um token tem um registro só. O mesmo token registrado **por esta instalação** em outro estabelecimento (o aparelho trocou sem logout) sai de lá; registrado por outra instalação deste estabelecimento (app reinstalado), também. Registrado por **outra instalação em outro estabelecimento** → `409 PushTokenInUse`, e o registro de lá continua: quem só conhece a string do token não tira o aviso de outro aparelho. Push nunca vai para um aparelho registrado em outro tenant.
 - Fora do bloqueio da assinatura (`402`), como `/auth/*`: é configuração do aparelho.
 
 #### `DELETE /devices/push-token` — autenticado
@@ -2328,7 +2329,7 @@ Rotas **anônimas**, sem `Authorization` (se vier, é ignorado) e sem `X-App-Ver
 |---|---|
 | `GET /public/stores/{slug}` | `public-read`: 120/min por IP. O servidor da página (ADR-0051) com `X-Web-Renderer-Key` correto fica fora do limite |
 | `POST /public/stores/{slug}/orders` [I] | `public-order`: 5/min e 20/h por IP |
-| `POST /public/stores/{slug}/delivery-quotes` | `public-quote`: 10/min e 60/dia por IP; 300/dia por slug |
+| `POST /public/stores/{slug}/delivery-quotes` | `public-quote`: 10/min e 60/dia por IP; 300/dia por **estabelecimento** (contado depois de o slug virar tenant: slug antigo e maiúsculas contam na mesma cota; `RateLimiting:PublicQuotesPerStorePerDay`) |
 | `GET /public/tracking/{trackingToken}` | `public-tracking`: 60/min por IP |
 | `POST /public/tracking/{trackingToken}/withdraw` | `public-order` |
 
@@ -2455,8 +2456,9 @@ Headers: `Idempotency-Key: {uuid}` (obrigatório, gerado quando o cliente toca e
 ```
 
 - **Preço sempre do servidor** (ADR-0044 item 21): `itemsTotal` = Σ (tamanho + adicionais) × quantidade + bebidas = 2 × (20,00 + 2,00) + 6,00 = **50,00**. O corpo não tem preço; campos de preço enviados são ignorados.
-- `trackingToken`: 128 bits aleatórios em base64url (22 caracteres). O servidor guarda só o SHA-256; o token aparece **só aqui** (e na repetição idempotente desta resposta). A página guarda no `localStorage` e monta `/{slug}/pedido/{trackingToken}` (ADR-0047 itens 1, 2 e 10).
-- A resposta não tem nome, telefone nem endereço: o corpo fica guardado no registro de idempotência por 72 h (ADR-0052 item 5).
+- `trackingToken`: 128 bits em base64url (22 caracteres), derivados do pedido com um segredo do servidor (HMAC com `PublicPage:TrackingTokenSecret`): imprevisível para quem não tem o segredo e o mesmo para o mesmo pedido. O servidor guarda só o SHA-256; o token aparece **só aqui** (e na repetição idempotente desta resposta, que o recalcula). A página guarda no `localStorage` e monta `/{slug}/pedido/{trackingToken}` (ADR-0047 itens 1, 2 e 10).
+- A resposta não tem nome, telefone nem endereço: o corpo fica guardado no registro de idempotência por 72 h (ADR-0052 item 5), **sem** o `trackingToken` (o reenvio o recalcula a partir do pedido; o token nunca fica em claro no banco).
+- O Turnstile e a conferência da cotação de entrega (que pode recalcular no provedor de mapas) rodam **antes** da transação do envio; um reenvio de pedido já gravado responde antes deles (o token do Turnstile, de uso único, não é verificado de novo). A ordem dos erros abaixo não muda.
 - O pedido entra no app como pedido do site `AWAITING_ACCEPTANCE` (§6.9 "Pedido do site"), com `customerPhone` normalizado em E.164 e passa pelo aceite (`POST /orders/{id}/accept`).
 - `customerPhone` aceita os formatos comuns ("(34) 98888-7777", "34988887777", "+55 34 98888-7777", DDD com zero) e é normalizado: celular com 9 dígitos começando por 9, fixo com 8 começando por 2 a 5.
 - Reenvio com a mesma chave e o mesmo corpo → a mesma resposta + `Idempotent-Replayed: true` (escopo `(tenant, key)`, sem usuário). Mesma chave com corpo diferente → `422 IdempotencyKeyReused`. A página **não** usa `GET /operations/{key}`.
@@ -2478,6 +2480,7 @@ Ordem das checagens e erros:
 | 9a | `DELIVERY`: cotação inexistente ou de outro restaurante | `422 ValidationFailed` em `deliveryQuoteId` ("Calcule a entrega de novo") |
 | 9b | `DELIVERY`: cotação vencida, de outro endereço (rua, número, bairro, cidade ou CEP; complemento e referência não contam) ou feita antes de o restaurante mudar a configuração → **recalcula**. Mesma taxa → segue com ela; outra taxa → | `409 DeliveryQuoteChanged` com a cotação nova em `quote`. O recálculo pode dar os erros da cotação (`OutOfDeliveryArea`, `DeliveryUnavailable`, `422` em `deliveryAddress.street`/`deliveryAddress.number`) |
 | 10 | item fora do cardápio, indisponível ou escondido, ou `expectedTotal` diferente do recalculado | `409 CartChanged` |
+| 10a | o pedido gravado não bate com o carrinho conferido no passo 10 (total, itens ou taxa; ex.: preço mudou no meio do envio) | `409 CartChanged` com o carrinho recalculado; nada é gravado |
 | 11 | `changeFor` menor que o total | `422 ValidationFailed` em `changeFor` |
 
 `409 CartChanged` traz o carrinho recalculado (linhas na ordem de `items`; indisponível → `available: false` e sem valores; o total soma só as disponíveis). A página mostra as diferenças e o cliente confirma de novo:
@@ -2526,7 +2529,7 @@ Cotação da taxa de entrega (ADR-0048 itens 4 a 13; RF-204). Pedida **quando o 
   | 6.050 m | `"6.1"` | 4,88 | — | — | `422 OutOfDeliveryArea` |
 
   Com R$ 0,85/km e 4,5 km: 3,825 → `"3.83"`.
-- `formattedAddress`: o endereço como o geocodificador entendeu ("Encontramos: …"); a página mostra e o cliente confirma. Numa cotação servida pelo cache (mesmo endereço normalizado no mesmo restaurante, até 30 dias), é o endereço digitado, porque o cache não guarda texto (ADR-0052 item 5).
+- `formattedAddress`: o endereço como o geocodificador entendeu ("Encontramos: …"); a página mostra e o cliente confirma. Numa cotação servida pelo cache (mesmo endereço normalizado no mesmo restaurante, até 7 dias), é o endereço digitado, porque o cache não guarda texto (ADR-0052 item 5). O cache guarda o hash do endereço com segredo (HMAC com `Maps:AddressHashSecret`) e as coordenadas com 4 casas (cerca de 11 m); a cotação usa o ponto exato do geocodificador quando ele é chamado e o de 4 casas quando vem do cache.
 - `expiresAt`: **15 min**. O envio confere a cotação (§ envio, checagens 9a e 9b).
 - Modo `FIXED`: `distanceKm: null` e `deliveryFee` = `defaultDeliveryFee`; sem mapa, sem raio e sem conferência de precisão.
 - Mesmo endereço normalizado = rua (abreviações comuns como "R." e "Av." contam como "Rua"/"Avenida"), número, bairro, cidade (nula = a do restaurante) e CEP, sem caixa, acento ou pontuação. A UF é sempre a do restaurante. `complement` e `reference` ficam de fora.
@@ -2624,25 +2627,27 @@ No envio com entrega, o pedido grava a taxa da cotação e o snapshot (`delivery
 - `canWithdraw`: `true` só em `AWAITING_ACCEPTANCE`.
 - `changedByStore`: o restaurante alterou o pedido depois do aceite ("O restaurante alterou seu pedido", com o total atualizado).
 - `deliveryAddress` (entrega): só `{ "street", "number" }`. **Nunca** aparecem telefone, sobrenome, complemento, referência, funcionários, outros pedidos ou saldo de fiado (ADR-0047 itens 5 e 6). `deliveryDistanceKm`: `"4.5"` quando a taxa foi a calculada pela distância; `null` em retirada, no modo `FIXED` ou se o restaurante editou a taxa ou o endereço depois.
-- `ETag: "{version}"`. A página consulta a cada 20 s com `If-None-Match`; sem mudança → `304 Not Modified` (ADR-0047 item 8).
+- `ETag` opaco (ex.: `"3-IN_PREPARATION-7-marmitaria-da-ana"`): muda com a versão do pedido, com o `status` calculado (prazo de aceite vencido vira `EXPIRED` antes de o job gravar, sem mudar a `version`) e com a configuração da página (bloco `store`). A página não interpreta o valor: consulta a cada 20 s com `If-None-Match`; sem mudança → `304 Not Modified` (ADR-0047 item 8). `version` no corpo continua sendo a do pedido.
 - Toda resposta de `/public/tracking/*` (inclusive erros) leva `Cache-Control: private, no-store`, `Referrer-Policy: no-referrer` e `X-Robots-Tag: noindex` (item 9).
 - Token inventado, malformado ou de pedido apagado → `404 NotFound`, sem nada do restaurante. Mais de 7 dias → `410 TrackingExpired` (o registro é apagado pelo job de retenção, e depois disso o mesmo token dá `404`).
 
 ### `POST /public/tracking/{trackingToken}/withdraw` — público
 
-Sem corpo. Desistência enquanto `AWAITING_ACCEPTANCE` (ADR-0046 item 17) → `200` com o acompanhamento (`status: "WITHDRAWN"`). Já aceito, recusado ou desistido → `409 OrderNotAwaitingAcceptance` (extensão `acceptanceStatus`); prazo vencido → `409 WebOrderExpired`. Auditoria `WebOrderWithdrawn` com `origin: "WEB"`, sem ator; o app recebe `OrderRejected` (§6.14) com `acceptanceStatus: "WITHDRAWN"`.
+Sem corpo, sem `Idempotency-Key`: **idempotente pelo estado**. Desistência enquanto `AWAITING_ACCEPTANCE` (ADR-0046 item 17) → `200` com o acompanhamento (`status: "WITHDRAWN"`) e o `ETag`. Repetir com o pedido já `WITHDRAWN` (a resposta se perdeu) → o mesmo `200` com o acompanhamento atual, sem nova auditoria nem evento. Aceito ou recusado → `409 OrderNotAwaitingAcceptance` (extensão `acceptanceStatus`); prazo vencido → `409 WebOrderExpired`. Auditoria `WebOrderWithdrawn` com `origin: "WEB"`, sem ator; o app recebe `OrderRejected` (§6.14) com `acceptanceStatus: "WITHDRAWN"`.
 
 ### Configuração (API)
 
 | Chave | Uso | Desenvolvimento / testes |
 |---|---|---|
 | `Cors:PublicPageOrigins` | origens da página | `["http://localhost:3000"]` |
-| `Turnstile:Enabled`, `Turnstile:SecretKey`, `Turnstile:TimeoutSeconds` (3) | Cloudflare Turnstile. A chave secreta vem do Key Vault; `Enabled` sem chave impede a API de subir | dev: chave secreta de **teste** oficial `1x0000000000000000000000000000000AA` (sempre passa); testes: desligado, e ligado com `siteverify` simulado no teste dedicado |
-| `PublicPage:IpHashSecret` | segredo do sal diário do hash do IP (Key Vault). Vazio → sal aleatório por processo | vazio |
+| `Turnstile:Enabled`, `Turnstile:SecretKey`, `Turnstile:TimeoutSeconds` (3) | Cloudflare Turnstile. A chave secreta vem do Key Vault; `Enabled` sem chave, ou com uma chave de teste do Cloudflare (`1x0000…`, `2x0000…`, `3x0000…`) fora de Development, impede a API de subir | dev: chave secreta de **teste** oficial `1x0000000000000000000000000000000AA` (sempre passa); testes: desligado, e ligado com `siteverify` simulado no teste dedicado |
+| `PublicPage:IpHashSecret` | segredo do sal diário do hash do IP (Key Vault). Obrigatório fora de Development (≥ 32 caracteres; a API não sobe sem ele). Vazio em Development → sal aleatório por processo | vazio em Development; testes: valor fixo |
+| `PublicPage:TrackingTokenSecret` | segredo do HMAC que deriva o `trackingToken` do pedido (Key Vault). Obrigatório fora de Development (≥ 32 caracteres, diferente do anterior). Vazio em Development → aleatório por processo | vazio em Development; testes: valor fixo |
 | `PublicPage:RendererKey` | `X-Web-Renderer-Key` do servidor da página (Key Vault). Vazio → sem isenção | vazio |
 | `WebOrders:RetentionJobEnabled`, `RetentionIntervalMinutes` (60) | job de retenção do ADR-0052 | testes: desligado, chamado por `RunOnceAsync` |
 | `Maps:Provider` | `None` (sem entrega por distância: `MAPS_PROVIDER` em `pageDelivery.missing`), `Fake`, `Osm` ou `Google` (ADR-0048 item 15). `appsettings.json` versionado: `None` até o usuário escolher. `Fake` é recusado em Production | Development e testes: `Fake` (sem rede). Sem a chave na configuração, o padrão também é `Fake` |
 | `Maps:Google:ApiKey` | chave da Geocoding API + Routes API (Compute Route Matrix, Essentials, `TRAFFIC_UNAWARE`). Só Key Vault / `user-secrets`; obrigatória com `Google` (a API não sobe sem ela) | vazio |
 | `Maps:Osm:NominatimUrl`, `OsrmUrl`, `UserAgent`, `NominatimMinIntervalMilliseconds` (1000), `AcceptStreetLevel` (false) | Nominatim + OSRM. Padrão: as instâncias públicas (só desenvolvimento; política de 1 req/s, respeitada por réplica). `UserAgent` genérico do produto, sem e-mail | — |
-| `Maps:TimeoutSeconds` (3), `GeocodeCacheDays` (30), `RouteCacheDays` (30) | tempo máximo por chamada; validade do cache por tenant das coordenadas e dos metros (0 desliga; ver ADR-0048 item 11 sobre os termos do Google) | — |
+| `Maps:TimeoutSeconds` (3), `GeocodeCacheDays` (7), `RouteCacheDays` (7) | tempo máximo por chamada; validade do cache por tenant das coordenadas (4 casas) e dos metros (0 desliga; ver ADR-0048 item 11 sobre os termos do Google) | — |
+| `Maps:AddressHashSecret` | segredo do HMAC do endereço normalizado (cache e conferência da cotação). Key Vault; obrigatório fora de Development (≥ 32 caracteres). Trocar invalida o cache e as cotações em aberto (o envio recalcula) | vazio em Development; testes: valor fixo |
 | `Maps:RetentionJobEnabled`, `RetentionIntervalMinutes` (60) | apaga cotações 24 h depois de vencer e o cache vencido (ADR-0052 item 5) | testes: desligado, chamado por `RunOnceAsync` |

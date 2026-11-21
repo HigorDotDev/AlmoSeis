@@ -87,6 +87,9 @@ public static class ErrorCodes
     public static readonly ErrorCode OutOfDeliveryArea = new("OutOfDeliveryArea", 422, "Não entregamos nesse endereço. Você pode retirar no local.");
     public static readonly ErrorCode DeliveryQuoteChanged = new("DeliveryQuoteChanged", 409, "A taxa de entrega mudou. Confira o novo valor.");
 
+    // ---------- Push (EP-002 fatia 5, ADR-0049) ----------
+    public static readonly ErrorCode PushTokenInUse = new("PushTokenInUse", 409, "Este aparelho ainda está registrado em outro estabelecimento.");
+
     public static IReadOnlyList<ErrorCode> All { get; } =
     [
         MalformedRequest, Unauthenticated, InvalidCredentials, InvalidRefreshToken, InvalidDeviceSecret,
@@ -100,6 +103,6 @@ public static class ErrorCodes
         PaymentMethodDisabled, ProductUnavailable, KiloPriceNotConfigured, JustificationRequired, PinLocked,
         AppVersionUnsupported, IdempotencyKeyRequired, IfMatchRequired, TooManyRequests,
         StoreNotFound, StoreUnavailable, CartChanged, DeliveryUnavailable, CaptchaFailed, TooManyPendingOrders, TrackingExpired,
-        OutOfDeliveryArea, DeliveryQuoteChanged,
+        OutOfDeliveryArea, DeliveryQuoteChanged, PushTokenInUse,
     ];
 }

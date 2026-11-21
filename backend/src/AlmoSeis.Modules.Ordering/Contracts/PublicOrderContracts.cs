@@ -54,10 +54,29 @@ public sealed record PlaceWebOrderRequest(
 
 /// `turnstileToken` vem do header `X-Turnstile-Token` (fora do hash de idempotência: é de uso único). `clientIp` só para o
 /// Turnstile e para o hash do IP; nunca é gravado em claro.
-public sealed record PlaceWebOrderCommand(PlaceWebOrderRequest Request, string? TurnstileToken, string? ClientIp);
+/// `preparation`: o que a rota já apurou fora da transação (Turnstile e cotação, `PrepareWebOrderQuery`); nulo → o handler
+/// verifica na hora (testes e chamadas internas).
+public sealed record PlaceWebOrderCommand(
+    PlaceWebOrderRequest Request, string? TurnstileToken, string? ClientIp, WebOrderPreparation? Preparation = null);
 
-/// Resposta do envio. Sem nome, telefone nem endereço: o corpo fica guardado no registro de idempotência (ADR-0052 item 5).
-/// O token em claro só aparece aqui (e na repetição idempotente desta resposta, ADR-0047 item 2).
+/// Pré-checagens do envio pela página **fora** da transação da idempotência e antes dos advisory locks (07 §7.4): o
+/// Turnstile e a conferência da cotação de entrega, que pode recalcular no provedor de mapas. Os erros da cotação ficam
+/// guardados e o handler os lança na posição deles na ordem das checagens (06 §6.19). Campo nulo = não verificado
+/// (página fechada, retirada, campo-isca): o handler verifica na hora, se chegar lá.
+public sealed record WebOrderPreparation(
+    AlmoSeis.Infrastructure.Security.TurnstileOutcome? Captcha,
+    AlmoSeis.Modules.Storefront.Contracts.RedeemedDeliveryQuote? Quote,
+    AlmoSeis.SharedKernel.Errors.BusinessException? QuoteError)
+{
+    public static readonly WebOrderPreparation None = new(null, null, null);
+
+    public bool QuoteChecked => Quote is not null || QuoteError is not null;
+}
+
+public sealed record PrepareWebOrderQuery(PlaceWebOrderRequest Request, string? TurnstileToken, string? ClientIp);
+
+/// Resposta do envio. Sem nome, telefone nem endereço: o corpo fica guardado no registro de idempotência (ADR-0052 item 5),
+/// **sem** o `trackingToken`, que é recalculado no reenvio (`TrackingTokenReplaySource`, ADR-0047 item 2).
 public sealed record PlacedWebOrderDto(
     string TrackingToken,
     DateTimeOffset TrackingExpiresAt,
@@ -161,7 +180,14 @@ public sealed record WebOrderTrackingDto(
     ExpectedPaymentMethod? ExpectedPaymentMethod,
     Money? ChangeFor,
     bool ChangedByStore,
-    DateTimeOffset TrackingExpiresAt) : IVersionedDto;
+    DateTimeOffset TrackingExpiresAt)
+{
+    /// `ETag` do acompanhamento (ADR-0047 item 8): a versão do pedido não basta, porque o `status` também muda sozinho
+    /// (prazo de aceite vencido aparece como `EXPIRED` antes de o job gravar) e o bloco `store` vem da configuração da
+    /// página. Fora do JSON.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string ETag { get; init; } = string.Empty;
+}
 
 public sealed record GetWebOrderTrackingQuery(string TrackingToken);
 

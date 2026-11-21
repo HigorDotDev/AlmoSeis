@@ -1,3 +1,4 @@
+using AlmoSeis.Api.Controllers.Public;
 using AlmoSeis.Api.Infrastructure;
 using AlmoSeis.Infrastructure;
 using AlmoSeis.Infrastructure.Realtime;
@@ -37,6 +38,7 @@ builder.Services.AddExceptionHandler<ProblemDetailsExceptionHandler>();
 builder.Services.AddScoped<ValidationFilter>();
 builder.Services.AddScoped<SubscriptionWriteGuardFilter>();
 builder.Services.AddSingleton<WebSessionCookieFilter>();
+builder.Services.AddScoped<PlaceWebOrderPreparation>();
 builder.Services.AddRestaurantAppCors();
 builder.Services.AddPublicPageCors();
 builder.Services.AddAlmoSeisForwardedHeaders();
@@ -81,6 +83,8 @@ app.UseRateLimiter();
 // Rotas públicas: tenant pelo slug ou pelo token, antes da autenticação (que as ignora, ADR-0045).
 app.UseMiddleware<TrackingHeadersMiddleware>();
 app.UseMiddleware<PublicTenantMiddleware>();
+// Cota por estabelecimento das cotações de entrega: só depois de o slug virar tenant (ADR-0045 item 11).
+app.UseMiddleware<PublicStoreQuotaMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 

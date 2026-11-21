@@ -45,6 +45,10 @@ public sealed class ApiFactory(PostgresFixture db, Action<IServiceCollection>? s
             ["Cors:PublicPageOrigins:0"] = PublicPageOrigin,
             ["WebOrders:RetentionJobEnabled"] = "false",
             ["Turnstile:Enabled"] = "false",
+            // Segredos da página (fora de Development a API não sobe sem eles, 05 §5.17 0007).
+            ["PublicPage:IpHashSecret"] = "test-ip-hash-secret-0123456789abcdef",
+            ["PublicPage:TrackingTokenSecret"] = "test-tracking-token-secret-0123456789",
+            ["Maps:AddressHashSecret"] = "test-address-hash-secret-0123456789ab",
             // Taxa por distância (ADR-0048): provedor determinístico, sem rede; retenção só por RunOnceAsync.
             ["Maps:Provider"] = "Fake",
             ["Maps:RetentionJobEnabled"] = "false",

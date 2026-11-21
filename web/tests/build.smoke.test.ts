@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,13 +21,16 @@ function clientJs(): string {
   return out.join('\n');
 }
 
+/** Valor de `WEB_RENDERER_KEY` só deste build: se aparecer no JavaScript do navegador, a chave vazou. */
+const rendererKey = `smoke-renderer-${randomBytes(16).toString('hex')}`;
+
 describe('next build', () => {
   it('compila a página sem erros e gera as rotas dinâmicas', () => {
     const result = spawnSync('npx next build', {
       cwd: root,
       encoding: 'utf8',
       shell: true,
-      env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
+      env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1', WEB_RENDERER_KEY: rendererKey },
     });
     if (result.status !== 0) {
       console.error(result.stdout, result.stderr);
@@ -43,7 +47,8 @@ describe('next build', () => {
     expect(js).toContain('/delivery-quotes');
     expect(js).toContain('/orders');
     expect(js).toContain('/withdraw');
-    // A chave do servidor da página nunca vai para o navegador.
+    // A chave do servidor da página nunca vai para o navegador: nem o nome do header, nem o valor usado no build.
     expect(js).not.toContain('X-Web-Renderer-Key');
+    expect(js).not.toContain(rendererKey);
   });
 });

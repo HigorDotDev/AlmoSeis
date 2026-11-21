@@ -539,7 +539,7 @@ O ajuste **não** altera o `DailyClosing` relacionado nem o caixa físico. Apare
 |---|---|---|
 | TenantSyncCounter | `TenantId` PK, `LastSeq` bigint | trava de linha por transação de escrita |
 | ChangeFeedEntry [T] | PK `(TenantId, Seq)`, `EntityType`, `EntityId`, `EntityVersion`, `ChangeKind` (`UPSERT`/`DELETE`), `OccurredAt` | retenção de 7 dias |
-| IdempotencyRecord [T] | `Key`, `UserId`, `Endpoint`, `RequestHash`, `Status` (`IN_PROGRESS`/`COMPLETED`), `ResponseStatus`, `ResponseBody` json, `ResourceId`, `CreatedAt`, `ExpiresAt` | único `(TenantId, Key)`; TTL de 72 h |
+| IdempotencyRecord [T] | `Key`, `UserId`, `Endpoint`, `RequestHash`, `Status` (`IN_PROGRESS`/`COMPLETED`), `ResponseStatus`, `ResponseBody` json, `ResourceId`, `CreatedAt`, `ExpiresAt` | único `(TenantId, Key)`; TTL de 72 h. `ResponseBody` nunca guarda segredo do cliente: o `trackingToken` do envio pela página sai do corpo e é recalculado no reenvio a partir do `ResourceId` (ADR-0047) |
 | OutboxMessage [T] | `EventType`, `Payload` json (ids, versão, `seq`), `OccurredAt`, `AvailableAt?`, `ProcessedAt?`, `Attempts` | limpeza após 7 dias. `AvailableAt`: entrega agendada (lembrete do push, ADR-0046 item 15) ou espera entre tentativas de um consumidor interno; nulo = na hora |
 
 **Entidades [S]:** `TenantSettings`, `TenantEmployee`, `Product`, `MarmitaSize`, `Menu` (inclui itens), `Customer` (inclui endereços), `Order` (inclui itens, pesagens e eventos), `Payment`, `PaymentReversal`, `BusinessDay`, `CashMovement`, `DailyClosing`, `ClosingAdjustment`.
@@ -554,8 +554,9 @@ O ajuste **não** altera o `DailyClosing` relacionado nem o caixa físico. Apare
 | Vínculo | `TenantEmployee`, `TenantEmployeeRole` | `tenant_id = app.tenant_id` **OU** `user_id = app.user_id`. Permite listar os estabelecimentos do próprio usuário no login e na troca de tenant (ADR-0026, item 9) |
 | Identidade | `User`, `RefreshToken` | sem RLS de tenant; acesso só pelo módulo Identity |
 | Plataforma | `TrialClaim`, `BillingWebhookEvent` | sem RLS; acesso só pelos módulos Billing e Admin com o papel `almoseis_platform` |
-| Resolução pública | `StoreSlug`, `OrderTrackingToken` | leitura aberta ao papel da aplicação (o slug é público; o token está em hash), escrita só no tenant da sessão (ADR-0045 itens 4 e 5) |
-| Tenant + dono do token | `PushRegistration` | `tenant_id = app.tenant_id`; além disso, `SELECT`/`DELETE` (nunca `INSERT`/`UPDATE`) das linhas com `expo_push_token = app.push_token`, definido só na transação do registro: o aparelho que trocou de estabelecimento sai do anterior (ADR-0049 item 4) |
+| Resolução pública | `StoreSlug` | leitura aberta ao papel da aplicação (o slug é público), escrita só no tenant da sessão (ADR-0045 itens 4 e 5) |
+| Resolução pelo hash | `OrderTrackingToken` | leitura e escrita só no tenant da sessão. Antes de o tenant existir, a rota de acompanhamento resolve **um** hash pela função `resolve_tracking_token` (`SECURITY DEFINER`, devolve só o tenant e o prazo; 05 §5.17 0007) |
+| Tenant + liberação pela instalação | `PushRegistration` | `tenant_id = app.tenant_id`. O registro do mesmo token em outro tenant só sai pela função `release_push_token(token, instalação)` (`SECURITY DEFINER`, 0007), e só quando é da **mesma instalação**: o aparelho que trocou de estabelecimento sai do anterior; quem só conhece a string do token não lê nem apaga o registro de outro aparelho (ADR-0049 item 4) |
 
 ## 4.14 Página de pedidos (EP-002; ADR-0044, ADR-0045, ADR-0047, ADR-0048, ADR-0052)
 
@@ -584,13 +585,13 @@ Entrega pela página (derivado, ADR-0048): `OffersDelivery` e `IsDeliveryEnabled
 
 ### DeliveryQuote [T] (ADR-0048 item 8)
 
-`Id`, `AddressHash` (SHA-256 do tenant + endereço normalizado), `FormattedAddress` (200), `Latitude`/`Longitude`, `FeeMode`, `DistanceMeters`, `DistanceKm` (decimal(5,1), uma casa), `PricePerKm`, `MinimumFee`, `DeliveryFee`, `SettingsVersion` (versão do `StorefrontSettings` usada), `CreatedAt`, `ExpiresAt` (+ 15 min). `DISTANCE` exige ponto, metros e regra; `FIXED` não tem nenhum deles. Apagada 24 h depois de vencer.
+`Id`, `AddressHash` (HMAC-SHA-256 com o segredo `Maps:AddressHashSecret` sobre o tenant + endereço normalizado; desde a 0007), `FormattedAddress` (200), `Latitude`/`Longitude`, `FeeMode`, `DistanceMeters`, `DistanceKm` (decimal(5,1), uma casa), `PricePerKm`, `MinimumFee`, `DeliveryFee`, `SettingsVersion` (versão do `StorefrontSettings` usada), `CreatedAt`, `ExpiresAt` (+ 15 min). `DISTANCE` exige ponto, metros e regra; `FIXED` não tem nenhum deles. Apagada 24 h depois de vencer.
 
 Cálculos: `km = round(metros / 1000, 1, AwayFromZero)`; `taxa = max(round(km × PricePerKm, 2, AwayFromZero), MinimumDeliveryFee)`; fora da área se `km > MaxDeliveryDistanceKm` (o `km` arredondado) ou sem rota. No envio: válida + mesmo hash + mesma versão → a taxa dela; senão recalcula, e taxa diferente → `409 DeliveryQuoteChanged` com a cotação nova.
 
 ### GeocodeCacheEntry [T] (ADR-0048 item 11, ADR-0052 item 5)
 
-PK `(TenantId, AddressHash)`. `Latitude`, `Longitude`, `GeocodedAt`, `ExpiresAt` (+ 30 dias) e, se a rota foi calculada, `OriginLatitude`/`OriginLongitude` (o ponto do restaurante usado), `DistanceMeters` e `RoutedAt`. **Sem o texto do endereço.** Só resultado exato entra. A distância só vale com o mesmo ponto de partida.
+PK `(TenantId, AddressHash)` (o mesmo HMAC da cotação). `Latitude`, `Longitude` (decimal(7,4): **4 casas**, cerca de 11 m; a cotação corrente usa o ponto exato), `GeocodedAt`, `ExpiresAt` (+ 7 dias, `Maps:GeocodeCacheDays`) e, se a rota foi calculada, `OriginLatitude`/`OriginLongitude` (o ponto do restaurante usado), `DistanceMeters` e `RoutedAt`. **Sem o texto do endereço.** Só resultado exato entra. A distância só vale com o mesmo ponto de partida.
 
 ### StoreSlug (plataforma)
 
@@ -598,7 +599,7 @@ PK `(TenantId, AddressHash)`. `Latitude`, `Longitude`, `GeocodedAt`, `ExpiresAt`
 
 ### OrderTrackingToken (plataforma)
 
-`TokenHash` (SHA-256, PK), `TenantId`, `OrderId` (único), `CreatedAt`, `ExpiresAt` (+ 7 dias). O token em claro (128 bits, base64url) só aparece na resposta do envio. Apagado pelo job de retenção depois de vencer.
+`TokenHash` (SHA-256, PK), `TenantId`, `OrderId` (único), `CreatedAt`, `ExpiresAt` (+ 7 dias). O token (128 bits, base64url) é derivado do pedido com o segredo `PublicPage:TrackingTokenSecret` (HMAC) e só aparece na resposta do envio e no reenvio idempotente dela, que o recalcula: **não** é gravado em lugar nenhum, nem no `ResponseBody` da idempotência. Apagado pelo job de retenção depois de vencer.
 
 ### WebOrderIntake [T]
 
@@ -614,7 +615,7 @@ PK `(TenantId, AddressHash)`. `Latitude`, `Longitude`, `GeocodedAt`, `ExpiresAt`
 | TenantEmployeeId | Guid | funcionário da sessão que registrou. No aparelho compartilhado, o último que entrou por PIN |
 | SharedDeviceId | Guid? | preenchido no login por PIN; a revogação do aparelho apaga o registro |
 | Platform | enum `ANDROID`, `IOS`, `WEB` | `WEB` reservado para o Web Push (Q-26); a API recusa por enquanto |
-| ExpoPushToken | string(200) | `ExponentPushToken[…]`/`ExpoPushToken[…]`. **Único em todo o sistema**: o aparelho que registra o token num estabelecimento sai dos outros. Nunca vai para log nem auditoria |
+| ExpoPushToken | string(200) | `ExponentPushToken[…]`/`ExpoPushToken[…]`. **Único em todo o sistema**: a mesma instalação que registra o token num estabelecimento sai dos outros; o token registrado por **outra** instalação em outro estabelecimento não é liberado (`409 PushTokenInUse`). Nunca vai para log nem auditoria |
 | WebOrdersEnabled | bool | "Avisar pedidos do site com o app fechado"; ligada por padrão |
 | ShowTenantName | bool | usuário com mais de um vínculo ativo (calculado a cada registro; falso no aparelho compartilhado): o título leva o nome do estabelecimento |
 | CreatedAt, UpdatedAt | | `UpdatedAt` = último registro feito pelo app; sem uso há 30 dias → apagado |

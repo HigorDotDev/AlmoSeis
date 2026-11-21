@@ -25,6 +25,7 @@ internal sealed class PlaceWebOrderHandler(
     ITurnstileVerifier turnstile,
     IClientIpHasher ipHasher,
     ISecretHasher hasher,
+    ITrackingTokenIssuer trackingTokens,
     WebOrderSubmitter submitter,
     IDeliveryQuoteRedeemer quotes,
     TimeProvider time) : ICommandHandler<PlaceWebOrderCommand, PlacedWebOrderDto>, IPublicHandler
@@ -48,7 +49,7 @@ internal sealed class PlaceWebOrderHandler(
             throw StoreErrors.Unavailable(store.Status);
         }
 
-        var captcha = await turnstile.VerifyAsync(command.TurnstileToken, command.ClientIp, cancellationToken);
+        var captcha = command.Preparation?.Captcha ?? await turnstile.VerifyAsync(command.TurnstileToken, command.ClientIp, cancellationToken);
         if (captcha == TurnstileOutcome.Failed)
         {
             throw new BusinessException(ErrorCodes.CaptchaFailed);
@@ -87,10 +88,9 @@ internal sealed class PlaceWebOrderHandler(
         DeliveryAddressDto? address = null;
         if (request.FulfillmentType == FulfillmentType.Delivery && request.DeliveryAddress is { } input)
         {
-            var redeemed = await quotes.RedeemAsync(
-                request.DeliveryQuoteId,
-                new PublicAddressInput(input.Street, input.Number, input.Complement, input.Neighborhood, input.City, input.ZipCode, input.Reference),
-                cancellationToken);
+            var redeemed = command.Preparation is { QuoteChecked: true } prepared
+                ? prepared.Quote ?? throw prepared.QuoteError!
+                : await quotes.RedeemAsync(request.DeliveryQuoteId, ToAddress(input), cancellationToken);
             deliveryFee = redeemed.DeliveryFee;
             pricing = redeemed.FeeMode == DeliveryFeeMode.Distance
                 ? new DeliveryPricing(DeliveryFeeSource.Distance, redeemed.DistanceMeters, redeemed.PricePerKm, redeemed.MinimumFee)
@@ -113,8 +113,16 @@ internal sealed class PlaceWebOrderHandler(
                 pricing),
             cancellationToken);
 
+        // O pedido gravado precisa ter exatamente o total e a taxa que o cliente confirmou (ADR-0044 item 21): o carrinho
+        // da página e o resolvedor de itens do pedido são cálculos separados, e uma divergência entre eles nunca vira venda.
+        if (order.TotalAmount != cart.TotalAmount || order.DeliveryFee != deliveryFee || order.ItemsTotal != cart.ItemsTotal)
+        {
+            throw new BusinessException(ErrorCodes.CartChanged, extensions: new Dictionary<string, object?> { ["cart"] = cart });
+        }
+
         var tenantId = tenant.TenantId!.Value;
-        var token = TrackingTokens.New();
+        // Derivado do pedido (ADR-0047): o reenvio idempotente recalcula o mesmo token, que não fica guardado em claro.
+        var token = trackingTokens.For(tenantId, order.Id);
         var tracking = OrderTrackingToken.Issue(hasher.Hash(token), tenantId, order.Id, now);
         db.Add(tracking);
         db.Add(WebOrderIntake.Record(order.Id, tenantId, ipHash, now));
@@ -144,11 +152,63 @@ internal sealed class PlaceWebOrderHandler(
         }
     }
 
+    internal static PublicAddressInput ToAddress(PublicDeliveryAddressInput input) =>
+        new(input.Street, input.Number, input.Complement, input.Neighborhood, input.City, input.ZipCode, input.Reference);
+
     private static OrderItemInput ToOrderItem(PublicOrderItemInput i) => new(
         i.ItemKind, null, i.MarmitaSizeId, i.ProductId, i.Quantity, i.MainDishProductIds, i.SideDishProductIds, Clean(i.Notes),
         i.Addons?.Select(a => new AddonInput(a.ProductId, a.Quantity, null)).ToList());
 
     private static string? Clean(string? text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+}
+
+/// Pré-checagens do envio fora da transação (07 §7.4): o `IdempotencyFilter` chama pela rota pública depois de conferir
+/// que não é reenvio. Página fora de `OPEN` ou campo-isca → nada (o handler responde o erro sem gastar o Turnstile nem o
+/// mapa). Só os erros de negócio da cotação são guardados; os demais seguem como antes.
+internal sealed class PrepareWebOrderQueryHandler(IStorefrontGate storefront, ITurnstileVerifier turnstile, IDeliveryQuoteRedeemer quotes)
+    : IQueryHandler<PrepareWebOrderQuery, WebOrderPreparation>, IPublicHandler
+{
+    public async Task<WebOrderPreparation> HandleAsync(PrepareWebOrderQuery query, CancellationToken cancellationToken)
+    {
+        var request = query.Request;
+        if (!string.IsNullOrEmpty(request.Website))
+        {
+            return WebOrderPreparation.None;
+        }
+
+        var store = await storefront.GetAsync(cancellationToken);
+        if (store.Status != StoreStatus.Open)
+        {
+            return WebOrderPreparation.None;
+        }
+
+        var captcha = await turnstile.VerifyAsync(query.TurnstileToken, query.ClientIp, cancellationToken);
+        if (captcha == TurnstileOutcome.Failed || request.FulfillmentType != FulfillmentType.Delivery || !store.DeliveryAvailable
+            || request.DeliveryAddress is not { } input || request.DeliveryQuoteId is null)
+        {
+            return new WebOrderPreparation(captcha, null, null);
+        }
+
+        try
+        {
+            return new WebOrderPreparation(captcha, await quotes.RedeemAsync(request.DeliveryQuoteId, PlaceWebOrderHandler.ToAddress(input), cancellationToken), null);
+        }
+        catch (BusinessException ex)
+        {
+            return new WebOrderPreparation(captcha, null, ex);
+        }
+    }
+}
+
+/// Reenvio do `POST /public/stores/{slug}/orders`: o `trackingToken` não fica no corpo guardado (ADR-0047, só o hash) e é
+/// recalculado a partir do pedido (`resource_id`), no tenant da sessão.
+internal sealed class TrackingTokenReplaySource(ITrackingTokenIssuer tokens) : AlmoSeis.Infrastructure.Idempotency.IReplaySecretSource
+{
+    public const string TrackingTokenField = "trackingToken";
+
+    public string Field => TrackingTokenField;
+
+    public string Recreate(Guid tenantId, Guid resourceId) => tokens.For(tenantId, resourceId);
 }
 
 /// Preço do carrinho da página contra o cardápio público do dia (o mesmo que a página mostrou). Linha com tamanho, prato,
@@ -333,8 +393,9 @@ internal sealed class PublicOrderItemValidator : AbstractValidator<PublicOrderIt
     }
 }
 
-/// Token → tenant para o middleware das rotas públicas (ADR-0045 item 4). Por SQL, antes de o tenant existir na sessão:
-/// `order_tracking_tokens` tem leitura aberta e guarda só o hash.
+/// Token → tenant para o middleware das rotas públicas (ADR-0045 item 4), antes de o tenant existir na sessão. Só pela
+/// função `resolve_tracking_token` (05 §5.17 0007): a tabela não tem leitura aberta, e a função devolve só o tenant e o
+/// prazo do hash pedido.
 internal sealed class TrackingTokenResolver(AppDbContext db, ISecretHasher hasher) : ITrackingTokenResolver
 {
     public async Task<TrackingTokenResolution?> ResolveAsync(string trackingToken, CancellationToken cancellationToken)
@@ -346,7 +407,7 @@ internal sealed class TrackingTokenResolver(AppDbContext db, ISecretHasher hashe
 
         var hash = hasher.Hash(trackingToken);
         var rows = await db.Database
-            .SqlQuery<TokenRow>($"SELECT tenant_id, expires_at FROM order_tracking_tokens WHERE token_hash = {hash}")
+            .SqlQuery<TokenRow>($"SELECT tenant_id, expires_at FROM resolve_tracking_token({hash}::bpchar)")
             .ToListAsync(cancellationToken);
         return rows is [var row] ? new TrackingTokenResolution(row.TenantId, row.ExpiresAt) : null;
     }
@@ -437,6 +498,7 @@ internal static class WebOrderTracking
             : null;
         var address = store.Address is { } a ? new TrackingStoreAddressDto(a.Street, a.Number, a.Complement, a.Neighborhood, a.City, a.State) : null;
 
+        var etag = $"\"{order.Version}-{UpperSnakeEnumConverter<TrackingStatus>.ToText(status)}-{store.SettingsVersion}-{store.Slug}\"";
         return new WebOrderTrackingDto(
             order.Version,
             new TrackingStoreDto(store.Slug, store.PublicName, store.ContactPhone, address),
@@ -460,7 +522,10 @@ internal static class WebOrderTracking
             order.ExpectedPaymentMethod,
             order.ChangeFor,
             changedByStore,
-            expiresAt);
+            expiresAt)
+        {
+            ETag = etag,
+        };
     }
 
     /// Tabela do ADR-0047 item 7.

@@ -52,6 +52,7 @@ public static class StorefrontModule
         services.AddOptions<MapsOptions>().BindConfiguration(MapsOptions.Section).ValidateOnStart();
         services.AddSingleton<IValidateOptions<MapsOptions>, MapsOptionsValidator>();
         services.AddSingleton<IMapsAvailability, MapsAvailability>();
+        services.AddSingleton<DeliveryAddressHashKey>();
         services.AddSingleton<NominatimThrottle>();
         services.AddSingleton<FakeMaps>();
         services.AddSingleton<NoMaps>();

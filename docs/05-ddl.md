@@ -42,7 +42,17 @@ BEGIN
 END $$;
 ```
 
-- `almoseis_migrator`: dono do schema. Roda as migrations. Correções de dados em migration usam `SET LOCAL ROLE almoseis_platform`. O **login** de migration é criado com `ALTER ROLE <login> SET role = 'almoseis_migrator'`, para que todo objeto (inclusive `__ef_migrations_history`) pertença ao papel de grupo, e não ao login. Assim a rotação do login não muda a posse.
+- `almoseis_migrator`: dono do schema. Roda as migrations. O **login** de migration é criado com `ALTER ROLE <login> SET role = 'almoseis_migrator'`, para que todo objeto (inclusive `__ef_migrations_history`) pertença ao papel de grupo, e não ao login. Assim a rotação do login não muda a posse.
+- **Correção de dados em migration:** o papel de migration é dono das tabelas, mas a RLS é `FORCE` (§5.12), então sem `app.tenant_id` na sessão ele não enxerga nenhuma linha. Ele também **não** é membro de `almoseis_platform` (nem aqui nem no `infra/db/init`), então `SET LOCAL ROLE almoseis_platform` não funciona. A técnica é tirar o `FORCE` só em volta da correção, **na mesma transação** da migration, e devolvê-lo antes do commit:
+
+  ```text
+  ALTER TABLE orders NO FORCE ROW LEVEL SECURITY;   -- o dono passa a enxergar todas as linhas
+  UPDATE orders SET ... ;                             -- a correção, sem depender de tenant
+  ALTER TABLE orders FORCE ROW LEVEL SECURITY;      -- volta antes do commit
+  ```
+
+  O `ALTER TABLE` trava a tabela (`ACCESS EXCLUSIVE`) até o fim da transação: nenhuma outra sessão enxerga a tabela sem `FORCE`, e um erro no meio desfaz tudo, inclusive o `NO FORCE`. Exemplos: 0003 (`orders`), 0004 (`tenants`) e 0007 (`geocode_cache_entries`).
+- **Função `SECURITY DEFINER`** (0007): quando o papel da aplicação precisa de um efeito pontual numa linha de outro tenant (liberar um token de push, resolver um token de acompanhamento antes de o tenant existir), a regra fica numa função de dono `almoseis_migrator` com `SET search_path = public, pg_temp`, `REVOKE ALL ... FROM PUBLIC` e `GRANT EXECUTE` só para quem usa. Como o dono também está sob `FORCE`, a tabela ganha uma política `TO almoseis_migrator` só com o comando que a função usa. A função devolve o mínimo (um número, ou o tenant e o prazo), nunca a linha.
 - `almoseis_app`: a API. DML restrito (§5.12), sujeito à RLS de tenant.
 - `almoseis_platform`: módulo admin, webhooks de cobrança, dispatcher do outbox e jobs de retenção e limpeza. Acessa todos os tenants por **políticas próprias** (`TO almoseis_platform USING (true)`), não por `BYPASSRLS`. Isso funciona igual no Azure Flexible Server, onde não há superusuário.
 
@@ -54,7 +64,7 @@ O interceptor de conexão do EF (ADR-0026) executa a cada abertura de conexão:
 SELECT set_config('app.tenant_id', @tenantId, false), set_config('app.user_id', @userId, false);
 ```
 
-Na devolução da conexão ao pool, as variáveis são limpas (`RESET app.tenant_id; RESET app.user_id; RESET app.invitation_code`). `app.push_token` (0006) é definida só dentro da transação do `PUT /devices/push-token` (`set_config(..., true)`).
+Na devolução da conexão ao pool, as variáveis são limpas (`RESET app.tenant_id; RESET app.user_id; RESET app.invitation_code`). A `app.push_token` da 0006 deixou de existir na 0007 (a liberação do token passou para a função `release_push_token`).
 
 ```sql
 CREATE OR REPLACE FUNCTION app_tenant_id() RETURNS uuid
@@ -1045,14 +1055,14 @@ Cada entidade [S] alterada na transação recebe seu próprio `seq`, porque a PK
 | Atendimento só de entrega/retirada aceita, e coerente com o tipo (ADR-0046) | `ck_orders_fulfillment`, `ck_orders_fulfillment_times` (0003) |
 | Slug único global, um atual por tenant, formato (ADR-0044) | PK de `store_slugs`, `ux_store_slugs_current`, `ck_store_slugs_format` (0004) |
 | Página ativa só com endereço (ADR-0044 item 11) | `ck_storefront_settings_active_address` (0004) |
-| Slug e token resolvíveis antes do tenant, gravados só pelo próprio tenant (ADR-0045) | políticas `public_lookup`/`tenant_insert`/`tenant_update` (0004) |
+| Slug e token resolvíveis antes do tenant, gravados só pelo próprio tenant (ADR-0045) | políticas `public_lookup`/`tenant_insert`/`tenant_update` (0004); token só por `resolve_tracking_token` (0007) |
 | Troco só em dinheiro; campos da página só em pedido `WEB` (ADR-0044 item 19) | `ck_orders_change_for`, `ck_orders_web_fields` (0004) |
-| Um registro de push por instalação e tenant; um token em um registro só; push nunca cruza tenants (ADR-0049 item 4) | `ux_push_registrations_installation`, `ux_push_registrations_token`, RLS + `push_token_owner_*` (0006) |
+| Um registro de push por instalação e tenant; um token em um registro só; push nunca cruza tenants (ADR-0049 item 4) | `ux_push_registrations_installation`, `ux_push_registrations_token`, RLS (0006) + `release_push_token`, só da mesma instalação (0007) |
 | Push enviado uma vez por mensagem do outbox e aparelho (ADR-0049 item 8) | PK de `push_deliveries`, `ck_push_deliveries_ticket` (0006) |
 
 ## 5.16 Validação
 
-O script foi validado em 2026-10-27 num PostgreSQL 16 (Docker): os blocos `sql` deste documento aplicados do zero (36 tabelas e 65 políticas na `0001`; 40 e 76 com as alterações até a `0004`; 42 e 80 até a `0005`; 44 e 86 até a `0006`) e depois o teste de fumaça [`05-ddl-smoke-test.sql`](05-ddl-smoke-test.sql), que roda como `almoseis_app`/`almoseis_platform` e confere 50 regras (22 da `0001`, 9 da `0003`, 10 da `0004`, 4 da `0005`, 5 da `0006`): isolamento entre dois tenants, plataforma do aparelho compartilhado, login, convite por código, totais, cancelamento, troco, estorno, conciliação, imutabilidade, casos com `NULL` e, desde a `0003`, o pedido da página (sem número, sem produção e sem autor enquanto aguarda aceite; recusa coerente; atendimento só em entrega) e, desde a `0004`, a página de pedidos (endereço para ativar, slug atual único e no formato, troco só em dinheiro, campos da página só em `WEB`, idempotência anônima, slug e token resolvíveis por outro tenant mas nunca gravados por ele, perfil e hash do IP isolados) e, desde a `0005`, a taxa por distância (cotação por distância completa, confirmação do ponto só com ponto, origem da taxa só em entrega, cotação e cache isolados) e, desde a `0006`, o push (token no formato do Expo e único, entrega com ticket ou erro, registro e entregas isolados, só quem comprova o token tira o aparelho do outro tenant). Toda mudança neste documento deve repetir os dois passos:
+O script foi validado em 2026-10-27 num PostgreSQL 16 (Docker): os blocos `sql` deste documento aplicados do zero (36 tabelas e 65 políticas na `0001`; 40 e 76 com as alterações até a `0004`; 42 e 80 até a `0005`; 44 e 86 até a `0006`; 44 e 87 até a `0007`) e depois o teste de fumaça [`05-ddl-smoke-test.sql`](05-ddl-smoke-test.sql), que roda como `almoseis_app`/`almoseis_platform` e confere 50 regras (22 da `0001`, 9 da `0003`, 10 da `0004`, 4 da `0005`, 5 da `0006`): isolamento entre dois tenants, plataforma do aparelho compartilhado, login, convite por código, totais, cancelamento, troco, estorno, conciliação, imutabilidade, casos com `NULL` e, desde a `0003`, o pedido da página (sem número, sem produção e sem autor enquanto aguarda aceite; recusa coerente; atendimento só em entrega) e, desde a `0004`, a página de pedidos (endereço para ativar, slug atual único e no formato, troco só em dinheiro, campos da página só em `WEB`, idempotência anônima, slug e token resolvíveis por outro tenant mas nunca gravados por ele, perfil e hash do IP isolados) e, desde a `0005`, a taxa por distância (cotação por distância completa, confirmação do ponto só com ponto, origem da taxa só em entrega, cotação e cache isolados) e, desde a `0006`, o push (token no formato do Expo e único, entrega com ticket ou erro, registro e entregas isolados, só quem comprova o token tira o aparelho do outro tenant; desde a `0007`, só a mesma instalação, pela função, e o token de acompanhamento só pela função de resolução). Toda mudança neste documento deve repetir os dois passos:
 
 ```text
 docker run -d --name almoseis-ddl-test -e POSTGRES_PASSWORD=test postgres:16
@@ -1090,9 +1100,9 @@ Aceite do pedido da página e status de atendimento/entrega (EP-002, F-206 e F-2
 
 Os `CHECK`s de coluna têm o nome padrão do PostgreSQL (`orders_origin_check`, `audit_logs_origin_check`).
 
-**Expand/contract (09 §9.4):** a migration roda antes do deploy, e a API anterior continua criando pedidos sem `accepted_at` e sem `fulfillment_status`. Por isso esta alteração **não** exige esses dois campos em pedido aceito: o `CHECK` só proíbe preenchê-los fora do lugar. A API desta versão sempre os preenche e trata o nulo legado como "aceito na criação" e `PENDING`. **Contração pendente** (próxima release, com esta API em produção): preencher os nulos criados na janela do deploy (`accepted_at = created_at`, `fulfillment_status = 'PENDING'` em entrega/retirada aceita) e apertar `ck_orders_acceptance` (`accepted_at` obrigatório em `ACCEPTED`) e `ck_orders_fulfillment` (obrigatório em entrega/retirada aceita).
+**Expand/contract (09 §9.4):** a migration roda antes do deploy, e a API anterior continua criando pedidos sem `accepted_at` e sem `fulfillment_status`. Por isso esta alteração **não** exige esses dois campos em pedido aceito: o `CHECK` só proíbe preenchê-los fora do lugar. A API desta versão sempre os preenche e trata o nulo legado como "aceito na criação" e `PENDING`. **Contração pendente** (próxima release, com esta API em produção): preencher os nulos criados na janela do deploy (`accepted_at = created_at`, `fulfillment_status = 'PENDING'` em entrega/retirada aceita) e apertar `ck_orders_acceptance` (`accepted_at` obrigatório em `ACCEPTED`) e `ck_orders_fulfillment` (obrigatório em entrega/retirada aceita), e tirar o default da coluna nova (`ALTER TABLE orders ALTER COLUMN acceptance_status DROP DEFAULT`): o default `'ACCEPTED'` só existe para a API anterior continuar criando pedidos na janela do deploy, e a API desta versão sempre grava o status. Registrada em 09 §9.4.
 
-**Correção de dados nos pedidos existentes:** a RLS de `orders` é `FORCE` (§5.12), então nem o dono da tabela enxerga linhas sem `app.tenant_id`. A convenção de §5.1 (`SET LOCAL ROLE almoseis_platform`) não serve aqui, porque o papel de migration não é membro de `almoseis_platform` (nem em §5.1 nem no `infra/db/init`). A migration tira o `FORCE` só em volta do `UPDATE`, na mesma transação: o dono passa a enxergar todas as linhas, e o `FORCE` volta antes do commit.
+**Correção de dados nos pedidos existentes:** a RLS de `orders` é `FORCE` (§5.12), então nem o dono da tabela enxerga linhas sem `app.tenant_id`. A migration usa a convenção de §5.1: tira o `FORCE` só em volta do `UPDATE`, na mesma transação, e o devolve antes do commit.
 
 ```sql
 -- Origem WEB e autor opcional (pedido e itens da página não têm funcionário)
@@ -1200,7 +1210,7 @@ Página de pedidos pela web (EP-002 fatia 2: F-201 a F-204, F-208, F-210, F-212)
 - **`storefront_settings`** [T][V] (1:1 com o tenant, como `tenant_settings`): perfil público, chave da página (`is_page_active`, nasce `false`), pausa rápida (`is_accepting_orders`, `is_delivery_enabled`), modos oferecidos, endereço do restaurante e os campos da taxa por distância do ADR-0048 (`latitude`/`longitude`, `delivery_fee_mode`, `price_per_km`, `minimum_delivery_fee`, `max_delivery_distance_km`), que nascem agora e só são usados na fatia 4. Página ativa exige endereço completo (`ck_storefront_settings_active_address`); "pelo menos um tamanho de marmita ativo" depende de outra tabela e fica na aplicação.
 - **`store_slugs`** (plataforma, ADR-0045 item 4): slug único **global** (a PK), um atual por tenant (`ux_store_slugs_current`) e os antigos, que redirecionam (301) e continuam reservados ao mesmo tenant. `blocked_until` é a quarentena de 12 meses depois da anonimização do tenant (ADR-0044 item 15), preenchida pelo job de retenção do ADR-0024 quando ele existir.
 - **`order_tracking_tokens`** (plataforma, ADR-0047): só o SHA-256 do token, um por pedido, válido por 7 dias.
-- **RLS das duas tabelas de plataforma:** a resolução acontece **antes** de o tenant ser conhecido, então a leitura é aberta ao papel da aplicação (o slug é público e o token está em hash, ADR-0045 item 5). A escrita continua presa ao tenant da sessão (`WITH CHECK (tenant_id = app_tenant_id())`): uma página de A nunca grava slug nem token de B. É mais restrito que o "sem RLS" do ADR-0045, com o mesmo efeito para a leitura.
+- **RLS das duas tabelas de plataforma:** a resolução acontece **antes** de o tenant ser conhecido, então a leitura é aberta ao papel da aplicação (o slug é público e o token está em hash, ADR-0045 item 5). **Desde a 0007, a leitura aberta vale só para `store_slugs`**: `order_tracking_tokens` passou a ser lida no tenant da sessão, e a resolução do token antes do tenant é pela função `resolve_tracking_token`. A escrita continua presa ao tenant da sessão (`WITH CHECK (tenant_id = app_tenant_id())`): uma página de A nunca grava slug nem token de B. É mais restrito que o "sem RLS" do ADR-0045, com o mesmo efeito para a leitura.
 - **`web_order_intakes`** [T] (ADR-0045 item 14, ADR-0052 item 5): hash do IP (SHA-256 com sal diário) de cada pedido da página, para o limite de 3 pedidos aguardando aceite por IP e para investigar trote. Apagado em 7 dias.
 - **`orders`**: forma de pagamento prevista e "troco para" (ADR-0044 item 19; só informação, não cria pagamento), `risk_flag` (`CAPTCHA_UNAVAILABLE` quando o Turnstile não respondeu, ADR-0045 item 12) e `anonymized_at` (anonimização dos pedidos da página não aceitos após 7 dias, ADR-0052 item 3). Os três primeiros só existem em pedido `WEB`.
 - **`products.is_visible_on_page`** (ADR-0044 item 5): bebidas e adicionais podem ser escondidos da página.
@@ -1493,7 +1503,7 @@ GRANT DELETE ON delivery_quotes, geocode_cache_entries TO almoseis_platform;
 Push para pedidos da página (EP-002 fatia 5, F-209):
 
 - **`push_registrations`** [T] (ADR-0049 item 4): o token do Expo de uma instalação no estabelecimento, ligado ao funcionário da sessão (`tenant_employee_id`) e, no login por PIN, ao aparelho compartilhado (`shared_device_id`; vale o último funcionário que entrou). Um registro por instalação e tenant (`ux_push_registrations_installation`) e **um registro por token em todo o sistema** (`ux_push_registrations_token`): o aparelho que troca de estabelecimento sem logout sai do anterior quando registra o token no novo. `web_orders_enabled` é a opção "Avisar pedidos do site com o app fechado" (item 6); `show_tenant_name`, calculado a cada registro, põe o nome do estabelecimento no título quando o usuário tem mais de um vínculo (item 3); `updated_at` é o último registro feito pelo app, e o job apaga o que está sem uso há 30 dias. `platform` aceita `WEB`, reservado para o Web Push (Q-26): a API ainda recusa. Logout (fora do aparelho compartilhado), troca de estabelecimento, `AccessRevoked`, revogação do aparelho e `DeviceNotRegistered` apagam o registro, por isso o papel da aplicação tem `DELETE`.
-- **Política `push_token_owner`**: a sessão que comprova ter o token (`app.push_token`, definido só dentro da transação do `PUT /devices/push-token`) enxerga e apaga os registros com **esse** token em outros tenants, sem enxergar nenhum outro. Não há política de `INSERT`/`UPDATE` além da de tenant: ninguém grava registro em outro estabelecimento.
+- **Política `push_token_owner`** (**substituída na 0007** pela função `release_push_token`, que só libera o registro da mesma instalação): a sessão que comprova ter o token (`app.push_token`, definido só dentro da transação do `PUT /devices/push-token`) enxerga e apaga os registros com **esse** token em outros tenants, sem enxergar nenhum outro. Não há política de `INSERT`/`UPDATE` além da de tenant: ninguém grava registro em outro estabelecimento.
 - **`push_deliveries`** [T] (ADR-0049 item 8, ADR-0031): um push por mensagem do outbox (`event_id`) e registro. É a deduplicação do reenvio (entrega pelo menos uma vez) e guarda o ticket da Expo para a conferência do recibo depois de 15 min, ou o erro do ticket. Sem token nem conteúdo (ADR-0052 item 7). Apagada em 7 dias pelo job, no papel de plataforma.
 - **`outbox_messages.available_at`**: entrega agendada (o lembrete aos 3 min, ADR-0046 item 15) e espera entre tentativas de um consumidor interno. Nulo = na hora.
 
@@ -1583,4 +1593,73 @@ GRANT INSERT, UPDATE, DELETE ON push_registrations TO almoseis_app;
 GRANT INSERT, UPDATE ON push_deliveries TO almoseis_app;
 -- Limpeza (ADR-0049 item 4, ADR-0052 item 5): registro sem uso há 30 dias e entregas com mais de 7 dias
 GRANT DELETE ON push_registrations, push_deliveries TO almoseis_platform;
+```
+
+### 0007_PublicPageHardening — 2026-11-20 (ADR-0045, ADR-0047, ADR-0048, ADR-0049, ADR-0052)
+
+Correções da revisão de arquitetura do EP-002 (fatias 1 a 5):
+
+- **Token de push de outro tenant** (ADR-0049 item 4): as políticas `push_token_owner_select`/`_delete` da 0006 deixavam quem enviasse a string do token de **outro** aparelho ler e apagar o registro dele (o restaurante deixava de receber o aviso). Saem as duas políticas e a `app_push_token()`. No lugar, a função `release_push_token(token, installation_id)` (`SECURITY DEFINER`, §5.1), chamada pelo `PUT /devices/push-token`: libera o registro com esse token em **outro** tenant só quando ele é da **mesma instalação** (`installation_id` do JWT), que é o caso legítimo do aparelho que trocou de estabelecimento sem logout. Devolve `1` (liberou), `0` (não havia) ou `-1` (o token está registrado por **outra** instalação em outro tenant: não apaga, e o `PUT` responde `409 PushTokenInUse`). Nunca devolve a linha. O mesmo token em outra instalação do **mesmo** tenant continua saindo pela RLS de tenant.
+- **Resolução do token de acompanhamento** (ADR-0047): a leitura aberta de `order_tracking_tokens` (`public_lookup`, `USING (true)`) dava a qualquer sessão da aplicação todos os hashes, tenants e pedidos. A leitura passa a ser só no tenant da sessão (`tenant_select`), e a resolução antes do tenant é a função `resolve_tracking_token(token_hash)`, que devolve só `tenant_id` e `expires_at` de **um** hash. `store_slugs` continua com leitura aberta (o slug é público).
+- **Cache de geocodificação** (ADR-0048 item 11, ADR-0052 item 5): o hash do endereço passa a ser HMAC-SHA-256 com o segredo `Maps:AddressHashSecret` (era SHA-256 do tenant + endereço, que qualquer um com a lista de endereços da cidade recalcula), e as coordenadas do cliente guardadas no cache passam a ter **4 casas** (`numeric(7,4)`, cerca de 11 m); a cotação corrente continua com 6 casas em `delivery_quotes` (15 min + 24 h). O ponto de partida da rota (`origin_*`, o ponto do restaurante, que não é dado do cliente) fica com 6 casas, porque é comparado com o ponto confirmado. As linhas existentes (hash antigo, coordenadas exatas) são apagadas: o hash novo nunca as encontraria, e o cache se refaz na próxima cotação. Validade padrão do cache: 7 dias (`Maps:GeocodeCacheDays`, era 30).
+
+**Correção de dados:** a RLS de `geocode_cache_entries` é `FORCE`; o `DELETE` usa a técnica de §5.1 (`NO FORCE` só em volta dele, na mesma transação).
+
+**Expand/contract (09 §9.4):** na janela do deploy, a API anterior ainda chama a `app_push_token()` removida no `PUT /devices/push-token` (falha só esse `PUT`, que o app repete na próxima abertura) e lê `order_tracking_tokens` por SQL antes do tenant, o que deixa de achar o token (o acompanhamento responde `404` até a API nova subir; a página tenta de novo em 20 s). As coordenadas que a API anterior gravar no cache viram 4 casas pelo próprio tipo da coluna, e o hash antigo delas nunca é encontrado pela API nova (somem no vencimento).
+
+```sql
+-- Token de push: sem leitura nem DELETE por posse do token; só a função libera, e só da mesma instalação (ADR-0049 item 4)
+DROP POLICY push_token_owner_select ON push_registrations;
+DROP POLICY push_token_owner_delete ON push_registrations;
+DROP FUNCTION app_push_token();
+
+CREATE FUNCTION release_push_token(p_token text, p_installation_id text) RETURNS integer
+  LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+  SET search_path = public, pg_temp
+  AS $$
+DECLARE
+  session_tenant uuid := app_tenant_id();
+  released integer;
+BEGIN
+  IF session_tenant IS NULL THEN
+    RAISE EXCEPTION 'release_push_token exige app.tenant_id';
+  END IF;
+  -- Outra instalação em outro tenant: não é o mesmo aparelho trocando de estabelecimento.
+  IF EXISTS (SELECT 1 FROM push_registrations
+              WHERE expo_push_token = p_token AND tenant_id <> session_tenant AND installation_id <> p_installation_id) THEN
+    RETURN -1;
+  END IF;
+  DELETE FROM push_registrations
+   WHERE expo_push_token = p_token AND tenant_id <> session_tenant AND installation_id = p_installation_id;
+  GET DIAGNOSTICS released = ROW_COUNT;
+  RETURN released;
+END $$;
+ALTER FUNCTION release_push_token(text, text) OWNER TO almoseis_migrator;
+REVOKE ALL ON FUNCTION release_push_token(text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION release_push_token(text, text) TO almoseis_app;
+-- O dono da função também está sob FORCE: políticas só com o que a função usa
+CREATE POLICY release_push_token_select ON push_registrations FOR SELECT TO almoseis_migrator USING (true);
+CREATE POLICY release_push_token_delete ON push_registrations FOR DELETE TO almoseis_migrator USING (true);
+
+-- Token de acompanhamento: leitura só no tenant da sessão; antes do tenant, só pelo hash, pela função (ADR-0047)
+DROP POLICY public_lookup ON order_tracking_tokens;
+CREATE POLICY tenant_select ON order_tracking_tokens FOR SELECT TO almoseis_app USING (tenant_id = app_tenant_id());
+
+CREATE FUNCTION resolve_tracking_token(p_token_hash bpchar) RETURNS TABLE (tenant_id uuid, expires_at timestamptz)
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = public, pg_temp
+  AS $$ SELECT t.tenant_id, t.expires_at FROM order_tracking_tokens t WHERE t.token_hash = p_token_hash $$;
+ALTER FUNCTION resolve_tracking_token(bpchar) OWNER TO almoseis_migrator;
+REVOKE ALL ON FUNCTION resolve_tracking_token(bpchar) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION resolve_tracking_token(bpchar) TO almoseis_app;
+CREATE POLICY resolve_tracking_token_select ON order_tracking_tokens FOR SELECT TO almoseis_migrator USING (true);
+
+-- Cache de geocodificação: hash com segredo e coordenadas com 4 casas (ADR-0048 item 11, ADR-0052 item 5).
+-- As linhas antigas (SHA-256 sem segredo, 6 casas) saem; a RLS é FORCE, então o FORCE sai só durante o DELETE.
+ALTER TABLE geocode_cache_entries NO FORCE ROW LEVEL SECURITY;
+DELETE FROM geocode_cache_entries;
+ALTER TABLE geocode_cache_entries FORCE ROW LEVEL SECURITY;
+ALTER TABLE geocode_cache_entries
+  ALTER COLUMN latitude TYPE numeric(7,4),
+  ALTER COLUMN longitude TYPE numeric(7,4);
 ```

@@ -61,8 +61,8 @@ internal sealed class StorefrontModelConfiguration : IModuleModelConfiguration
             b.HasKey(x => new { x.TenantId, x.AddressHash });
             b.Ignore(x => x.Point);
             b.Property(x => x.AddressHash).HasMaxLength(64).IsFixedLength();
-            b.Property(x => x.Latitude).HasPrecision(9, 6);
-            b.Property(x => x.Longitude).HasPrecision(9, 6);
+            b.Property(x => x.Latitude).HasPrecision(7, GeocodeCacheEntry.CoordinateDecimals);
+            b.Property(x => x.Longitude).HasPrecision(7, GeocodeCacheEntry.CoordinateDecimals);
             b.Property(x => x.OriginLatitude).HasPrecision(9, 6);
             b.Property(x => x.OriginLongitude).HasPrecision(9, 6);
         });

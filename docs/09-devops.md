@@ -83,6 +83,8 @@ build & push da imagem → job `migrate` (environment homolog|production):
 
 Produção exige aprovação no Environment `production`. As migrations rodam **antes** do deploy e precisam ser compatíveis com a versão anterior (*expand/contract*): nunca remover nem renomear coluna na mesma release que deixa de usá-la.
 
+**Contração pendente:** 0003 (05 §5.17), na release seguinte à que pôs a API da 0003 em produção: preencher `accepted_at`/`fulfillment_status` nulos da janela do deploy, apertar `ck_orders_acceptance` e `ck_orders_fulfillment` e `ALTER TABLE orders ALTER COLUMN acceptance_status DROP DEFAULT`.
+
 ### `mobile-ci.yml` — PR e push (paths `mobile/**`)
 
 `npm ci` → `npx tsc --noEmit` → `npx eslint .` → `npx jest --ci`.
