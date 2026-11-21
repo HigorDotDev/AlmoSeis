@@ -5,12 +5,17 @@
 import { useAudioPlayer } from 'expo-audio';
 import { useCallback } from 'react';
 
-import type { OrderSound } from './orderSound.types';
+import type { OrderSound, OrderSoundKind } from './orderSound.types';
 
-export type { OrderSound } from './orderSound.types';
+export type { OrderSound, OrderSoundKind } from './orderSound.types';
 
-export function useOrderSound(): OrderSound {
-  const player = useAudioPlayer(require('../../../assets/sounds/new-order.wav'));
+const SOUNDS = {
+  newOrder: require('../../../assets/sounds/new-order.wav'),
+  webOrder: require('../../../assets/sounds/web_order.wav'),
+} as const;
+
+export function useOrderSound(kind: OrderSoundKind = 'newOrder'): OrderSound {
+  const player = useAudioPlayer(SOUNDS[kind]);
   const play = useCallback(() => {
     player.seekTo(0);
     player.play();

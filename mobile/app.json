@@ -61,6 +61,16 @@
       "expo-sqlite",
       "expo-secure-store",
       "expo-audio",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/android-icon-monochrome.png",
+          "color": "#B23C0B",
+          "sounds": [
+            "./assets/sounds/web_order.wav"
+          ]
+        }
+      ],
       "expo-image",
       [
         "expo-image-picker",

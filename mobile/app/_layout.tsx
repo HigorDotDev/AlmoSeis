@@ -14,6 +14,7 @@ import { Toaster, useColorMode, useColors } from '@/components/ui';
 import { draftsRepo } from '@/db/draftsRepo';
 import { queryCacheStorage } from '@/db/kvStorage';
 import { openLocalDb } from '@/db/migrations';
+import { usePushNotifications } from '@/features/push/hooks';
 import { handleUpgradeRequired } from '@/features/update/upgradeHandler';
 import { RECONNECTING_MESSAGE } from '@/lib/strings';
 import { useConnectivity } from '@/stores/connectivity';
@@ -64,6 +65,8 @@ export default function RootLayout() {
   const reconnecting = useSession((s) => s.reconnecting);
   const c = useColors();
   const mode = useColorMode();
+  // Push dos pedidos do site (ADR-0049): canal, supressão em primeiro plano e o toque, mesmo sem sessão.
+  usePushNotifications();
   // Fundo das abas e das telas do navegador segue o tema escolhido no aparelho, não só o do sistema.
   const navTheme = useMemo(() => {
     const base = mode === 'dark' ? DarkTheme : DefaultTheme;

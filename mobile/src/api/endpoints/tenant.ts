@@ -7,6 +7,8 @@ import type {
   Items,
   NewAccount,
   Platform,
+  PushRegistration,
+  PushTokenBody,
   Role,
   RoleInfo,
   Session,
@@ -57,4 +59,10 @@ export const devicesApi = {
     apiRequest<SharedDevice>('POST', '/devices/shared', { body }),
   list: () => apiRequest<Items<SharedDeviceSummary>>('GET', '/devices/shared'),
   revoke: (id: Uuid) => apiRequest<void>('POST', `/devices/shared/${id}/revoke`),
+};
+
+/** 06 §6.3 "Push dos pedidos do site" (ADR-0049): só o próprio aparelho escreve; sem `Idempotency-Key` nem `If-Match`. */
+export const pushTokenApi = {
+  put: (body: PushTokenBody, timeoutMs?: number) => apiRequest<PushRegistration>('PUT', '/devices/push-token', { body, timeoutMs }),
+  remove: (timeoutMs?: number) => apiRequest<void>('DELETE', '/devices/push-token', { timeoutMs }),
 };

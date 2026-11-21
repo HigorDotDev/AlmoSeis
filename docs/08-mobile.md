@@ -1,6 +1,6 @@
 # 08. Mobile (React Native + Expo) — arquitetura tela por tela
 
-> Implementa os ADRs 0001, 0010, 0017, 0019–0023, 0027, 0030, 0032–0036 e 0038–0041 sobre os contratos de `06-contratos-api.md`. Diz **quais telas existem, de onde vêm os dados, o que cada ação envia e como o app se comporta sem conexão**. Payloads e `errorCode`s vêm **só** do `06`.
+> Implementa os ADRs 0001, 0010, 0017, 0019–0023, 0027, 0030, 0032–0036, 0038–0041 e 0049 (push dos pedidos do site) sobre os contratos de `06-contratos-api.md`. Diz **quais telas existem, de onde vêm os dados, o que cada ação envia e como o app se comporta sem conexão**. Payloads e `errorCode`s vêm **só** do `06`.
 
 ## 8.1 Stack e alvo
 
@@ -15,7 +15,7 @@
 | Banco local | `expo-sqlite` (rascunhos, operações pendentes, metadados de sync) |
 | Segredos | `expo-secure-store` (tokens, `deviceSecret`) |
 | Tempo real | `@microsoft/signalr` |
-| Outros | `expo-keep-awake`, `expo-audio` (aviso sonoro), `expo-image`, `expo-network`, `expo-application`, `expo-crypto` (`randomUUID`), `@shopify/flash-list`, `qrcode-generator` (QR da página de pedidos, JavaScript puro) |
+| Outros | `expo-keep-awake`, `expo-audio` (aviso sonoro), `expo-notifications` (push dos pedidos do site, §8.6), `expo-image`, `expo-network`, `expo-application`, `expo-crypto` (`randomUUID`), `@shopify/flash-list`, `qrcode-generator` (QR da página de pedidos, JavaScript puro) |
 | Testes | Jest + React Native Testing Library; fluxos E2E com Maestro em emulador (homolog) |
 
 **Aparelho de referência** (RNF-001): Android de entrada, 2 GB de RAM, tela de 5,5", rede 4G instável. Toda tela de lista usa `FlashList`, imagens passam pelo `expo-image` com cache em disco, e nenhuma tela carrega mais de 100 itens sem paginação.
@@ -54,7 +54,7 @@ mobile/
         storefront.tsx                 # página de pedidos (EP-002 F-210)
   src/
     api/          client.ts  errors.ts  headers.ts  endpoints/*.ts (um arquivo por recurso do 06)
-    features/     auth/ orders/ production/ payments/ closing/ menu/ catalog/ customers/ employees/ sync/ realtime/ drafts/ storefront/
+    features/     auth/ orders/ production/ payments/ closing/ menu/ catalog/ customers/ employees/ sync/ realtime/ drafts/ storefront/ push/
                   (cada uma com hooks/, components/, schemas.ts)
     components/ui/   design system (§8.10)
     db/           schema.ts  migrations.ts  draftsRepo.ts  pendingOpsRepo.ts  metaRepo.ts
@@ -258,7 +258,25 @@ Na aba Pedidos:
 - com a preferência local "Som de pedidos" ligada, `OrderCreated` e `OrderAlertCreated` com `affectsProduction` tocam um som curto (`expo-audio`, volume respeitando o sistema);
 - o card do pedido pisca uma vez.
 
-Em qualquer aba (`features/orders/useWebOrderSound.ts`, montado no layout de `(app)`): `OrderAwaitingAcceptance` (pedido do site chegou, ADR-0046 item 23) toca **o mesmo som** de pedido novo para quem tem `orders.view`, com a mesma preferência. O som próprio vem com o push (EP-002 F-209, fatia 5). Os eventos `OrderAwaitingAcceptance`, `OrderAccepted`, `OrderRejected` e `OrderFulfillmentChanged` têm `entityType: ORDER`: o mapa de §8.3 já invalida `['orders', 'list']` (inclusive a faixa) e `['production']`, e o sync faz o mesmo pelo feed.
+Em qualquer aba (`features/orders/useWebOrderSound.ts`, montado no layout de `(app)`): `OrderAwaitingAcceptance` (pedido do site chegou, ADR-0046 item 23) toca o som próprio dos pedidos do site (`assets/sounds/web_order.wav`, o mesmo do canal de push `web-orders`, ADR-0049 item 7) para quem tem `orders.view`, com a mesma preferência "Som de pedidos". Os eventos `OrderAwaitingAcceptance`, `OrderAccepted`, `OrderRejected` e `OrderFulfillmentChanged` têm `entityType: ORDER`: o mapa de §8.3 já invalida `['orders', 'list']` (inclusive a faixa) e `['production']`, e o sync faz o mesmo pelo feed.
+
+### Push dos pedidos do site (ADR-0049, EP-002 F-209)
+
+Só o pedido do site aguardando aceite e o lembrete aos 3 min geram push (06 §6.3 "Push dos pedidos do site"); o resto continua só em primeiro plano (ADR-0036). O push é **aviso, não estado**: tocar abre o pedido e o app busca tudo pela API.
+
+| Peça | Onde | Como |
+|---|---|---|
+| Módulo | `expo-notifications` (plugin no `app.json` com `sounds: ["./assets/sounds/web_order.wav"]`, que também põe o som no pacote iOS; `icon` = `android-icon-monochrome.png`, `color` `#B23C0B`) | Módulo nativo: **muda o fingerprint e exige um build novo do Dev Client/APK**. Expo → FCM/APNs; sem `eas init` + credenciais FCM/APNs não há token |
+| Interface | `features/push/notifications.ts` (nativo) / `notifications.web.ts` (no-op, `supported: false`) / `notifications.types.ts` | `init`, `getPermission`, `requestPermission`, `getToken`, `onTokenChange`, `openSettings` |
+| Canal e som | `notifications.init` na raiz (`usePushNotifications` em `app/_layout.tsx`) | Canal Android `web-orders` ("Pedidos do site", importância alta, som `web_order.wav`, visível na tela bloqueada), criado antes de qualquer pedido de permissão (o Android 13+ exige um canal). `assets/sounds/web_order.wav`: dois toques sintetizados (dó–sol, duas vezes, 1,5 s), original. O mesmo arquivo toca dentro do app no `OrderAwaitingAcceptance` (`useOrderSound('webOrder')`) |
+| Primeiro plano | `setNotificationHandler` | Sempre suprime (sem faixa, lista nem som): o SignalR + o som já avisaram (item 9). A de outro estabelecimento também |
+| Toque | `init` → `parseWebOrderPushData` → `usePushTarget` (memória) → `usePushTargetOpener` no layout de `(app)` | `data` só com `tenantId`, `orderId` (UUID) e `kind` conhecido; o resto é ignorado. Inclui o toque que abriu o app fechado (`getLastNotificationResponse`, depois `clearLastNotificationResponse`; a mesma notificação não abre duas vezes). Sessão do mesmo `tenantId` → `router.push('/orders/{orderId}')` depois de 400 ms (a navegação do login assenta). Sem sessão → a guarda leva ao login (ou à seleção + PIN) e o destino espera; ao entrar no mesmo estabelecimento, abre. Outro estabelecimento → descarta. Toque com mais de 30 min → descarta |
+| Registro | `features/push/registration.ts` + `usePushRegistration` no layout de `(app)` | `PUT /devices/push-token` `{ installationId, expoPushToken, platform, webOrdersEnabled }` ao entrar (senha, convite, PIN, troca de estabelecimento), a cada abertura, na volta ao primeiro plano e quando o token muda (`addPushTokenListener`). Com os mesmos dados (tenant, funcionário, instalação, token, opção) há menos de 12 h, não repete. Uma sincronização por vez. Só com a permissão concedida; sem ela, se este aparelho tinha registrado no estabelecimento (`meta.pushRegisteredTenant`), manda `DELETE`. A resposta (sem o token) vai para `usePushStatus` |
+| Sem `projectId` | `notifications.getToken` lê `expoConfig.extra.eas.projectId` (ou `easConfig.projectId`) | Ausente (o `eas init` não foi feito): não pede token nem registra, um `console.warn` só em `__DEV__` e a tela de Configurações diz o motivo |
+| Sair | `confirmSignOut` (`AppShell.tsx`) | Aparelho pessoal: `DELETE /devices/push-token` (5 s, erro ignorado) **antes** do `POST /auth/logout`, que também apaga. Aparelho compartilhado: não (o registro é do aparelho e vale o último PIN). Troca de estabelecimento, `AccessRevoked` e revogação: o servidor apaga |
+| Permissão | `WebOrderPushPrompt` (`features/push/components.tsx`) | Nunca na abertura do app (item 6). Para quem tem `orders.accept`, no **primeiro uso dos pedidos do site**: dentro da faixa "Novos do site" (Marmitas e Pedidos) e na tela "Página de pedidos" (`menu/storefront`). Primeiro a explicação ("Para não perder pedidos do site, permita as notificações…") com "Permitir avisos" (só então o pedido do sistema) e "Agora não" (`pushPromptDismissed`, esconde de vez; a opção fica em Configurações). Negada (ou sem poder perguntar de novo): uma linha discreta com "Configurações" (`Linking.openSettings`) e fechar |
+| Preferência | `menu/settings` → seção "Pedidos do site com o app fechado" (`WebOrderPushSettings`) | Chave "Avisar pedidos do site com o app fechado" = `usePreferences.webOrdersPush` (`null` até mexer: vai `null` e o servidor mantém a dele, ligada no primeiro registro). Mudar grava no aparelho e manda o `PUT` (ligar sem a permissão ainda pedida mostra o pedido do sistema). Mostra a permissão, o motivo sem `projectId`, a falha do registro, "Seu perfil não aceita pedidos do site…" quando `receivesWebOrders = false`, a nota do aparelho compartilhado e a da economia de bateria (Xiaomi, Samsung) |
+| Web | `notifications.web.ts` | Nada de push nesta fase (Web Push é P2, Q-26; a API recusa `WEB`). O bundle web não inclui o `expo-notifications`; Configurações explica que a aba aberta avisa pelo som e pelo título |
 
 ---
 
@@ -338,7 +356,7 @@ A aba inicial é a primeira visível. O app lembra a última aba usada por apare
 | Formas de pagamento | `menu/payment-methods` | `settings.manage` |
 | Histórico de operações | `menu/audit` | `audit.view` |
 | Histórico de fechamentos | `closing/history` | `closing.view` |
-| Configurações gerais | `menu/settings` (som, aparelho compartilhado, tamanho da fonte) | — |
+| Configurações gerais | `menu/settings` (som, aviso dos pedidos do site com o app fechado, aparelho compartilhado, tamanho da fonte) | — |
 | Aparelhos compartilhados | `menu/devices` | `devices.manage` |
 | Rascunhos e pendências | `menu/drafts` | — |
 | Assinatura e plano | `menu/subscription` | `subscription.view` |
@@ -530,7 +548,7 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 | `menu/audit` | Filtros (tipo, funcionário, período); linhas "Ana estornou R$ 35,00 do pedido #12 — 28/10 10:05" | `GET /audit-logs` |
 | `menu/subscription` | Situação, dias restantes e texto de orientação. **Sem preço, plano ou link** (ADR-0017) | `GET /subscription` |
 | `menu/drafts` | Rascunhos (continuar / descartar) e pendências (verificar / reenviar / descartar com confirmação) | SQLite + `GET /operations/{key}` |
-| `menu/settings` | Som de pedidos, tamanho da fonte da cozinha, modo compartilhado, versão do app | local |
+| `menu/settings` | Som de pedidos, tamanho da fonte da cozinha, "Avisar pedidos do site com o app fechado" (§8.6 "Push dos pedidos do site"), modo compartilhado, versão do app | local; a chave do push vai no `PUT /devices/push-token` |
 | `menu/storefront` | **Página de pedidos** (EP-002 F-210, RF-205, US-208/US-209). Ver abaixo | `GET/PUT /storefront` [M] |
 
 **`menu/storefront` — Página de pedidos** (`features/storefront`, ADR-0044, ADR-0048; tela de gestão, §8.5 exceção):
@@ -614,6 +632,7 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 | Componentes (RNTL) | `ConfirmDialog` (cancelar não chama a API), `MoneyInput`, `PermissionGate`, `OrderCard` com os dois badges |
 | Pedidos do site (ADR-0046) | `webOrders.test.ts`: botões de atendimento por tipo/status/permissão, "Concluir e marcar", `isDispatched`, contagem regressiva, texto do conflito pelo `current`, validação da recusa, título da aba, avisos do fechamento, mensagens dos `errorCode`s novos. `webOrderFlow.test.tsx` (fetch simulado, exemplos literais do 06): faixa com prazo, itens, endereço e "telefone não verificado"; cozinha sem botões; aceite com `If-Match` + `Idempotency-Key` + tempo estimado; `409` "Já aceito por Bruno"; `WebOrderExpired`; rede caindo → pendência `UNKNOWN` e nenhum reenvio; recusa com motivo, "Outro" obrigatório e sem `Idempotency-Key`; "Concluir e marcar saída" com `completeProduction`; `ProductionNotCompleted`; selos "Site"/atendimento no `OrderCard`; "Pronto para retirar"; fechamento com os pedidos do site |
 | Página de pedidos (EP-002 F-210) | `storefront.test.tsx` (fetch simulado, exemplo do 06 §6.18): slug normalizado e formato; chave rápida com o objeto inteiro e só a chave trocada; corpo do formulário (E.164, UF, vazios → `null`, taxa intocada); textos do estado; QR com os padrões de posição; ativar sem endereço → `PUT` com `If-Match` e o motivo do `422` na tela; pausar → `isAcceptingOrders: false` e "Pausada"; `409` → aviso, formulário recarregado, sem reenvio; chaves travadas com edição pendente; modo leitura com compartilhar; `share.web.ts` (copiar sem `navigator.share`, fechar a folha não copia); `isVisibleOnPage` no `PATCH` da bebida; "Vai pagar…" e o aviso de `riskFlag`. Fatia 4: texto do `pageDelivery.missing` (e `MAPS_PROVIDER` à parte); raio e coordenadas digitados; link do Google Maps; texto de "Página ativa" depois de ativar (defeito corrigido); "Ver no mapa" e "Confirmar este ponto" (`location` confirmado no objeto inteiro, `If-Match`); correção à mão; salvar a regra da taxa sem `location` no corpo; taxa fixa sem o ponto; "Entrega · 4,5 km · taxa R$ 3,60" |
+| Push dos pedidos do site (EP-002 F-209) | `push.test.tsx` (`expo-notifications` e `expo-constants` simulados, exemplo literal do 06 §6.3): leitura do `data` (só `kind` conhecido e `orderId` UUID); decisão do toque (sem sessão espera, outro tenant descarta, toque velho descarta); corpo do `PUT` e resposta sem token; sem repetir com os mesmos dados e de novo com outro funcionário (PIN) ou token novo; sem permissão não registra e apaga o registro anterior; sem `projectId` não pede token, avisa uma vez e a tela diz o motivo; chave "Avisar pedidos do site" no `PUT`; `receivesWebOrders = false`; registro ao entrar e na troca de token; `DELETE` no "Encerrar sessão"; explicação antes do pedido do sistema, "Agora não", negada com atalho para as configurações, sem `orders.accept` não aparece; primeiro plano suprimido e canal `web-orders` com o som; toque abre o pedido, outro tenant ignorado, app fechado sem sessão abre depois do login, a mesma notificação uma vez só; `notifications.web.ts` no-op. **O push de verdade não foi testado** (exige `eas init`, credenciais FCM/APNs e o build novo) |
 | E2E (Maestro, emulador Android de entrada) | 1) cadastro → abrir expediente → marmita com bebida → receber em dinheiro com troco → fechar com diferença e justificativa; 2) desligar a rede no meio do "Receber" → religar → app resolve sem duplicar; 3) PIN no aparelho compartilhado + inatividade |
 
 Critério de pronto do mobile (`docs/02-padroes.md` §2.6): fluxos E2E 1 e 2 passando em homolog antes de cada release para as lojas.
@@ -643,7 +662,8 @@ Critério de pronto do mobile (`docs/02-padroes.md` §2.6): fluxos E2E 1 e 2 pas
 | Divisão "por itens" | Soma `lineTotal` dos itens marcados (com adicionais), limitada ao saldo, num único pagamento | 8.9 não detalha; é uma parcela por vez |
 | Senha no perfil | "Trocar senha" pede senha atual, nova e confirmação e chama `PUT /auth/me/password` (mutação simples, não é [I] nem [M]). Senha atual errada volta como `422` no campo. Escondido em modo compartilhado (sessão por PIN) | Rota criada no 06 em 2026-10-28, a pedido do usuário; os outros aparelhos da pessoa saem no próximo refresh |
 | Inatividade compartilhada | `sharedDeviceIdleSeconds` é editado em "Formas de pagamento" (mesmo `PATCH /tenant/settings`) | `menu/settings` é só local (8.10) |
-| Som | `assets/sounds/new-order.wav` (bipe curto gerado) via `expo-audio` | ADR-0036 |
+| Som | `assets/sounds/new-order.wav` (bipe curto gerado) via `expo-audio`; `assets/sounds/web_order.wav` (dois toques sintetizados, 1,5 s) para o pedido do site, no app e no canal de push | ADR-0036, ADR-0049 item 7 |
+| Push e build | `expo-notifications` entrou na fatia 5 do EP-002: muda o fingerprint (`runtimeVersion: fingerprint`), então **nenhum EAS Update chega aos builds antigos** e é preciso gerar e instalar um Dev Client/APK novo. O token só sai com `extra.eas.projectId` (`eas init`) e as credenciais FCM (Android) e APNs (iOS) no EAS | Sem isso o app funciona, só não registra o push (Configurações diz o motivo) |
 | E2E | Fluxos Maestro em `mobile/e2e/` escritos a partir de 8.13; **ainda não rodados** em emulador | Exigem homolog e Dev Client instalado |
 
 ---
@@ -681,11 +701,12 @@ O mesmo `mobile/` roda no navegador do computador do balcão (Chrome e Edge no W
 | `features/sync/appLifecycle.ts` | `appLifecycle.web.ts` | **o SignalR não desconecta com a aba oculta** (ADR-0053 §7.1). Reconecta e sincroniza em `visibilitychange` visível, `online`, `pageshow` (bfcache) e ao detectar que o computador dormiu (intervalo de 30 s atrasado > 90 s) |
 | `lib/keepAwake.ts` | `keepAwake.web.ts` | Wake Lock próprio: o do `expo-keep-awake` web não readquire o lock ao voltar a aba e lança erro sem suporte |
 | `features/production/orderSound.ts` | `orderSound.web.ts` | `HTMLAudioElement`; `needsUnlock` enquanto a página não teve ativação do usuário (`navigator.userActivation`). A aba Pedidos mostra a faixa "Som desativado neste navegador — Ativar som"; o clique toca o aviso uma vez. No celular `needsUnlock` é sempre `false` |
-| `features/shell/tabTitle.ts` | `tabTitle.web.ts` | com a aba oculta, `document.title` = "(2) Novos do site · AlmoSeis": quantos pedidos do site **aguardam aceite agora** (a mesma consulta da faixa, `['orders', 'list', 'awaiting']`, mantida em dia pelos eventos com a aba oculta). Aceito em outro computador ou expirado, o número cai; volta ao título normal quando a aba vem para a frente (EP-002 fatia 1, 2026-11-20). O som do pedido do site é o mesmo do pedido novo (§8.6) |
+| `features/shell/tabTitle.ts` | `tabTitle.web.ts` | com a aba oculta, `document.title` = "(2) Novos do site · AlmoSeis": quantos pedidos do site **aguardam aceite agora** (a mesma consulta da faixa, `['orders', 'list', 'awaiting']`, mantida em dia pelos eventos com a aba oculta). Aceito em outro computador ou expirado, o número cai; volta ao título normal quando a aba vem para a frente (EP-002 fatia 1, 2026-11-20). O som do pedido do site é o `web_order.wav` (§8.6) |
 | `features/update/upgradeHandler.ts` + `UpdateRequiredScreen.tsx` | `*.web.ts(x)` | `426`: grava os rascunhos no debounce (`flushAllDrafts`) e recarrega a página **uma vez** (marca `almoseis.reloadedFor426` na `sessionStorage`, vale 10 min); se persistir, "Estamos atualizando o AlmoSeis. Tente de novo em alguns minutos." com "Recarregar", sem link de loja |
 | `lib/keyboard.ts` | `keyboard.web.ts` | `useKeyDown`: `Enter` confirma o `ConfirmDialog` (exceto com o foco num botão, que já trata a tecla); tecla segurada (`repeat`) é ignorada; PIN aceita dígitos, `Backspace` e `Enter`. `Esc` fecha diálogos e *sheets* pelo `onRequestClose` do `Modal` do react-native-web. O peso do quilo já é um `TextInput` |
 | `lib/share.ts` | `share.web.ts` | "Compartilhar link" da página de pedidos: no celular, `Share.share`; na web, `navigator.share` quando existe (fechar a folha não copia), senão `navigator.clipboard.writeText` e o aviso "Link copiado". Tipos em `share.types.ts` |
 | `features/storefront/printQr.ts` | `printQr.web.ts` | "Imprimir QR code" só na web (`canPrintQr`): janela com nome, QR em SVG e link + `window.print()`; janela bloqueada → aviso. No celular não há impressão (exigiria módulo nativo). Tipos em `printQr.types.ts`, QR em `qrMatrix.ts` |
+| `features/push/notifications.ts` | `notifications.web.ts` | Push dos pedidos do site (§8.6): no celular, `expo-notifications`; na web, **no-op** (`supported: false`, nunca registra nem pede permissão; Web Push é P2). Tipos em `notifications.types.ts`; o código comum (canal, `data`, destino do toque, estado) em `pushShared.ts` |
 | `lib/confirm.ts` | `confirm.web.ts` | `confirmAction`: pergunta de sim/não antes de ação destrutiva (encerrar sessão, descartar pendência). No celular, `Alert.alert`; na web, `window.confirm`, porque o `Alert` do react-native-web não faz nada. Uma regra de lint proíbe importar `Alert` de `react-native` fora de `lib/confirm.ts` |
 
 ### Sem arquivo `.web`

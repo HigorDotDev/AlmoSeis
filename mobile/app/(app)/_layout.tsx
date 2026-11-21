@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ConnectivityBar, useColors } from '@/components/ui';
 import { useWebOrderSound } from '@/features/orders/useWebOrderSound';
+import { usePushRegistration, usePushTargetOpener } from '@/features/push/hooks';
 import { useMeSync } from '@/features/session/hooks';
 import { ScreenHeader, useSharedDeviceIdle } from '@/features/shell/AppShell';
 import { useWaitingOrdersTitle } from '@/features/shell/tabTitle';
@@ -25,6 +26,8 @@ function SignedIn() {
   useMeSync();
   useWaitingOrdersTitle();
   useWebOrderSound();
+  usePushRegistration();
+  usePushTargetOpener();
   const touch = useSharedDeviceIdle();
   return (
     <View style={{ flex: 1, paddingTop: insets.top, backgroundColor: c.surface }} onTouchStart={touch}>

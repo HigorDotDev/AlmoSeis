@@ -11,6 +11,7 @@ import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { useSettings } from '@/features/session/hooks';
 import { draftsRepo } from '@/db/draftsRepo';
 import { pendingOpsRepo } from '@/db/pendingOpsRepo';
+import { unregisterPush } from '@/features/push/registration';
 import { confirmAction } from '@/lib/confirm';
 import { formatBusinessDate } from '@/lib/dates';
 import { usePendingOps } from '@/stores/pendingOps';
@@ -205,6 +206,8 @@ export async function confirmSignOut(): Promise<void> {
       await pendingOpsRepo.clearTenant(me.tenant.id);
       usePendingOps.getState().clear();
     }
+    // Aparelho pessoal: tira o push antes do logout (ADR-0049). No compartilhado o registro fica com o aparelho.
+    if (!useSession.getState().sharedDevice) await unregisterPush();
     await signOut('user');
     router.replace('/');
   };

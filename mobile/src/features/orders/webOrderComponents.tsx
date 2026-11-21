@@ -24,6 +24,7 @@ import {
   space,
   useColors,
 } from '@/components/ui';
+import { WebOrderPushPrompt } from '@/features/push/components';
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { formatBRL } from '@/lib/money';
 import { formatPhone } from '@/lib/phone';
@@ -82,6 +83,8 @@ export function NewWebOrdersSection({ collapsible = false, style }: { collapsibl
         </Row>
         {collapsible ? <Button title={expanded ? 'Esconder' : 'Ver'} variant="ghost" onPress={() => setExpanded(!expanded)} /> : null}
       </Row>
+      {/* Primeiro pedido do site na tela: explica e oferece o aviso com o app fechado (ADR-0049 item 6). */}
+      <WebOrderPushPrompt />
       {expanded ? items.map((o) => <WebOrderCard key={o.id} summary={o} />) : null}
     </View>
   );

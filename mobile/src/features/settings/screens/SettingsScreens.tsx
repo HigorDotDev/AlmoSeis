@@ -28,6 +28,7 @@ import type { Draft, PendingOperation } from '@/db/schema';
 import { useAuditLogs } from '@/features/employees/hooks';
 import { useSetPin, useSettings, useSubscription, useSwitchTenant, useTenant, useUpdateSettings, useUpdateTenant } from '@/features/session/hooks';
 import { confirmSignOut } from '@/features/shell/AppShell';
+import { WebOrderPushSettings } from '@/features/push/components';
 import { ChangePasswordSection } from '@/features/settings/ChangePasswordSection';
 import { discardPending, isExpired, resendPending, resolveUnknown } from '@/features/sync/operations';
 import { confirmAction } from '@/lib/confirm';
@@ -250,13 +251,14 @@ export function GeneralSettingsScreen() {
     <Screen>
       <Stack.Screen options={{ title: 'Configurações' }} />
       <Row style={{ justifyContent: 'space-between' }}>
-        <Text style={{ flex: 1 }}>Som de pedidos na aba Pedidos</Text>
+        <Text style={{ flex: 1 }}>Som de pedidos (aba Pedidos e pedidos do site com o app aberto)</Text>
         <Switch value={prefs.orderSound} onValueChange={prefs.setOrderSound} accessibilityLabel="Som de pedidos" />
       </Row>
       <Row style={{ justifyContent: 'space-between' }}>
         <Text style={{ flex: 1 }}>Tamanho da fonte da cozinha</Text>
         <QuantityStepper label="Fonte da cozinha" min={8} max={20} value={Math.round(prefs.kitchenFontScale * 10)} onChange={(v) => prefs.setKitchenFontScale(v / 10)} />
       </Row>
+      <WebOrderPushSettings />
       <KeyValue label="Aparelho compartilhado" value={sharedDevice ? sharedDevice.name : 'Não'} />
       <KeyValue label="Versão do app" value={`${Application.nativeApplicationVersion ?? '—'} (${Application.nativeBuildVersion ?? '—'})`} />
     </Screen>

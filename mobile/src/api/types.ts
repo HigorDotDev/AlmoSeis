@@ -135,6 +135,35 @@ export interface SharedDevice {
   registeredBy: Author;
 }
 
+/** `PUT /devices/push-token` (06 §6.3 "Push dos pedidos do site", ADR-0049). O token nunca volta. */
+export interface PushTokenBody {
+  installationId: string;
+  expoPushToken: string;
+  /** `WEB` é reservado para o Web Push (Q-26) e hoje dá `422`. */
+  platform: Exclude<Platform, 'WEB'>;
+  /** `null` mantém a opção atual; no primeiro registro ela nasce ligada. */
+  webOrdersEnabled: boolean | null;
+}
+
+export interface PushRegistration {
+  installationId: string;
+  platform: Platform;
+  webOrdersEnabled: boolean;
+  /** Opção ligada **e** o funcionário da sessão tem `orders.accept` agora. */
+  receivesWebOrders: boolean;
+  registeredAt: Instant;
+  updatedAt: Instant;
+}
+
+/** `data` da notificação: só isto (ADR-0049 item 3). */
+export type WebOrderPushKind = 'WEB_ORDER_AWAITING_ACCEPTANCE' | 'WEB_ORDER_REMINDER';
+
+export interface WebOrderPushData {
+  tenantId: Uuid;
+  orderId: Uuid;
+  kind: WebOrderPushKind;
+}
+
 export interface SharedDeviceSummary {
   id: Uuid;
   name: string;

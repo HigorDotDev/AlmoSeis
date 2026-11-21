@@ -6,11 +6,14 @@
 import { Asset } from 'expo-asset';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { OrderSound } from './orderSound.types';
+import type { OrderSound, OrderSoundKind } from './orderSound.types';
 
-export type { OrderSound } from './orderSound.types';
+export type { OrderSound, OrderSoundKind } from './orderSound.types';
 
-const SOUND = require('../../../assets/sounds/new-order.wav');
+const SOUNDS = {
+  newOrder: require('../../../assets/sounds/new-order.wav'),
+  webOrder: require('../../../assets/sounds/web_order.wav'),
+} as const;
 
 function hasUserActivation(): boolean {
   const activation = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation;
@@ -18,12 +21,12 @@ function hasUserActivation(): boolean {
   return activation?.hasBeenActive ?? false;
 }
 
-export function useOrderSound(): OrderSound {
+export function useOrderSound(kind: OrderSoundKind = 'newOrder'): OrderSound {
   const audio = useRef<HTMLAudioElement | null>(null);
   const [unlocked, setUnlocked] = useState(hasUserActivation);
 
   useEffect(() => {
-    audio.current = new Audio(Asset.fromModule(SOUND).uri);
+    audio.current = new Audio(Asset.fromModule(SOUNDS[kind]).uri);
     audio.current.preload = 'auto';
     // Qualquer clique ou tecla na página também libera o áudio.
     const onGesture = () => setUnlocked(true);
@@ -34,7 +37,7 @@ export function useOrderSound(): OrderSound {
       window.removeEventListener('keydown', onGesture);
       audio.current = null;
     };
-  }, []);
+  }, [kind]);
 
   const play = useCallback(() => {
     const a = audio.current;

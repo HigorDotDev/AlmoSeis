@@ -26,6 +26,7 @@ import {
   useColors,
 } from '@/components/ui';
 import { PUBLIC_PAGE_BASE_URL } from '@/config';
+import { WebOrderPushPrompt } from '@/features/push/components';
 import { confirmAction } from '@/lib/confirm';
 import { formatBRL } from '@/lib/money';
 import { maskBR } from '@/lib/phone';
@@ -188,6 +189,8 @@ function StorefrontView({ storefront: s, toggle, save }: { storefront: Storefron
     <Screen>
       <Stack.Screen options={{ title: 'Página de pedidos' }} />
       <StatusCard storefront={s} />
+      {/* ADR-0049 item 6: a permissão de notificação é pedida no primeiro uso da página de pedidos. */}
+      <WebOrderPushPrompt />
 
       {canManage ? (
         <Card>
