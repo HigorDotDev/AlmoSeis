@@ -15,6 +15,8 @@ export const qk = {
   products: (f: { kind?: ProductKind; includeInactive?: boolean } = {}) => ['products', f] as const,
   product: (id: string) => ['products', 'detail', id] as const,
   marmitaSizes: (includeInactive = false) => ['marmitaSizes', includeInactive] as const,
+  /** `GET /fixed-menu` inteiro (06 §6.5): qualquer raiz do cardápio fixo invalida tudo, porque a pausa muda os combos. */
+  fixedMenu: (includeInactive = false) => ['fixedMenu', includeInactive] as const,
   currentMenu: (menuType: MenuType) => ['menus', 'current', menuType] as const,
   menu: (id: string) => ['menus', id] as const,
   menuList: (f: object) => ['menus', 'list', f] as const,
@@ -60,6 +62,14 @@ export function keysForEntity(entityType: EntityType, entityId?: string | null, 
     case 'MARMITA_SIZE':
     case 'TENANT_SETTINGS':
       return [['products'], ['marmitaSizes'], ['settings']];
+    case 'DISH_CATEGORY':
+    case 'DISH':
+    case 'BEVERAGE_TYPE':
+    case 'COMBO':
+    case 'ADDON_GROUP':
+      // Cardápio fixo (06 §6.12): recarrega o `GET /fixed-menu` inteiro. Pausar um prato tira de venda os combos
+      // que o usam sem entrada `COMBO` no feed.
+      return [['fixedMenu']];
     case 'CUSTOMER':
       return [['customers']];
     case 'EMPLOYEE':

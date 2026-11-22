@@ -74,6 +74,7 @@ const product: Product = {
   isActive: true,
   isAvailable: true,
   isVisibleOnPage: true,
+  sitePrice: '6.50',
   createdAt: '2026-10-27T09:40:00Z',
   updatedAt: '2026-10-27T09:40:00Z',
 };
@@ -299,12 +300,13 @@ describe('compartilhar na web (share.web.ts)', () => {
   });
 });
 
-describe('produto: "Aparece na página" (ADR-0044 item 5)', () => {
+describe('produto: "Vende no site" da bebida (ADR-0044 item 5, ADR-0057 item 5)', () => {
   it('bebida: desligar manda isVisibleOnPage false no PATCH', async () => {
     writeHandler = () => json(200, { ...product, version: 3, isVisibleOnPage: false });
     signIn(['orders.view', 'catalog.manage']);
     await renderWith(<ProductFormScreen />);
-    const toggle = await screen.findByLabelText('Aparece na página');
+    // Na bebida, `isVisibleOnPage` é o "vende no site" (Q-307).
+    const toggle = await screen.findByLabelText('Vende no site');
     await fireEvent(toggle, 'valueChange', false);
     await act(async () => {
       await fireEvent.press(screen.getByText('Salvar'));
@@ -312,6 +314,20 @@ describe('produto: "Aparece na página" (ADR-0044 item 5)', () => {
     await waitFor(() => expect(writes).toHaveLength(1));
     expect(writes[0]).toMatchObject({ method: 'PATCH', path: '/products/p1', body: { isVisibleOnPage: false } });
     expect(writes[0]!.headers['If-Match']).toBe('"2"');
+    expect(writes[0]!.body).not.toHaveProperty('sitePrice');
+  });
+
+  it('bebida: o preço de site vai no PATCH', async () => {
+    writeHandler = () => json(200, { ...product, version: 3, sitePrice: '7.00' });
+    signIn(['orders.view', 'catalog.manage']);
+    await renderWith(<ProductFormScreen />);
+    await fireEvent.changeText(await screen.findByLabelText('Preço no site'), '700');
+    await act(async () => {
+      await fireEvent.press(screen.getByText('Salvar'));
+    });
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toMatchObject({ method: 'PATCH', path: '/products/p1', body: { sitePrice: '7.00' } });
+    expect(writes[0]!.body).not.toHaveProperty('isVisibleOnPage');
   });
 });
 

@@ -26,9 +26,11 @@ import {
   useColors,
 } from '@/components/ui';
 import { PUBLIC_PAGE_BASE_URL } from '@/config';
+import { useMarmitaSizes } from '@/features/catalog/hooks';
 import { WebOrderPushPrompt } from '@/features/push/components';
 import { confirmAction } from '@/lib/confirm';
 import { formatBRL } from '@/lib/money';
+import { NO_SITE_SIZE_TEXT } from '@/lib/sitePrice';
 import { maskBR } from '@/lib/phone';
 import { shareLink } from '@/lib/share';
 import { useIsOnline } from '@/stores/connectivity';
@@ -102,6 +104,10 @@ function StorefrontView({ storefront: s, toggle, save }: { storefront: Storefron
   const [tried, setTried] = useState(false);
   const dirty = isFormDirty(s, form);
   const url = pageUrl(PUBLIC_PAGE_BASE_URL, s.slug);
+  // Ativar exige um tamanho de marmita ativo que vende no site (06 §6.18, ADR-0057 item 3): avisa antes do 422.
+  const sizes = useMarmitaSizes();
+  const noSiteSize = !!sizes.data && !sizes.data.some((z) => z.isActive && z.sellsOnSite);
+  const canEditSizes = useCanWrite('catalog.manage');
 
   const set = <K extends keyof StorefrontForm>(key: K, value: StorefrontForm[K]) => setForm((f) => ({ ...f, [key]: value }));
 
@@ -218,6 +224,13 @@ function StorefrontView({ storefront: s, toggle, save }: { storefront: Storefron
             />
           ) : null}
           {dirty && canEdit ? <Text variant="small" muted>Salve ou desfaça as alterações abaixo antes de ativar ou pausar.</Text> : null}
+          {noSiteSize ? (
+            <Banner
+              tone="warning"
+              text={NO_SITE_SIZE_TEXT}
+              action={canEditSizes ? { label: 'Abrir tamanhos de marmita', onPress: () => router.push('/menu/sizes') } : undefined}
+            />
+          ) : null}
           {toggle.error ? <Banner tone="danger" text={storefrontErrorText(toggle.error)} /> : null}
         </Card>
       ) : null}

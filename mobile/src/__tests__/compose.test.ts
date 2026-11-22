@@ -26,11 +26,12 @@ const product = (id: string, kind: Product['kind'], defaultPrice: string | null,
   isActive: true,
   isAvailable: true,
   isVisibleOnPage: true,
+  sitePrice: null,
   createdAt: '',
   updatedAt: '',
 });
 
-const sizes: MarmitaSize[] = [{ id: 'M', version: 1, name: 'M', price: '20.00', sortOrder: 2, isActive: true }];
+const sizes: MarmitaSize[] = [{ id: 'M', version: 1, name: 'M', price: '20.00', sortOrder: 2, isActive: true, sellsOnSite: true, sitePrice: '21.90' }];
 const products = [
   product('frango', 'MAIN_DISH', '22.00', 'Frango grelhado'),
   product('arroz', 'SIDE_DISH', null),

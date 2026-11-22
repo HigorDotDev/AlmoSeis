@@ -86,6 +86,8 @@ export function useAppRuntime(): void {
           void queryClient.invalidateQueries({ queryKey: ['products'] });
           void queryClient.invalidateQueries({ queryKey: ['marmitaSizes'] });
           void queryClient.invalidateQueries({ queryKey: qk.settings });
+          // Cardápio fixo (06 §6.14): o `entityType` do envelope já invalidou; o `data.entityType` cobre o resto.
+          void queryClient.invalidateQueries({ queryKey: ['fixedMenu'] });
           break;
         case 'TenantModulesChanged':
           // O admin acrescentou um comportamento (06 §6.14): recarrega o `me`, e as abas se ajustam aos módulos.

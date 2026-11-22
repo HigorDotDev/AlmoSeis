@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { Switch, View } from 'react-native';
 
 import { errorMessage } from '@/api/errors';
+import { SiteSaleField } from '@/components/SiteSaleField';
 import type { MarmitaSize, Product, ProductKind } from '@/api/types';
 import {
   Banner,
@@ -26,7 +27,9 @@ import {
   space,
 } from '@/components/ui';
 import { formatBRL, toCents } from '@/lib/money';
+import { NO_SITE_SIZE_TEXT, siteBodyPrice, siteSaleFrom, siteSummary, type SiteSale } from '@/lib/sitePrice';
 import { productKindNames, productKindSingular } from '@/lib/strings';
+import { serverFieldError } from '@/components/form';
 import { useCanWrite } from '@/stores/session';
 
 import { useCreateProduct, useMarmitaSizes, useProduct, useProducts, useSaveSize, useUpdateProduct, useUploadProductImage } from '../hooks';
@@ -67,6 +70,7 @@ export function ProductsScreen() {
                 {p.category ? ` · ${p.category}` : ''}
                 {!p.isActive ? ' · inativo' : ''}
                 {!p.isVisibleOnPage && (p.kind === 'BEVERAGE' || p.kind === 'ADDON') ? ' · fora da página' : ''}
+                {p.kind === 'BEVERAGE' && p.isVisibleOnPage && p.sitePrice ? ` · site ${formatBRL(p.sitePrice)}` : ''}
               </Text>
             </View>
             {canManage && p.isActive ? (
@@ -105,6 +109,8 @@ function ProductForm({ product, initialKind, returnTo }: { product: Product | nu
   const [price, setPrice] = useState<string>(product?.defaultPrice ?? '0.00');
   const [kitchen, setKitchen] = useState(product?.requiresPreparation ?? (initialKind === 'MAIN_DISH' || initialKind === 'SIDE_DISH'));
   const [onPage, setOnPage] = useState(product?.isVisibleOnPage ?? true);
+  // Bebida (ADR-0057 item 5, Q-307): `isVisibleOnPage` é o "vende no site", com o preço de site.
+  const [sitePrice, setSitePrice] = useState<string>(product?.sitePrice ?? '0.00');
   // ADR-0044 item 5: só bebidas e adicionais têm a chave; pratos e acompanhamentos seguem o cardápio do dia.
   const pageToggle = kind === 'BEVERAGE' || kind === 'ADDON';
   const [deactivate, setDeactivate] = useState(false);
@@ -126,13 +132,24 @@ function ProductForm({ product, initialKind, returnTo }: { product: Product | nu
             requiresPreparation: kitchen,
             ...(kind !== product.kind ? { kind } : {}),
             ...(pageToggle && onPage !== product.isVisibleOnPage ? { isVisibleOnPage: onPage } : {}),
+            // Vazio: o servidor grava o preço de balcão ao tornar a bebida visível (06 §6.5).
+            ...(kind === 'BEVERAGE' && onPage && toCents(sitePrice) > 0 ? { sitePrice } : {}),
           },
         },
         { onSuccess: () => router.back() },
       );
     } else {
       create.mutate(
-        { kind, name: name.trim(), description: description.trim() || null, category: category.trim() || null, defaultPrice, requiresPreparation: kitchen },
+        {
+          kind,
+          name: name.trim(),
+          description: description.trim() || null,
+          category: category.trim() || null,
+          defaultPrice,
+          requiresPreparation: kitchen,
+          // Só bebida; ausente = o preço de balcão (06 §6.5).
+          ...(kind === 'BEVERAGE' && toCents(sitePrice) > 0 ? { sitePrice } : {}),
+        },
         {
           // "+ Novo prato" do cardápio volta com o prato já incluído (RN-002.4/3.7).
           onSuccess: (p) => (returnTo ? router.replace({ pathname: returnTo as never, params: { addProductId: p.id } }) : router.replace(`/menu/products/${p.id}`)),
@@ -172,7 +189,27 @@ function ProductForm({ product, initialKind, returnTo }: { product: Product | nu
         <Text style={{ flex: 1 }}>Vai para a cozinha?</Text>
         <Switch value={kitchen} onValueChange={setKitchen} disabled={!canManage} accessibilityLabel="Vai para a cozinha" />
       </Row>
-      {product && pageToggle ? (
+      {kind === 'BEVERAGE' ? (
+        product ? (
+          <SiteSaleField
+            value={{ sellsOnSite: onPage, sitePrice }}
+            counterPrice={price}
+            editable={canManage}
+            onChange={(v) => {
+              setOnPage(v.sellsOnSite);
+              setSitePrice(v.sitePrice);
+            }}
+          />
+        ) : (
+          <>
+            <MoneyInput label="Preço no site (opcional)" value={sitePrice} editable={canManage} onChange={setSitePrice} />
+            <Text variant="small" muted>
+              A bebida nasce vendendo no site. Vazio, vale o preço do balcão.
+            </Text>
+          </>
+        )
+      ) : null}
+      {product && kind === 'ADDON' ? (
         <Row style={{ justifyContent: 'space-between' }}>
           <View style={{ flex: 1 }}>
             <Text>Aparece na página</Text>
@@ -247,9 +284,17 @@ export function SizesScreen() {
             </Text>
             <Text>{formatBRL(s.price)}</Text>
           </Row>
+          <Text variant="small" muted>
+            {siteSummary(s.sellsOnSite, s.sitePrice, s.price)}
+          </Text>
         </Card>
       ))}
-      {canManage ? <Button title="Novo tamanho" icon="add" onPress={() => setEditing({ name: '', price: '0.00', sortOrder: (sizes.data?.length ?? 0) + 1 })} /> : null}
+      {sizes.data && !sizes.data.some((s) => s.isActive && s.sellsOnSite) ? (
+        <Banner tone="warning" text={NO_SITE_SIZE_TEXT} />
+      ) : null}
+      {canManage ? (
+        <Button title="Novo tamanho" icon="add" onPress={() => setEditing({ name: '', price: '0.00', sortOrder: (sizes.data?.length ?? 0) + 1, sellsOnSite: false, sitePrice: null })} />
+      ) : null}
       {editing ? <SizeForm key={editing.id ?? 'new'} size={editing} onDone={() => setEditing(null)} /> : null}
     </Screen>
   );
@@ -261,10 +306,12 @@ function SizeForm({ size, onDone }: { size: Partial<MarmitaSize>; onDone: () => 
   const [price, setPrice] = useState(size.price ?? '0.00');
   const [sortOrder, setSortOrder] = useState(String(size.sortOrder ?? 1));
   const [active, setActive] = useState(size.isActive ?? true);
+  const [site, setSite] = useState<SiteSale>(() => siteSaleFrom(size.sellsOnSite, size.sitePrice));
   return (
     <Card>
       <TextField label="Nome (P, M, G…)" value={name} onChangeText={setName} />
       <MoneyInput label="Preço" value={price} onChange={setPrice} />
+      <SiteSaleField value={site} counterPrice={price} onChange={setSite} error={serverFieldError(save.error, 'sitePrice')} />
       <TextField label="Ordem" value={sortOrder} onChangeText={setSortOrder} keyboardType="number-pad" />
       {size.id ? (
         <Row style={{ justifyContent: 'space-between' }}>
@@ -277,7 +324,12 @@ function SizeForm({ size, onDone }: { size: Partial<MarmitaSize>; onDone: () => 
         title="Salvar tamanho"
         disabled={!name.trim() || toCents(price) === 0}
         loading={save.isPending}
-        onPress={() => save.mutate({ id: size.id, version: size.version, name: name.trim(), price, sortOrder: Number(sortOrder) || 1, isActive: active }, { onSuccess: onDone })}
+        onPress={() =>
+          save.mutate(
+            { id: size.id, version: size.version, name: name.trim(), price, sortOrder: Number(sortOrder) || 1, isActive: active, sellsOnSite: site.sellsOnSite, sitePrice: siteBodyPrice(site) },
+            { onSuccess: onDone },
+          )
+        }
       />
       <Button title="Cancelar" variant="ghost" onPress={onDone} />
     </Card>

@@ -49,6 +49,8 @@ export type Permission =
   | 'closing.adjust'
   | 'menu.manage'
   | 'catalog.manage'
+  /** Pausar e reativar itens do cardápio fixo (EP-003 Q-306, ADR-0028): OWNER, MANAGER, ATTENDANT e KITCHEN. */
+  | 'catalog.availability'
   | 'customers.manage'
   | 'employees.manage'
   | 'devices.manage'
@@ -321,6 +323,11 @@ export interface Product {
   isAvailable: boolean;
   /** ADR-0044 item 5: bebidas e adicionais com `false` não aparecem na página de pedidos. Nasce `true`. */
   isVisibleOnPage: boolean;
+  /**
+   * Só em `BEVERAGE` (ADR-0057 item 5, Q-307): o preço cobrado no pedido do site. Na bebida, `isVisibleOnPage` é o
+   * "vende no site". Adicionais têm sempre `null` (mesmo preço no site, Q-308).
+   */
+  sitePrice: MoneyString | null;
   createdAt: Instant;
   updatedAt: Instant;
 }
@@ -332,6 +339,8 @@ export interface CreateProductBody {
   category: string | null;
   defaultPrice: MoneyString | null;
   requiresPreparation: boolean | null;
+  /** Só bebida; ausente = o `defaultPrice` (06 §6.5). */
+  sitePrice?: MoneyString | null;
 }
 
 export type UpdateProductBody = Partial<{
@@ -344,6 +353,8 @@ export type UpdateProductBody = Partial<{
   isActive: boolean;
   isAvailable: boolean;
   isVisibleOnPage: boolean;
+  /** Só bebida (06 §6.5). */
+  sitePrice: MoneyString | null;
   imageStorageKey: string | null;
 }>;
 
@@ -362,6 +373,269 @@ export interface MarmitaSize {
   price: MoneyString;
   sortOrder: number;
   isActive: boolean;
+  /** "Vende no site" (ADR-0057 item 1): só com `true` o tamanho aparece na página, pelo `sitePrice`. */
+  sellsOnSite: boolean;
+  /** Ligar sem preço de site grava o `price` (item 2). Desligada, fica guardado. */
+  sitePrice: MoneyString | null;
+}
+
+// ---------------------------------------------------------------- 6.5 Cardápio fixo (EP-003 fatia 2, ADR-0056/0057)
+
+export interface DishCategory {
+  id: Uuid;
+  version: number;
+  name: string;
+  sortOrder: number;
+  isActive: boolean;
+  createdAt: Instant;
+  updatedAt: Instant;
+}
+
+export interface DishSize {
+  id: Uuid;
+  name: string;
+  price: MoneyString;
+  sellsOnSite: boolean;
+  sitePrice: MoneyString | null;
+  sortOrder: number;
+  isActive: boolean;
+  isPaused: boolean;
+  /** Derivado no servidor (ADR-0056 item 23), nunca gravado. */
+  isSellable: boolean;
+}
+
+export interface Dish {
+  id: Uuid;
+  version: number;
+  dishCategoryId: Uuid;
+  name: string;
+  description: string | null;
+  imageUrl: string | null;
+  requiresPreparation: boolean;
+  /** "Tamanho?" (ADR-0056 item 6): com tamanhos, `price`/`sellsOnSite`/`sitePrice` ficam em cada tamanho. */
+  hasSizes: boolean;
+  price: MoneyString | null;
+  sellsOnSite: boolean;
+  sitePrice: MoneyString | null;
+  sortOrder: number;
+  isActive: boolean;
+  isPaused: boolean;
+  isSellable: boolean;
+  sizes: DishSize[];
+  /** Grupos ativos da categoria ∪ do próprio prato, sem repetir (item 18). */
+  addonGroupIds: Uuid[];
+  createdAt: Instant;
+  updatedAt: Instant;
+}
+
+export interface BeverageFlavor {
+  id: Uuid;
+  name: string;
+  extraPrice: MoneyString;
+  sortOrder: number;
+  isActive: boolean;
+  isPaused: boolean;
+}
+
+export interface BeverageSize {
+  id: Uuid;
+  name: string;
+  price: MoneyString;
+  sellsOnSite: boolean;
+  sitePrice: MoneyString | null;
+  sortOrder: number;
+  isActive: boolean;
+  isPaused: boolean;
+  isSellable: boolean;
+  flavors: BeverageFlavor[];
+}
+
+export interface BeverageType {
+  id: Uuid;
+  version: number;
+  name: string;
+  sortOrder: number;
+  isActive: boolean;
+  sizes: BeverageSize[];
+  createdAt: Instant;
+  updatedAt: Instant;
+}
+
+export type ComboComponentKind = 'DISH' | 'BEVERAGE';
+
+export interface ComboComponent {
+  id: Uuid;
+  kind: ComboComponentKind;
+  dishId: Uuid | null;
+  dishSizeId: Uuid | null;
+  beverageSizeId: Uuid | null;
+  /** "Batata frita P", "Refrigerante Lata 350 ml". */
+  name: string;
+  quantity: number;
+  sortOrder: number;
+  /** `false` = o motivo do combo fora de venda ("Indisponível: Batata frita P pausado"). */
+  isSellable: boolean;
+}
+
+export interface Combo {
+  id: Uuid;
+  version: number;
+  name: string;
+  description: string | null;
+  imageUrl: string | null;
+  price: MoneyString;
+  sellsOnSite: boolean;
+  sitePrice: MoneyString | null;
+  sortOrder: number;
+  isActive: boolean;
+  isPaused: boolean;
+  isSellable: boolean;
+  components: ComboComponent[];
+  createdAt: Instant;
+  updatedAt: Instant;
+}
+
+export interface AddonOption {
+  id: Uuid;
+  name: string;
+  price: MoneyString;
+  sortOrder: number;
+  isActive: boolean;
+  isPaused: boolean;
+}
+
+export interface AddonGroup {
+  id: Uuid;
+  version: number;
+  name: string;
+  sortOrder: number;
+  isActive: boolean;
+  options: AddonOption[];
+  dishCategoryIds: Uuid[];
+  dishIds: Uuid[];
+  createdAt: Instant;
+  updatedAt: Instant;
+}
+
+/** `GET /fixed-menu`: listas planas na ordem de `sortOrder` e nome. */
+export interface FixedMenu {
+  categories: DishCategory[];
+  dishes: Dish[];
+  beverageTypes: BeverageType[];
+  combos: Combo[];
+  addonGroups: AddonGroup[];
+}
+
+export interface DishSizeInput {
+  id: Uuid | null;
+  name: string;
+  price: MoneyString;
+  sellsOnSite: boolean;
+  sitePrice: MoneyString | null;
+  sortOrder: number;
+}
+
+export interface CreateDishBody {
+  dishCategoryId: Uuid;
+  name: string;
+  description: string | null;
+  requiresPreparation: boolean;
+  hasSizes: boolean;
+  price: MoneyString | null;
+  sellsOnSite: boolean;
+  sitePrice: MoneyString | null;
+  sortOrder: number;
+  sizes: DishSizeInput[];
+}
+
+/** Só os campos presentes mudam; `sizes` presente substitui a lista (o que fica de fora é inativado). */
+export type UpdateDishBody = Partial<CreateDishBody & { isActive: boolean; imageStorageKey: string | null }>;
+
+export interface BeverageFlavorInput {
+  id: Uuid | null;
+  name: string;
+  extraPrice: MoneyString;
+  sortOrder: number;
+}
+
+export interface BeverageSizeInput {
+  id: Uuid | null;
+  name: string;
+  price: MoneyString;
+  sellsOnSite: boolean;
+  sitePrice: MoneyString | null;
+  sortOrder: number;
+  flavors: BeverageFlavorInput[];
+}
+
+export interface CreateBeverageTypeBody {
+  name: string;
+  sortOrder: number;
+  sizes: BeverageSizeInput[];
+}
+
+export type UpdateBeverageTypeBody = Partial<CreateBeverageTypeBody & { isActive: boolean }>;
+
+export interface ComboComponentInput {
+  kind: ComboComponentKind;
+  dishId: Uuid | null;
+  dishSizeId: Uuid | null;
+  beverageSizeId: Uuid | null;
+  quantity: number;
+}
+
+export interface CreateComboBody {
+  name: string;
+  description: string | null;
+  price: MoneyString;
+  sellsOnSite: boolean;
+  sitePrice: MoneyString | null;
+  sortOrder: number;
+  components: ComboComponentInput[];
+}
+
+/** `components` presente troca a lista inteira. */
+export type UpdateComboBody = Partial<CreateComboBody & { isActive: boolean; imageStorageKey: string | null }>;
+
+export interface AddonOptionInput {
+  id: Uuid | null;
+  name: string;
+  price: MoneyString;
+  sortOrder: number;
+}
+
+export interface CreateAddonGroupBody {
+  name: string;
+  sortOrder: number;
+  options: AddonOptionInput[];
+  dishCategoryIds: Uuid[];
+  dishIds: Uuid[];
+}
+
+export type UpdateAddonGroupBody = Partial<CreateAddonGroupBody & { isActive: boolean }>;
+
+export interface PauseInput {
+  id: Uuid;
+  isPaused: boolean;
+}
+
+/** Corpos das rotas `…/availability` (`catalog.availability`): só os itens enviados mudam. */
+export interface DishAvailabilityBody {
+  isPaused?: boolean | null;
+  sizes?: PauseInput[];
+}
+
+export interface BeverageAvailabilityBody {
+  sizes?: PauseInput[];
+  flavors?: PauseInput[];
+}
+
+export interface ComboAvailabilityBody {
+  isPaused: boolean;
+}
+
+export interface AddonAvailabilityBody {
+  options: PauseInput[];
 }
 
 // ---------------------------------------------------------------- 6.6 Expediente
@@ -510,6 +784,9 @@ export type CancellationStatus = 'ACTIVE' | 'CANCELED';
 export type ItemKind = 'MARMITA' | 'PF' | 'BEVERAGE' | 'ADDON';
 /** `APP`: criado no app; `WEB`: página de pedidos (EP-002, ADR-0046). */
 export type OrderOrigin = 'APP' | 'WEB';
+
+/** Tabela de preço do pedido (ADR-0057 item 7): `APP` → `COUNTER`, `WEB` → `SITE`. Imutável. */
+export type PriceList = 'COUNTER' | 'SITE';
 export type WebOrderRiskFlag = 'CAPTCHA_UNAVAILABLE';
 export type DeliveryFeeSource = 'FIXED_DEFAULT' | 'DISTANCE' | 'MANUAL';
 /** ADR-0046 item 1. `AWAITING_PAYMENT` é reservado à Fase 2. */
@@ -584,6 +861,8 @@ export interface Order {
   businessDate: BusinessDate;
   orderType: OrderType;
   origin: OrderOrigin;
+  /** EP-003, ADR-0057 item 7. Um pedido guardado no cache por um app anterior pode vir sem o campo. */
+  priceList?: PriceList;
   fulfillmentType: FulfillmentType;
   customer: { id: Uuid | null; name: string; phoneNumber: string | null } | null;
   deliveryAddress: Address | null;
@@ -933,6 +1212,11 @@ export type EntityType =
   | 'EMPLOYEE'
   | 'PRODUCT'
   | 'MARMITA_SIZE'
+  | 'DISH_CATEGORY'
+  | 'DISH'
+  | 'BEVERAGE_TYPE'
+  | 'COMBO'
+  | 'ADDON_GROUP'
   | 'MENU'
   | 'CUSTOMER'
   | 'ORDER'

@@ -299,6 +299,8 @@ function FinancialBlock({ order: o }: { order: Order }) {
   return (
     <Card>
       <Text variant="subtitle">Valores</Text>
+      {/* ADR-0057 item 7: pedido do site cobra o preço de site; o `unitPrice` de cada linha já é o cobrado. */}
+      {o.priceList === 'SITE' ? <Text variant="small" muted>Preços do site</Text> : null}
       <KeyValue label="Itens" value={formatBRL(o.itemsTotal)} />
       {o.weighings.length ? <KeyValue label="Pesagens" value={formatBRL(o.weighingsTotal)} /> : null}
       {o.fulfillmentType === 'DELIVERY' ? <KeyValue label="Entrega" value={formatBRL(o.deliveryFee)} /> : null}

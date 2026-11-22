@@ -1,6 +1,15 @@
 import { apiRequest, qs } from '../client';
 import type { CreateProductBody, ImageUpload, Items, MarmitaSize, Product, ProductKind, UpdateProductBody, Uuid } from '../types';
 
+/** `POST`/`PATCH /marmita-sizes` (06 §6.5): "vende no site" sem `sitePrice` grava o `price` como preço de site. */
+export interface MarmitaSizeBody {
+  name: string;
+  price: string;
+  sortOrder: number;
+  sellsOnSite: boolean;
+  sitePrice: string | null;
+}
+
 /** 06 §6.5. */
 export const productsApi = {
   list: (f: { kind?: ProductKind; includeInactive?: boolean } = {}) => apiRequest<Items<Product>>('GET', `/products${qs(f)}`),
@@ -14,7 +23,7 @@ export const productsApi = {
 
 export const sizesApi = {
   list: (includeInactive = false) => apiRequest<Items<MarmitaSize>>('GET', `/marmita-sizes${qs({ includeInactive })}`),
-  create: (body: { name: string; price: string; sortOrder: number }) => apiRequest<MarmitaSize>('POST', '/marmita-sizes', { body }),
-  update: (id: Uuid, body: Partial<{ name: string; price: string; sortOrder: number; isActive: boolean }>, version: number) =>
+  create: (body: MarmitaSizeBody) => apiRequest<MarmitaSize>('POST', '/marmita-sizes', { body }),
+  update: (id: Uuid, body: Partial<MarmitaSizeBody & { isActive: boolean }>, version: number) =>
     apiRequest<MarmitaSize>('PATCH', `/marmita-sizes/${id}`, { body, ifMatch: version }),
 };

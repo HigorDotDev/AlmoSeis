@@ -95,6 +95,18 @@ export function errorMessage(e: unknown): string {
       const name = typeof module === 'string' ? (moduleNames as Record<string, string>)[module] : undefined;
       return name ? `${name} não está habilitado neste estabelecimento.` : errorMessages.ModuleNotEnabled!;
     }
+    case 'UsedInActiveCombos': {
+      // Extensão `combos` (06 §6.5): quais combos ativos usam o item que se tentou inativar.
+      const list = Array.isArray(e.extensions.combos) ? (e.extensions.combos as { name?: unknown }[]) : [];
+      const names = list
+        .map((c) => c?.name)
+        .filter((n): n is string => typeof n === 'string')
+        .map((n) => `“${n}”`);
+      if (names.length === 0) return errorMessages.UsedInActiveCombos!;
+      if (names.length === 1) return `Este item é usado no combo ativo ${names[0]}. Ajuste ou inative esse combo antes.`;
+      const joined = `${names.slice(0, -1).join(', ')} e ${names[names.length - 1]}`;
+      return `Este item é usado nos combos ativos ${joined}. Ajuste ou inative esses combos antes.`;
+    }
     case 'ProductUnavailable':
       return e.detail ?? 'Um produto não está disponível hoje.';
     case 'TooManyRequests':

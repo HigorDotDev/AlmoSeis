@@ -128,6 +128,7 @@ export const errorMessages: Record<string, string> = {
   WebOrderExpired: 'O prazo acabou, o pedido expirou.',
   OrderAlreadyDispatched: 'Este pedido já saiu (ou foi retirado). Para incluir itens, crie outro pedido.',
   ModuleNotEnabled: 'Este recurso não está habilitado no estabelecimento.',
+  UsedInActiveCombos: 'Este item é usado em combos ativos. Ajuste ou inative esses combos antes.',
   ProductionNotCompleted: 'A cozinha ainda não concluiu este pedido. Use "Concluir e marcar" ou espere a conclusão.',
 };
 

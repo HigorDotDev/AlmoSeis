@@ -119,7 +119,7 @@ const GROUPS: { title: string; entries: MenuEntry[] }[] = [
   {
     title: 'Cardápio',
     entries: [
-      // Cardápio fixo da lanchonete (ADR-0056); o cadastro chega na fatia 2 do EP-003.
+      // Cardápio fixo da lanchonete (ADR-0056): ver com `orders.view`, pausar com `catalog.availability`, cadastrar com `catalog.manage`.
       { label: 'Cardápio', icon: 'book-outline', href: '/menu/fixed-menu', permission: 'orders.view', modules: ['FIXED_MENU'] },
       { label: 'Pratos e bebidas', icon: 'restaurant-outline', href: '/menu/products', permission: 'orders.view', modules: RESTAURANT_CATALOG },
       { label: 'Tamanhos de marmita', icon: 'resize-outline', href: '/menu/sizes', permission: 'orders.view', modules: ['MARMITA'] },

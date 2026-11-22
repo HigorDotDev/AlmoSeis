@@ -1,9 +1,11 @@
 /** Catálogo (06 §6.5). */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { productsApi, sizesApi } from '@/api/endpoints/catalog';
+import { productsApi, sizesApi, type MarmitaSizeBody } from '@/api/endpoints/catalog';
 import { qk } from '@/api/queryKeys';
 import type { CreateProductBody, Product, ProductKind, UpdateProductBody } from '@/api/types';
+
+import { uploadJpeg } from './imageUpload';
 
 const STALE = 10 * 60_000;
 
@@ -54,34 +56,19 @@ export function useUpdateProduct() {
 export function useSaveSize() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: async (v: { id?: string; version?: number; name: string; price: string; sortOrder: number; isActive?: boolean }) =>
-      v.id
-        ? (await sizesApi.update(v.id, { name: v.name, price: v.price, sortOrder: v.sortOrder, isActive: v.isActive }, v.version!)).data
-        : (await sizesApi.create({ name: v.name, price: v.price, sortOrder: v.sortOrder })).data,
+    mutationFn: async ({ id, version, isActive, ...body }: MarmitaSizeBody & { id?: string; version?: number; isActive?: boolean }) =>
+      id ? (await sizesApi.update(id, { ...body, isActive }, version!)).data : (await sizesApi.create(body)).data,
     onSuccess: () => client.invalidateQueries({ queryKey: ['marmitaSizes'] }),
   });
 }
 
-/**
- * Foto do produto (08 §8.10): reduz para 1024 px JPEG 80% → pede a URL → PUT direto no R2 → PATCH com a chave.
- * O arquivo anterior é apagado pelo servidor só depois do PATCH (06 §6.5).
- */
+/** Foto do produto (08 §8.10, `imageUpload.ts`): envia ao R2 e grava a chave com `PATCH`. */
 export function useUploadProductImage() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: async ({ product, uri }: { product: Product; uri: string }) => {
-      const { ImageManipulator, SaveFormat } = await import('expo-image-manipulator');
-      const context = ImageManipulator.manipulate(uri);
-      context.resize({ width: 1024 });
-      const rendered = await context.renderAsync();
-      const saved = await rendered.saveAsync({ compress: 0.8, format: SaveFormat.JPEG });
-      const blob = await (await fetch(saved.uri)).blob();
-      const upload = (await productsApi.imageUpload(product.id, 'image/jpeg', blob.size)).data;
-      const put = await fetch(upload.uploadUrl, { method: upload.method, headers: upload.headers, body: blob });
-      if (!put.ok) {
-        throw new Error(`Falha no envio da imagem (${put.status}).`);
-      }
-      return (await productsApi.update(product.id, { imageStorageKey: upload.storageKey }, product.version)).data;
+      const storageKey = await uploadJpeg(uri, (contentType, sizeBytes) => productsApi.imageUpload(product.id, contentType, sizeBytes));
+      return (await productsApi.update(product.id, { imageStorageKey: storageKey }, product.version)).data;
     },
     onSuccess: (p) => setProduct(client, p),
   });
