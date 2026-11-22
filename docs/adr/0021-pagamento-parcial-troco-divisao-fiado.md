@@ -44,3 +44,9 @@ O épico fala em "pagamento integral" (o que implica pagamento parcial), em rece
 - `OrderPaymentConfirmed` só é emitido quando `IsPaid` passa a `true`. Pagamentos parciais emitem `OrderPaymentRegistered`.
 - `Customer` é a base para o EP-002 (identificar o cliente pelo telefone do WhatsApp).
 - Dados de cliente seguem o ADR-0024.
+
+## Complementado por ADR-0058 e ADR-0059 (2026-11-22)
+
+- A taxa de entrega também se aplica a pedidos `A_LA_CARTE` com `DELIVERY` (ADR-0058).
+- No **delivery por telefone** (ADR-0059), a taxa é digitada no pedido. Hoje uma taxa diferente da padrão exige `orders.delivery-fee.edit` (OWNER e MANAGER). Se o atendente passa a digitá-la, isso muda esta regra e precisa de decisão (EP-003 Q-315) antes de virar código.
+- O `Customer` passa a ser vinculado ou criado **pelo telefone** nesse fluxo, só com nome e telefone, sem endereço salvo. Fiado, pagamento parcial e troco não mudam: o pedido entregue e não pago continua com saldo.

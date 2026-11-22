@@ -29,3 +29,8 @@ A plataforma trata dados de três grupos: proprietários e funcionários (usuár
 
 - O texto dos Termos e do contrato de tratamento depende de revisão jurídica antes do piloto.
 - É preciso um job agendado de retenção e um endpoint de exportação do tenant.
+
+## Complementado por ADR-0059 (2026-11-22)
+
+- **Cliente do delivery por telefone:** o pedido exige **nome e telefone**, e o `Customer` é vinculado ou criado pelo telefone, só com nome e telefone. O **endereço fica só no snapshot do pedido** e não é gravado no cadastro nesse fluxo (minimização, item 2).
+- O estabelecimento continua **controlador** desses dados (item 1). Auditoria, log e eventos não levam telefone nem endereço. A anonimização sob demanda (item 3) e a retenção (item 4) valem igual.

@@ -28,3 +28,9 @@ A RN-003.8 diz que os cardápios semanais "funcionam como modelos para datas fut
 
 - `POST /business-days` (abrir expediente) também cria cardápios. A resposta inclui os ids criados.
 - Um modelo semanal alterado depois da abertura só vale a partir do próximo expediente daquele dia da semana.
+
+## Complementado por ADR-0054 e ADR-0056 (2026-11-22)
+
+- O cardápio do dia e o modelo semanal existem só com o módulo `DAILY_MENU` (comportamento `RESTAURANT`, ADR-0054). A clonagem do item 3 só acontece nesses tenants. Na lanchonete, abrir o expediente não cria cardápio, e o item 6 não se aplica.
+- O **cardápio fixo** da lanchonete (ADR-0056) **não é um `Menu`**: não tem data nem modelo semanal, vale na hora em que é editado, e o pedido guarda o snapshot. `MenuType` (`MARMITA`, `PF`) e `MenuKind` (`DAILY`, `WEEKLY_TEMPLATE`) não mudam.
+- A pausa do cardápio fixo fica até alguém reativar, enquanto o "acabou" do item do `DAILY` vale só para aquele dia.

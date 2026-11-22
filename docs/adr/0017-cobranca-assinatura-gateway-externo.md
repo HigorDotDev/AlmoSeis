@@ -37,3 +37,9 @@ O épico define assinatura mensal por estabelecimento com 7 dias grátis, mas n�
 - Antes da publicação, é preciso validar com as diretrizes vigentes da App Store e do Google Play que o app não "direciona" para compra externa (anti-steering). Se a Apple exigir IAP no iOS, reabrir este ADR.
 - Retenção de dados após o cancelamento está no ADR-0024.
 - A suspensão nunca impede a consulta de dados financeiros já registrados.
+
+## Complementado por ADR-0054 (2026-11-22)
+
+- Um segundo **comportamento** do estabelecimento (por exemplo, o restaurante que acrescenta a lanchonete) será habilitado **só pelo administrador da plataforma** (ADR-0025), mediante aumento na assinatura. A forma de cobrança será discutida depois (EP-003 Q-301).
+- Vale o item 2: o app **nunca** oferece a contratação de um comportamento adicional, nem mostra preço, botão ou link de compra para isso.
+- A assinatura continua uma só por tenant, e os estados acima valem para todos os comportamentos.

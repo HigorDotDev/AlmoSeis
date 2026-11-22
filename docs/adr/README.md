@@ -4,7 +4,7 @@ Toda decisão arquitetural ou de negócio que afeta modelagem, contrato de API, 
 
 **Status possíveis:** `Proposto` (aguarda revisão), `Aceito`, `Substituído por ADR-XXXX`, `Descartado`.
 
-Quando um ADR conflita com o texto de um épico (`docs/01-epico-ep001.md`, `docs/11-epico-ep002.md`), **o ADR prevalece**. Um ADR `Proposto` já orienta a implementação, mas precisa ser revisado antes do código que depende dele ir para produção.
+Quando um ADR conflita com o texto de um épico (`docs/01-epico-ep001.md`, `docs/11-epico-ep002.md`, `docs/12-epico-ep003.md`), **o ADR prevalece**. Um ADR `Proposto` já orienta a implementação, mas precisa ser revisado antes do código que depende dele ir para produção.
 
 ## Índice
 
@@ -103,6 +103,19 @@ Complementos: ADR-0027 (`deviceSecret` do aparelho compartilhado) e ADR-0028 (pe
 Afetados (linha de referência no próprio ADR): 0001, 0016, 0021, 0026, 0036. Também complementados, sem linha própria: 0006, 0013, 0022, 0023/0039, 0024, 0028, 0041; e, pelo 0053, 0010, 0017, 0027, 0035 e 0049.
 
 Em 2026-11-20, os ADRs 0044 a 0053 foram alinhados à implementação das fatias 1 a 5 do EP-002 (até o commit `2f65bff`), e continuam `Proposto`. Os ADRs 0026 (item 10: funções `SECURITY DEFINER`, `store_slugs` com leitura aberta, correção de dados com `NO FORCE`/`FORCE`), 0029 (módulos Storefront e Notifications, portas e os dois laços do `OutboxDispatcher`) e 0033 (itens 7 a 9: segredo fora do corpo guardado, preparação antes da transação, chave anônima, aceite e desistência) mantêm o status `Aceito` e ganharam a linha "Complementado em 2026-11-20".
+
+### EP-003 — tipo de estabelecimento e lanchonete (`docs/12-epico-ep003.md`)
+
+| ADR | Decisão | Status |
+|---|---|---|
+| [0054](0054-comportamentos-estabelecimento-rotulos-modulos.md) | Comportamentos `RESTAURANT` e `SNACK_BAR` (conjunto por tenant, um no cadastro, fixo; segundo só pelo admin), rótulos de lista fixa, módulos fixos por comportamento atrás de `ITenantModules`; migração de todos como `RESTAURANT` | Proposto |
+| [0055](0055-abas-app-por-comportamento.md) | Abas por módulo: restaurante como hoje; lanchonete Salão (comandas) · Delivery · Cozinha · Fechamento; sugestão para os dois comportamentos | Proposto |
+| [0056](0056-cardapio-fixo-pratos-bebidas-combos-adicionais.md) | Cardápio fixo permanente: categorias, pratos com tamanho por prato, bebidas tipo → tamanho → sabor, combos fixos, grupos de adicionais, pausa até reativar com disponibilidade derivada | Proposto |
+| [0057](0057-preco-de-site-vende-no-site.md) | "Vende no site" e preço de site (pratos, bebidas, combos e tamanhos de marmita); todo pedido do site usa o preço de site; `Order.PriceList`; cobrança da plataforma em aberto | Proposto |
+| [0058](0058-modalidade-a-la-carte-comandas-cozinha.md) | `OrderType = A_LA_CARTE` (salão, entrega, retirada) só com o cardápio fixo; combo como `COMBO` + `COMBO_PART` + `GROUP_ADDON`; cozinha recebe lista normal | Proposto |
+| [0059](0059-delivery-por-telefone-cliente.md) | Delivery por telefone: nome e telefone, endereço e taxa manual, forma prevista e troco, entra aceito; aba Delivery; `Customer` pelo telefone sem endereço salvo | Proposto |
+
+Complementados em 2026-11-22 (seção "Complementado por ADR-00xx" no próprio ADR, status mantido): 0005, 0017, 0020, 0021, 0024, 0025, 0028, 0038 (`Aceito`) e 0044, 0046, 0050 (`Proposto`; no 0050, nota no item 19).
 
 ## Impacto no modelo do épico (§6)
 

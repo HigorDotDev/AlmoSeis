@@ -105,3 +105,17 @@ O que a implementação decidiu onde o texto acima deixava espaço, e o que fico
 - **Recálculo** (item 21): o carrinho é conferido duas vezes.
   - Antes de gravar, contra o cardápio público, o que devolve `409 CartChanged` com o carrinho recalculado.
   - Depois de gravar, o total, os itens e a taxa do pedido gravado precisam bater com o carrinho conferido. Senão, também `409 CartChanged`, e nada é gravado.
+
+## Complementado por ADR-0054, ADR-0057 e ADR-0058 (2026-11-22)
+
+O EP-003 muda **o que a página vende** (itens 2, 3, 5 e 11). O resto deste ADR continua valendo.
+
+- **O que a página vende depende dos módulos do tenant** (ADR-0054):
+  - restaurante (`MARMITA`): marmitas e bebidas, como no item 2, agora com o **preço de site** dos tamanhos de marmita (ADR-0057). Bebidas: ver EP-003 Q-307;
+  - lanchonete (`FIXED_MENU` + `DELIVERY`): uma aba por **categoria** do cardápio fixo, mais **Bebidas** e **Combos**, só com itens "vende no site" e **não pausados**, pelo preço de site. O pedido é `A_LA_CARTE` com `DELIVERY` ou `PICKUP` (ADR-0058);
+  - com os dois comportamentos: as duas coisas. Um pedido do site é de um tipo só (EP-003 Q-317).
+- Itens pausados do cardápio fixo **não aparecem** na página (no item 5, os indisponíveis do cardápio do dia aparecem desabilitados; isso continua para a marmita).
+- Item 1: o pedido web pode ser `MARMITA` ou `A_LA_CARTE`.
+- Item 3 (pelo menos 1 marmita) e item 4 (até 20 marmitas): na lanchonete, valem a regra e o limite da EP-003 Q-318.
+- Item 11 (ativação): na lanchonete, ativar exige o endereço completo e pelo menos **1 item vendável no site** (prato, tamanho, bebida ou combo), no lugar do tamanho de marmita ativo.
+- Item 21: o recálculo usa o preço de site.

@@ -172,3 +172,11 @@ Decisões tomadas onde o texto acima deixava espaço. Contrato em `docs/06-contr
 - **Lembrete aos 3 min** (item 15): é uma mensagem do outbox agendada (`available_at`), gravada junto com o pedido. Nenhum job mexe no pedido para marcar o lembrete, porque isso subiria a versão e o `If-Match` do aceite daria `409` (ADR-0049).
 - **Expand/contract da migration 0003:** ficou **pendente** e está registrado em `docs/09-devops.md` §9.4. Por enquanto, o banco aceita pedido aceito sem `accepted_at` e entrega/retirada sem `fulfillment_status`, como a API anterior grava durante o deploy. O código trata o nulo como "aceito na criação" e `PENDING`. Preencher os dados e apertar os `CHECK`s fica para a release seguinte.
 - **Pedidos do app** (item 20): por decisão do usuário, o atendimento ("Saiu", "Entregue", "Retirado") vale também para entrega e retirada criadas no app. O uso é opcional: sem marcação, o pedido fica `PENDING` e nada é bloqueado. A Q-10 fica respondida.
+
+## Complementado por ADR-0058 e ADR-0059 (2026-11-22)
+
+- **Pedido manual entra aceito** (item 1, reafirmado pelo dono do produto): o **delivery por telefone** da lanchonete e a marmita por telefone do restaurante são pedidos do app (`Origin = APP`). Nascem `ACCEPTED`, com número e `ProductionStatus = OPEN`, sem fila de aceite (ADR-0059 item 6). Só o pedido do site "pagar na entrega/retirada" passa pelo aceite.
+- O aceite, a recusa, a expiração e a desistência valem igual para o pedido do site `A_LA_CARTE` da lanchonete (ADR-0058 item 14).
+- Item 21: na lanchonete, a faixa **"Novos do site"** fica na aba **Delivery** (ADR-0055), no lugar das abas Marmitas e Pedidos.
+- Item 23: `OrderAwaitingAcceptance` ganha `itemCount` (pratos, combos e bebidas). No pedido `A_LA_CARTE`, `marmitaCount` vai `0`.
+- Itens 18 a 20: os status de atendimento valem para entrega e retirada `A_LA_CARTE`, do telefone e do site.

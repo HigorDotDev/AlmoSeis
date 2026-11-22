@@ -29,3 +29,7 @@ O épico prevê um administrador SaaS, mas não diz por qual interface ele opera
 ## Consequências
 
 - Endpoints `/admin` ignoram o filtro de tenant **explicitamente**, por uma conexão e política próprias (ADR-0026), nunca por um "if admin" espalhado no código.
+
+## Complementado por ADR-0054 (2026-11-22)
+
+- Nova ação administrativa: **acrescentar um comportamento** ao tenant (`RESTAURANT` ou `SNACK_BAR`), por exemplo `POST /admin/tenants/{id}/behaviors`, auditada com `Origin = PLATFORM_ADMIN`. É feita mediante aumento na assinatura, cobrado fora do app (ADR-0017). Remover um comportamento fica fora desta fase.

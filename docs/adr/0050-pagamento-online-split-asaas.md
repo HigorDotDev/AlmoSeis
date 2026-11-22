@@ -88,6 +88,7 @@ Levantamento de 2026-11-21, na documentação oficial (`docs.asaas.com/docs/spli
 
     No crédito à vista (R$ 0,49 + 2,99%): taxa ≈ R$ 1,85, `netValue` R$ 43,75, comissão de 2% = R$ 0,88, restaurante R$ 42,87.
 19. Nesse desenho, **a taxa do Asaas é absorvida pelo restaurante** (sai do saldo da subconta emissora). Repassar ao cliente (taxa de serviço) ou absorver pela AlmoSeis são decisões de negócio em aberto. Qualquer acréscimo cobrado do cliente teria de aparecer separado no total, como a taxa de entrega.
+    *(Complementado por ADR-0057 em 2026-11-22: o dono do produto decidiu que **não há taxa de serviço separada**. O estabelecimento pode **embutir** a taxa da transação e o custo do serviço no **preço de site**, que vale para todo pedido do site, qualquer que seja a forma de pagamento. A taxa do Asaas continua saindo do saldo da subconta. A plataforma cobrará do estabelecimento um **percentual sobre as vendas do site, descontada a taxa do Asaas**. O percentual, a base, a forma de cobrança e a relação com o split do item 17 ficam em aberto (EP-003 Q-310). A frase anterior sobre acréscimo separado no total deixa de valer.)*
 
 **Fechamento** (complementa o ADR-0013)
 

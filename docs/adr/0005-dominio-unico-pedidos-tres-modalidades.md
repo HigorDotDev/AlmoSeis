@@ -25,3 +25,11 @@ Um agregado único **`Order`** com `OrderType` (`MARMITA`, `PF`, `KILO`) e `Orig
 
 - O fechamento agrupa por `OrderType` (RN-010.2) sem precisar de `UNION`.
 - Validações específicas de cada modalidade precisam de testes por modalidade.
+
+## Complementado por ADR-0058 (2026-11-22)
+
+- O EP-003 (lanchonete) acrescenta uma **quarta modalidade**, `OrderType = A_LA_CARTE`, no mesmo agregado `Order`. O título deste ADR fica como registro histórico; a decisão de um domínio único continua valendo.
+- `A_LA_CARTE` aceita `DINE_IN`, `DELIVERY` e `PICKUP`, e só itens do cardápio fixo (ADR-0056). Marmita continua entrega/retirada; PF e quilo continuam no salão.
+- `OrderItem` ganha os subtipos `FIXED_DISH`, `FIXED_BEVERAGE`, `COMBO`, `COMBO_PART` e `GROUP_ADDON` (ADR-0058 item 8).
+- Cada modalidade exige o módulo correspondente do tenant (ADR-0054): `403 ModuleNotEnabled`.
+- O fechamento ganha a linha `A_LA_CARTE` no agrupamento por `OrderType`.
