@@ -26,8 +26,8 @@ public sealed class SchemaTests(PostgresFixture db)
         await using var reader = await command.ExecuteReaderAsync(Ct);
         await reader.ReadAsync(Ct);
 
-        reader.GetInt64(0).ShouldBe(46, "tabelas de 05-ddl.md");
-        reader.GetInt64(1).ShouldBe(91, "políticas de RLS de 05 §5.12 e §5.17");
+        reader.GetInt64(0).ShouldBe(57, "tabelas de 05-ddl.md");
+        reader.GetInt64(1).ShouldBe(113, "políticas de RLS de 05 §5.12 e §5.17");
     }
 
     /// O mesmo teste de fumaça do 05 §5.16, agora sobre o schema criado pela migration.
@@ -50,7 +50,7 @@ public sealed class SchemaTests(PostgresFixture db)
 
         await transaction.RollbackAsync(Ct); // não deixa dados para os outros testes
 
-        notices.Count(n => n.StartsWith("ok:", StringComparison.Ordinal)).ShouldBe(59, string.Join(" | ", notices));
+        notices.Count(n => n.StartsWith("ok:", StringComparison.Ordinal)).ShouldBe(74, string.Join(" | ", notices));
     }
 
     /// 0003 (ADR-0046) num banco com pedidos: o backfill roda com a RLS `FORCE` de `orders` (o banco vazio dos outros
@@ -246,6 +246,90 @@ public sealed class SchemaTests(PostgresFixture db)
             reader.GetInt64(3).ShouldBe(2, "um rótulo por tenant migrado");
             reader.GetBoolean(4).ShouldBeTrue("o FORCE da RLS de tenants volta depois do preenchimento");
             reader.GetBoolean(5).ShouldBeTrue("as tabelas novas nascem com RLS FORCE");
+        }
+
+        NpgsqlConnection.ClearAllPools();
+        await db.ExecuteAsSuperuserAsync($"DROP DATABASE {database} WITH (FORCE)");
+    }
+
+    /// 0009 (ADR-0057 item 15) num banco com catálogo e pedidos: tamanho de marmita ativo e bebida visível ganham preço
+    /// de site igual ao de balcão (a bebida de 0.00 sai do site), pedido do site vira `SITE`, e o `FORCE` da RLS volta.
+    [Fact]
+    public async Task Migration_0009_backfills_site_prices_and_price_list()
+    {
+        var database = "almoseis_siteprice_" + Guid.NewGuid().ToString("N")[..8];
+        await db.ExecuteAsSuperuserAsync($"CREATE DATABASE {database} OWNER almoseis_migrator");
+        var superuser = new NpgsqlConnectionStringBuilder(db.SuperuserConnectionString) { Database = database }.ConnectionString;
+        var migrator = new NpgsqlConnectionStringBuilder(db.ConnectionStringFor("almoseis_migrator_login", PostgresFixture.MigratorPassword))
+        {
+            Database = database,
+        }.ConnectionString;
+
+        var options = new DbContextOptionsBuilder<AppDbContext>();
+        options.UseAlmoSeisNpgsql(migrator);
+        await using (var context = new AppDbContext(options.Options, new TenantContext(), Array.Empty<IModuleModelConfiguration>()))
+        {
+            await context.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>().MigrateAsync("20261125000000_EstablishmentBehaviors", Ct);
+        }
+
+        await using (var connection = new NpgsqlConnection(superuser))
+        {
+            await connection.OpenAsync(Ct);
+            await using var seed = new NpgsqlCommand(
+                """
+                INSERT INTO users (id, full_name, email, normalized_email, password_hash, security_stamp, concurrency_stamp, created_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000a1', 'Dona A', 'a@x.com', 'A@X.COM', 'h', 's', 'c', now());
+                INSERT INTO tenants (id, name, document_type, document_number, city, state, terms_version, terms_accepted_at, terms_accepted_by_user_id, created_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'Marmitaria A', 'CNPJ', '11222333000181', 'Uberlandia', 'MG', '2026-10', now(), 'aaaaaaaa-0000-0000-0000-0000000000a1', now());
+                INSERT INTO tenant_employees (id, tenant_id, user_id, display_name, status, security_stamp, joined_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000e1', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000a1', 'Dona A', 'ACTIVE', gen_random_uuid(), now());
+                INSERT INTO marmita_sizes (id, tenant_id, name, price, is_active)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000f1', 'aaaaaaaa-0000-0000-0000-000000000001', 'M', 20.00, true),
+                       ('aaaaaaaa-0000-0000-0000-0000000000f2', 'aaaaaaaa-0000-0000-0000-000000000001', 'G', 25.00, false);
+                INSERT INTO products (id, tenant_id, kind, name, default_price, requires_preparation, is_visible_on_page, created_at, updated_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000b1', 'aaaaaaaa-0000-0000-0000-000000000001', 'BEVERAGE', 'Coca', 5.00, false, true, now(), now()),
+                       ('aaaaaaaa-0000-0000-0000-0000000000b2', 'aaaaaaaa-0000-0000-0000-000000000001', 'BEVERAGE', 'Agua da casa', 0.00, false, true, now(), now()),
+                       ('aaaaaaaa-0000-0000-0000-0000000000b3', 'aaaaaaaa-0000-0000-0000-000000000001', 'BEVERAGE', 'Suco', 7.00, false, false, now(), now()),
+                       ('aaaaaaaa-0000-0000-0000-0000000000b4', 'aaaaaaaa-0000-0000-0000-000000000001', 'ADDON', 'Ovo', 2.00, true, true, now(), now());
+                INSERT INTO business_days (id, tenant_id, business_date, status, opening_balance, opened_by_employee_id, opened_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000d1', 'aaaaaaaa-0000-0000-0000-000000000001', '2026-11-22', 'OPEN', 0, 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+                INSERT INTO orders (id, tenant_id, business_day_id, business_date, order_number, order_type, origin, fulfillment_type,
+                                    customer_name, items_total, weighings_total, total_amount, production_status, accepted_at,
+                                    fulfillment_status, fulfillment_status_changed_at, created_by_employee_id, created_at, updated_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-000000000c01', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-11-22', 1,
+                        'MARMITA', 'APP', 'PICKUP', 'Joao', 20.00, 0, 20.00, 'OPEN', now(), 'PENDING', now(), 'aaaaaaaa-0000-0000-0000-0000000000e1', now(), now()),
+                       ('aaaaaaaa-0000-0000-0000-000000000c02', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-11-22', 2,
+                        'MARMITA', 'WEB', 'PICKUP', 'Maria', 20.00, 0, 20.00, 'OPEN', now(), 'PENDING', now(), NULL, now(), now());
+                """, connection);
+            await seed.ExecuteNonQueryAsync(Ct);
+        }
+
+        await using (var context = new AppDbContext(options.Options, new TenantContext(), Array.Empty<IModuleModelConfiguration>()))
+        {
+            await context.Database.MigrateAsync(Ct);
+        }
+
+        await using (var connection = new NpgsqlConnection(superuser))
+        {
+            await connection.OpenAsync(Ct);
+            await using var check = new NpgsqlCommand(
+                """
+                SELECT (SELECT string_agg(name || ':' || sells_on_site || ':' || coalesce(site_price::text, '-'), ',' ORDER BY name) FROM marmita_sizes),
+                       (SELECT string_agg(name || ':' || is_visible_on_page || ':' || coalesce(site_price::text, '-'), ',' ORDER BY name) FROM products),
+                       (SELECT string_agg(origin || ':' || price_list, ',' ORDER BY origin) FROM orders),
+                       (SELECT bool_and(relforcerowsecurity) FROM pg_class WHERE relname IN ('marmita_sizes', 'products', 'orders')),
+                       (SELECT bool_and(relforcerowsecurity) FROM pg_class
+                         WHERE relname IN ('dish_categories', 'dishes', 'dish_sizes', 'beverage_types', 'beverage_sizes', 'beverage_flavors',
+                                           'combos', 'combo_components', 'addon_groups', 'addon_options', 'addon_group_links'))
+                """, connection);
+            await using var reader = await check.ExecuteReaderAsync(Ct);
+            await reader.ReadAsync(Ct);
+            reader.GetString(0).ShouldBe("G:false:-,M:true:20.00", "só o tamanho ativo vende no site, pelo preço de balcão");
+            reader.GetString(1).ShouldBe("Agua da casa:false:-,Coca:true:5.00,Ovo:true:-,Suco:false:-",
+                "bebida visível ganha o preço de balcão; a de 0.00 sai do site; adicional e bebida escondida sem preço de site");
+            reader.GetString(2).ShouldBe("APP:COUNTER,WEB:SITE");
+            reader.GetBoolean(3).ShouldBeTrue("o FORCE da RLS volta depois do preenchimento");
+            reader.GetBoolean(4).ShouldBeTrue("as tabelas novas nascem com RLS FORCE");
         }
 
         NpgsqlConnection.ClearAllPools();

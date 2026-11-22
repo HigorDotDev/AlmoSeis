@@ -26,7 +26,7 @@ Tipos usados nas tabelas: `Guid`, `string(n)`, `Money`, `int`, `bool`, `DateOnly
 |---|---|
 | Identity | `User`, `Tenant`, `TenantSettings`, `TenantBehavior`, `TenantLabel`, `TenantEmployee`, `TenantEmployeeRole`, `EmployeeInvitation`, `SharedDevice`, `RefreshToken` |
 | Billing | `Subscription`, `TrialClaim`, `BillingWebhookEvent` |
-| Catalog | `Product`, `MarmitaSize` |
+| Catalog | `Product`, `MarmitaSize`; cardápio fixo (EP-003): `DishCategory`, `Dish`, `DishSize`, `BeverageType`, `BeverageSize`, `BeverageFlavor`, `Combo`, `ComboComponent`, `AddonGroup`, `AddonOption`, `AddonGroupLink` (§4.5.1) |
 | Menu | `Menu`, `MenuItem` |
 | Ordering | `Customer`, `CustomerAddress`, `Order`, `OrderItem`, `OrderItemComponent`, `WeighingEntry`, `OrderChangeEvent`, `AlertAcknowledgement` |
 | Payments | `Payment`, `PaymentReversal` |
@@ -36,7 +36,7 @@ Tipos usados nas tabelas: `Guid`, `string(n)`, `Money`, `int`, `bool`, `DateOnly
 | Notifications (EP-002) | `PushRegistration`, `PushDelivery` (§4.15) |
 
 **Diferenças em relação ao §6.1 do épico:**
-- `Role` e `Permission` **não são tabelas**. São constantes em código (ADR-0028), e o vínculo é `TenantEmployeeRole`.
+- `Role` e `Permission` **não são tabelas**. São constantes em código (ADR-0028), e o vínculo é `TenantEmployeeRole`. A permissão `catalog.availability` (EP-003 Q-306) também é só código.
 - `DailyClosing` passa a pertencer a um `BusinessDay` (ADR-0019).
 
 ## 4.2 Diagrama (núcleo operacional)
@@ -251,12 +251,88 @@ Aparelho registrado como compartilhado (ADR-0027).
 | ImageStorageKey | string? | chave no R2 (ADR-0037); a URL é derivada |
 | IsActive | bool | desativado = some dos cadastros, mas o histórico permanece (RN-002.6) |
 | IsAvailable | bool | falta momentânea de bebida ou adicional (pratos usam a disponibilidade do cardápio) |
-| IsVisibleOnPage | bool | padrão `true`. Bebida ou adicional com `false` não aparece na página de pedidos (ADR-0044 item 5) |
+| IsVisibleOnPage | bool | padrão `true`. Bebida ou adicional com `false` não aparece na página de pedidos (ADR-0044 item 5). Na bebida, é o **"vende no site"** (ADR-0057 item 5, Q-307) |
+| SitePrice | Money? | só `BEVERAGE` (adicional usa o mesmo preço no site, Q-308); > 0; obrigatório na bebida com `IsVisibleOnPage` (na aplicação até a contração da 0009). Migração 0009: `= DefaultPrice` nas bebidas visíveis; a de `0.00` sai do site |
 | CreatedAt, UpdatedAt | | |
 
 ### MarmitaSize [T][V][S]
 
 `Name` string(20), `Price` Money > 0, `SortOrder` int, `IsActive` bool. Único por `(TenantId, Name)` entre ativos.
+
+`SellsOnSite` bool (padrão `false`) e `SitePrice` Money? (> 0, obrigatório com `SellsOnSite`) (ADR-0057 item 1). Ao ligar a chave, o preço de site vem preenchido com o `Price`; desligada, o tamanho não aparece na página, e o `SitePrice` pode ficar guardado. Migração 0009: todo tamanho **ativo** fica `SellsOnSite = true`, `SitePrice = Price`.
+
+### 4.5.1 Cardápio fixo (EP-003, ADR-0056, ADR-0057)
+
+Permanente, sem data: edição vale na hora para os pedidos seguintes, e o pedido grava o snapshot (ADR-0020). Só com o módulo `FIXED_MENU` (ADR-0054). Cadastro com `catalog.manage`; **pausar e reativar** com `catalog.availability` (OWNER, MANAGER, ATTENDANT, KITCHEN; ADR-0028, Q-306). Escritas com `If-Match` na versão da **raiz** do agregado, auditoria, `CatalogUpdated` e feed (ADR-0031, ADR-0032, ADR-0034). Os filhos não têm versão própria: alterar ou pausar um filho incrementa a `Version` da raiz.
+
+**Preço de site** (ADR-0057): toda unidade vendável tem `SellsOnSite` bool (padrão `false`) e `SitePrice` Money? (> 0; obrigatório com a chave ligada; pode ser maior, menor ou igual ao de balcão; ao ligar, vem preenchido com o preço de balcão). Preço de balcão de prato, tamanho, bebida e combo é > 0.
+
+#### DishCategory [T][V][S]
+
+`Name` string(40) (único entre ativas), `SortOrder` int (reordenável), `IsActive` bool, `CreatedAt`, `UpdatedAt`.
+
+#### Dish [T][V][S] — agregado com `DishSize`
+
+| Campo | Tipo | Regra |
+|---|---|---|
+| DishCategoryId | Guid | → `DishCategory` |
+| Name | string(80) | único por tenant entre ativos |
+| Description | string(300)? | |
+| ImageStorageKey | string(200)? | R2, como `Product` |
+| RequiresPreparation | bool | padrão `true` |
+| HasSizes | bool | "Tamanho?". Desligado: `Price` obrigatório. Ligado: sem `Price`, sem `SellsOnSite`/`SitePrice` no prato (ficam em cada tamanho) e com pelo menos um `DishSize` ativo (aplicação). Desligar inativa os tamanhos |
+| Price | Money? | preço único (sem tamanho) |
+| SellsOnSite, SitePrice | bool, Money? | só no prato sem tamanho |
+| SortOrder | int | dentro da categoria |
+| IsActive, IsPaused | bool, bool | |
+| CreatedAt, UpdatedAt | | |
+
+#### DishSize [T] — filho de Dish
+
+`Name` string(30) (livre: "300 ml", "Família"; único entre ativos do prato), `Price` Money > 0, `SellsOnSite`, `SitePrice`, `SortOrder`, `IsActive`, `IsPaused`. O tamanho é **do prato**.
+
+#### BeverageType [T][V][S] — agregado com `BeverageSize` e `BeverageFlavor`
+
+`Name` string(40) ("Refrigerante", "Suco"; único entre ativos), `SortOrder`, `IsActive`, `CreatedAt`, `UpdatedAt`.
+
+#### BeverageSize [T] — filho de BeverageType
+
+`Name` string(30) ("Lata 350 ml"; único entre ativos do tipo), `Price` Money > 0, `SellsOnSite`, `SitePrice`, `SortOrder`, `IsActive`, `IsPaused`.
+
+#### BeverageFlavor [T] — filho de BeverageSize (Q-305: o sabor é do **tamanho**)
+
+`Name` string(40) (único entre ativos do tamanho), `ExtraPrice` Money ≥ 0 (padrão `0.00`, mesmo valor no site, Q-308), `SortOrder`, `IsActive`, `IsPaused`. Tamanho sem sabor: vendido sem escolha; com sabores: sabor obrigatório no pedido. Preço = `BeverageSize.Price` (ou `SitePrice`) + `ExtraPrice`.
+
+#### Combo [T][V][S] — agregado com `ComboComponent`
+
+`Name` string(80) (único entre ativos), `Description` string(300)?, `ImageStorageKey`?, `Price` Money > 0 (preço fechado), `SellsOnSite`, `SitePrice`, `SortOrder`, `IsActive`, `IsPaused`, `CreatedAt`, `UpdatedAt`. Vende no site pela chave do próprio combo; os componentes só precisam estar vendáveis (ADR-0057 item 4).
+
+#### ComboComponent [T] — filho de Combo (pelo menos um, na aplicação)
+
+| Campo | Tipo | Regra |
+|---|---|---|
+| Kind | enum `DISH`, `BEVERAGE` | |
+| DishId, DishSizeId | Guid?, Guid? | `DISH`: o prato e o tamanho **fixo** (do próprio prato; nulo se o prato não tem tamanho, obrigatório se tem, na aplicação) |
+| BeverageSizeId | Guid? | `BEVERAGE`: o tamanho; o sabor é escolhido no pedido |
+| Quantity | int | 1 a 10 |
+| SortOrder | int | |
+
+Sem valor histórico (o pedido grava o snapshot): a edição do combo troca os componentes.
+
+#### AddonGroup [T][V][S] — agregado com `AddonOption` e `AddonGroupLink`
+
+`Name` string(60) (único entre ativos), `SortOrder`, `IsActive`, `CreatedAt`, `UpdatedAt`.
+
+- **AddonOption [T]:** `Name` string(80) (único entre ativos do grupo), `Price` Money ≥ 0 (mesmo no balcão e no site, Q-308; o mesmo para qualquer tamanho do prato), `SortOrder`, `IsActive`, `IsPaused`. Quantidade de 1 a 10 por opção no pedido, sem mínimo/máximo nesta fase.
+- **AddonGroupLink [T]:** `DishCategoryId` **ou** `DishId` (exatamente um), único por par. Adicionais de um prato = grupos da categoria dele ∪ grupos ligados ao prato, sem repetir. Removível.
+
+#### Pausa e disponibilidade derivada (ADR-0056 itens 21 a 26)
+
+- `IsPaused` em prato, tamanho de prato, tamanho de bebida, sabor, combo e opção de adicional. **Fica até alguém reativar** (não volta no fechamento nem na abertura do expediente).
+- **Derivada, nunca gravada:** prato vendável = ativo, não pausado e, se `HasSizes`, com pelo menos um tamanho ativo e não pausado; tamanho de bebida vendável = ativo, não pausado e, se tem sabores, com pelo menos um sabor ativo e não pausado; **combo vendável** = ativo, não pausado e todos os componentes vendáveis (o prato no tamanho fixo; o tamanho de bebida com pelo menos um sabor). Pausar um componente tira de venda os combos que o usam sem tocar no combo.
+- Item pausado no pedido → `409 ProductUnavailable`. Pausar não altera pedido registrado.
+- **Exclusão:** pratos, tamanhos, bebidas, sabores, combos e opções são inativados, nunca apagados. Inativar prato usado em combo ativo → `409` com os combos.
+- Na página (ADR-0057 item 3): prato com tamanho aparece se pelo menos um tamanho vende no site.
 
 ---
 
@@ -314,6 +390,7 @@ Aparelho registrado como compartilhado (ADR-0027).
 | BusinessDate | DateOnly | cópia de `BusinessDay.BusinessDate` = data da venda (ADR-0015) |
 | OrderNumber | int? | sequencial por **data operacional** (ADR-0023, ADR-0039), atribuído **no aceite**: nulo enquanto `AcceptanceStatus ≠ ACCEPTED`; recusados, expirados e desistências nunca recebem (ADR-0046) |
 | OrderType | enum `MARMITA`, `PF`, `KILO` | imutável |
+| PriceList | enum `COUNTER`, `SITE` | tabela de preço usada (ADR-0057 item 7): `Origin = APP` → `COUNTER`, `WEB` → `SITE`; imutável. Item acrescentado no app a pedido `SITE` usa o preço de site do item quando ele vende no site, senão o de balcão (Q-309), sempre gravado no snapshot da linha. Migração 0009: pedidos existentes `COUNTER`, os `WEB` `SITE` |
 | Origin | enum `APP`, `WEB` (futuro: `WHATSAPP`) | `WEB` = página de pedidos (EP-002, ADR-0044) |
 | FulfillmentType | enum `DELIVERY`, `PICKUP`, `DINE_IN` | `MARMITA` → `DELIVERY`/`PICKUP`; `PF`/`KILO` → `DINE_IN` |
 | CustomerId | Guid? | → Customer. Pedido `WEB`: vinculado só no aceite, pelo telefone (ADR-0044 item 20) |
@@ -567,7 +644,7 @@ O ajuste **não** altera o `DailyClosing` relacionado nem o caixa físico. Apare
 | IdempotencyRecord [T] | `Key`, `UserId`, `Endpoint`, `RequestHash`, `Status` (`IN_PROGRESS`/`COMPLETED`), `ResponseStatus`, `ResponseBody` json, `ResourceId`, `CreatedAt`, `ExpiresAt` | único `(TenantId, Key)`; TTL de 72 h. `ResponseBody` nunca guarda segredo do cliente: o `trackingToken` do envio pela página sai do corpo e é recalculado no reenvio a partir do `ResourceId` (ADR-0047) |
 | OutboxMessage [T] | `EventType`, `Payload` json (ids, versão, `seq`), `OccurredAt`, `AvailableAt?`, `ProcessedAt?`, `Attempts` | limpeza após 7 dias. `AvailableAt`: entrega agendada (lembrete do push, ADR-0046 item 15) ou espera entre tentativas de um consumidor interno; nulo = na hora |
 
-**Entidades [S]:** `TenantSettings`, `TenantEmployee`, `Product`, `MarmitaSize`, `Menu` (inclui itens), `Customer` (inclui endereços), `Order` (inclui itens, pesagens e eventos), `Payment`, `PaymentReversal`, `BusinessDay`, `CashMovement`, `DailyClosing`, `ClosingAdjustment`.
+**Entidades [S]:** `TenantSettings`, `TenantEmployee`, `Product`, `MarmitaSize`, `DishCategory`, `Dish` (inclui tamanhos), `BeverageType` (inclui tamanhos e sabores), `Combo` (inclui componentes), `AddonGroup` (inclui opções e vínculos), `Menu` (inclui itens), `Customer` (inclui endereços), `Order` (inclui itens, pesagens e eventos), `Payment`, `PaymentReversal`, `BusinessDay`, `CashMovement`, `DailyClosing`, `ClosingAdjustment`.
 
 ---
 

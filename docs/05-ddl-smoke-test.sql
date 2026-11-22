@@ -406,6 +406,189 @@ DO $$ BEGIN
   RAISE NOTICE 'ok: rotulo removivel na edicao do estabelecimento';
 END $$;
 
+-- ===== Cardápio fixo e preço de site (ADR-0056, ADR-0057, migration 0009) =====
+INSERT INTO dish_categories (id, tenant_id, name, created_at, updated_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009001', 'aaaaaaaa-0000-0000-0000-000000000001', 'Lanches', now(), now());
+INSERT INTO dishes (id, tenant_id, dish_category_id, name, price, sells_on_site, site_price, created_at, updated_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009011', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009001',
+        'X-Burguer', 22.00, true, 23.90, now(), now());
+INSERT INTO dishes (id, tenant_id, dish_category_id, name, has_sizes, created_at, updated_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009012', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009001',
+        'Batata frita', true, now(), now());
+INSERT INTO dish_sizes (id, tenant_id, dish_id, name, price)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009021', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009012', 'P', 10.00);
+INSERT INTO beverage_types (id, tenant_id, name, created_at, updated_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009031', 'aaaaaaaa-0000-0000-0000-000000000001', 'Refrigerante', now(), now());
+INSERT INTO beverage_sizes (id, tenant_id, beverage_type_id, name, price, sells_on_site, site_price)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009032', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009031',
+        'Lata 350 ml', 6.00, true, 6.50);
+INSERT INTO beverage_flavors (id, tenant_id, beverage_size_id, name, extra_price)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009033', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009032',
+        'Coca-Cola Zero', 0.50);
+INSERT INTO combos (id, tenant_id, name, price, created_at, updated_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009041', 'aaaaaaaa-0000-0000-0000-000000000001', 'X-Burguer + batata + refri', 32.00, now(), now());
+INSERT INTO combo_components (id, tenant_id, combo_id, kind, dish_id, dish_size_id, beverage_size_id, quantity)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009051', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009041',
+        'DISH', 'aaaaaaaa-0000-0000-0000-000000009011', NULL, NULL, 1),
+       ('aaaaaaaa-0000-0000-0000-000000009052', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009041',
+        'DISH', 'aaaaaaaa-0000-0000-0000-000000009012', 'aaaaaaaa-0000-0000-0000-000000009021', NULL, 1),
+       ('aaaaaaaa-0000-0000-0000-000000009053', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009041',
+        'BEVERAGE', NULL, NULL, 'aaaaaaaa-0000-0000-0000-000000009032', 1);
+INSERT INTO addon_groups (id, tenant_id, name, created_at, updated_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009061', 'aaaaaaaa-0000-0000-0000-000000000001', 'Adicionais de lanche', now(), now());
+INSERT INTO addon_options (id, tenant_id, addon_group_id, name, price)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009062', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009061', 'Bacon', 4.00);
+INSERT INTO addon_group_links (id, tenant_id, addon_group_id, dish_category_id)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009063', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009061',
+        'aaaaaaaa-0000-0000-0000-000000009001');
+
+DO $$ BEGIN
+  INSERT INTO dishes (id, tenant_id, dish_category_id, name, has_sizes, price, created_at, updated_at)
+  VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009001', 'Acai', true, 15.00, now(), now());
+  RAISE EXCEPTION 'FALHOU: prato com tamanho e preco unico';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: prato com tamanho sem preco unico'; END $$;
+
+DO $$ BEGIN
+  INSERT INTO dishes (id, tenant_id, dish_category_id, name, created_at, updated_at)
+  VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009001', 'X-Salada', now(), now());
+  RAISE EXCEPTION 'FALHOU: prato sem tamanho e sem preco';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: prato sem tamanho exige preco'; END $$;
+
+DO $$ BEGIN
+  BEGIN
+    UPDATE dishes SET site_price = NULL WHERE id = 'aaaaaaaa-0000-0000-0000-000000009011';
+    RAISE EXCEPTION 'FALHOU: prato vende no site sem preco de site';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    UPDATE dish_sizes SET sells_on_site = true WHERE id = 'aaaaaaaa-0000-0000-0000-000000009021';
+    RAISE EXCEPTION 'FALHOU: tamanho vende no site sem preco de site';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    UPDATE beverage_sizes SET site_price = NULL WHERE id = 'aaaaaaaa-0000-0000-0000-000000009032';
+    RAISE EXCEPTION 'FALHOU: bebida vende no site sem preco de site';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    UPDATE combos SET sells_on_site = true WHERE id = 'aaaaaaaa-0000-0000-0000-000000009041';
+    RAISE EXCEPTION 'FALHOU: combo vende no site sem preco de site';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    UPDATE marmita_sizes SET sells_on_site = true WHERE id = 'aaaaaaaa-0000-0000-0000-0000000000f1';
+    RAISE EXCEPTION 'FALHOU: marmita vende no site sem preco de site';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    UPDATE combos SET sells_on_site = true, site_price = 0 WHERE id = 'aaaaaaaa-0000-0000-0000-000000009041';
+    RAISE EXCEPTION 'FALHOU: preco de site zero aceito';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  RAISE NOTICE 'ok: vende no site exige preco de site maior que zero';
+END $$;
+
+DO $$ BEGIN
+  INSERT INTO combo_components (id, tenant_id, combo_id, kind, dish_id, dish_size_id, quantity)
+  VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009041',
+          'DISH', 'aaaaaaaa-0000-0000-0000-000000009011', 'aaaaaaaa-0000-0000-0000-000000009021', 1);
+  RAISE EXCEPTION 'FALHOU: componente com tamanho de outro prato';
+EXCEPTION WHEN foreign_key_violation THEN RAISE NOTICE 'ok: tamanho do componente e do proprio prato'; END $$;
+
+DO $$ BEGIN
+  BEGIN
+    INSERT INTO combo_components (id, tenant_id, combo_id, kind, dish_id, beverage_size_id, quantity)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009041',
+            'DISH', 'aaaaaaaa-0000-0000-0000-000000009011', 'aaaaaaaa-0000-0000-0000-000000009032', 1);
+    RAISE EXCEPTION 'FALHOU: componente prato e bebida ao mesmo tempo';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO combo_components (id, tenant_id, combo_id, kind, quantity)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009041', 'BEVERAGE', 1);
+    RAISE EXCEPTION 'FALHOU: componente de bebida sem tamanho';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    UPDATE combo_components SET quantity = 11 WHERE id = 'aaaaaaaa-0000-0000-0000-000000009051';
+    RAISE EXCEPTION 'FALHOU: componente com quantidade 11';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  RAISE NOTICE 'ok: componente e um prato ou um tamanho de bebida, de 1 a 10';
+END $$;
+
+DO $$ BEGIN
+  UPDATE beverage_flavors SET extra_price = -0.50 WHERE id = 'aaaaaaaa-0000-0000-0000-000000009033';
+  RAISE EXCEPTION 'FALHOU: acrescimo de sabor negativo';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: acrescimo do sabor nunca negativo'; END $$;
+
+DO $$ BEGIN
+  BEGIN
+    INSERT INTO addon_group_links (id, tenant_id, addon_group_id, dish_category_id, dish_id)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009061',
+            'aaaaaaaa-0000-0000-0000-000000009001', 'aaaaaaaa-0000-0000-0000-000000009011');
+    RAISE EXCEPTION 'FALHOU: vinculo com categoria e prato';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO addon_group_links (id, tenant_id, addon_group_id, dish_category_id)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009061',
+            'aaaaaaaa-0000-0000-0000-000000009001');
+    RAISE EXCEPTION 'FALHOU: vinculo repetido';
+  EXCEPTION WHEN unique_violation THEN NULL; END;
+  RAISE NOTICE 'ok: grupo ligado a uma categoria ou a um prato, sem repetir';
+END $$;
+
+DO $$ BEGIN
+  INSERT INTO products (id, tenant_id, kind, name, default_price, requires_preparation, site_price, created_at, updated_at)
+  VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'ADDON', 'Ovo', 2.00, true, 2.50, now(), now());
+  RAISE EXCEPTION 'FALHOU: adicional com preco de site';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: preco de site de produto so em bebida'; END $$;
+
+DO $$ BEGIN
+  UPDATE orders SET price_list = 'SITE' WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c01';
+  RAISE EXCEPTION 'FALHOU: pedido do app na tabela de site';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: pedido do app usa a tabela de balcao'; END $$;
+
+DO $$ BEGIN
+  UPDATE orders SET price_list = 'SITE' WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c03';
+  IF (SELECT price_list FROM orders WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c03') <> 'SITE' THEN
+    RAISE EXCEPTION 'FALHOU: pedido do site sem a tabela de site';
+  END IF;
+  IF (SELECT price_list FROM orders WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c02') <> 'COUNTER' THEN
+    RAISE EXCEPTION 'FALHOU: pedido do app nao nasce na tabela de balcao';
+  END IF;
+  RAISE NOTICE 'ok: pedido do site na tabela de site; do app, balcao por padrao';
+END $$;
+
+DO $$ BEGIN
+  BEGIN
+    DELETE FROM dishes WHERE id = 'aaaaaaaa-0000-0000-0000-000000009011';
+    RAISE EXCEPTION 'FALHOU: aplicacao apagou prato';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    DELETE FROM dish_sizes WHERE id = 'aaaaaaaa-0000-0000-0000-000000009021';
+    RAISE EXCEPTION 'FALHOU: aplicacao apagou tamanho';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    DELETE FROM beverage_flavors WHERE id = 'aaaaaaaa-0000-0000-0000-000000009033';
+    RAISE EXCEPTION 'FALHOU: aplicacao apagou sabor';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    DELETE FROM combos WHERE id = 'aaaaaaaa-0000-0000-0000-000000009041';
+    RAISE EXCEPTION 'FALHOU: aplicacao apagou combo';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    DELETE FROM addon_options WHERE id = 'aaaaaaaa-0000-0000-0000-000000009062';
+    RAISE EXCEPTION 'FALHOU: aplicacao apagou adicional';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  RAISE NOTICE 'ok: itens do cardapio fixo sao inativados, nunca apagados';
+END $$;
+
+DO $$ BEGIN
+  DELETE FROM combo_components WHERE id = 'aaaaaaaa-0000-0000-0000-000000009053';
+  IF NOT FOUND THEN RAISE EXCEPTION 'FALHOU: componente nao removido'; END IF;
+  DELETE FROM addon_group_links WHERE id = 'aaaaaaaa-0000-0000-0000-000000009063';
+  IF NOT FOUND THEN RAISE EXCEPTION 'FALHOU: vinculo nao removido'; END IF;
+  INSERT INTO combo_components (id, tenant_id, combo_id, kind, beverage_size_id, quantity)
+  VALUES ('aaaaaaaa-0000-0000-0000-000000009053', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009041',
+          'BEVERAGE', 'aaaaaaaa-0000-0000-0000-000000009032', 1);
+  INSERT INTO addon_group_links (id, tenant_id, addon_group_id, dish_category_id)
+  VALUES ('aaaaaaaa-0000-0000-0000-000000009063', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009061',
+          'aaaaaaaa-0000-0000-0000-000000009001');
+  RAISE NOTICE 'ok: componente de combo e vinculo de grupo trocados na edicao';
+END $$;
+
 -- ===== Tenant B =====
 SELECT set_config('app.tenant_id', 'bbbbbbbb-0000-0000-0000-000000000002', false),
        set_config('app.user_id',   'bbbbbbbb-0000-0000-0000-0000000000b2', false);
@@ -515,6 +698,35 @@ DO $$ BEGIN
   VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'RESTAURANT', 'RESTAURANT', now());
   RAISE EXCEPTION 'FALHOU: tenant B gravou rotulo de A';
 EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'ok: tenant B nao grava rotulo de A'; END $$;
+
+DO $$ BEGIN
+  IF (SELECT count(*) FROM dish_categories) + (SELECT count(*) FROM dishes) + (SELECT count(*) FROM dish_sizes)
+     + (SELECT count(*) FROM beverage_types) + (SELECT count(*) FROM beverage_sizes) + (SELECT count(*) FROM beverage_flavors)
+     + (SELECT count(*) FROM combos) + (SELECT count(*) FROM combo_components)
+     + (SELECT count(*) FROM addon_groups) + (SELECT count(*) FROM addon_options) + (SELECT count(*) FROM addon_group_links) <> 0 THEN
+    RAISE EXCEPTION 'FALHOU: tenant B ve o cardapio fixo de A';
+  END IF;
+  UPDATE dishes SET is_paused = true WHERE id = 'aaaaaaaa-0000-0000-0000-000000009011';
+  IF FOUND THEN RAISE EXCEPTION 'FALHOU: tenant B pausou prato de A'; END IF;
+  DELETE FROM combo_components WHERE tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001';
+  IF FOUND THEN RAISE EXCEPTION 'FALHOU: tenant B apagou componente de A'; END IF;
+  RAISE NOTICE 'ok: cardapio fixo isolado';
+END $$;
+
+DO $$ BEGIN
+  INSERT INTO dish_categories (id, tenant_id, name, created_at, updated_at)
+  VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'Invasao', now(), now());
+  RAISE EXCEPTION 'FALHOU: tenant B gravou categoria de A';
+EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'ok: tenant B nao grava cardapio fixo de A'; END $$;
+
+INSERT INTO combos (id, tenant_id, name, price, created_at, updated_at)
+VALUES ('bbbbbbbb-0000-0000-0000-000000009041', 'bbbbbbbb-0000-0000-0000-000000000002', 'Combo B', 30.00, now(), now());
+DO $$ BEGIN
+  INSERT INTO combo_components (id, tenant_id, combo_id, kind, dish_id, quantity)
+  VALUES (gen_random_uuid(), 'bbbbbbbb-0000-0000-0000-000000000002', 'bbbbbbbb-0000-0000-0000-000000009041',
+          'DISH', 'aaaaaaaa-0000-0000-0000-000000009011', 1);
+  RAISE EXCEPTION 'FALHOU: combo de B usa prato de A';
+EXCEPTION WHEN foreign_key_violation THEN RAISE NOTICE 'ok: combo de B nao usa prato de A'; END $$;
 
 -- ===== Login: sem tenant ativo, o usuário A enxerga só os próprios vínculos =====
 SELECT set_config('app.tenant_id', '', false), set_config('app.user_id', 'aaaaaaaa-0000-0000-0000-0000000000a1', false);

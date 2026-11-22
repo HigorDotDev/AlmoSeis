@@ -1061,15 +1061,24 @@ Cada entidade [S] alterada na transação recebe seu próprio `seq`, porque a PK
 | Push enviado uma vez por mensagem do outbox e aparelho (ADR-0049 item 8) | PK de `push_deliveries`, `ck_push_deliveries_ticket` (0006) |
 | Comportamento da lista, autor coerente com a origem, nunca removido (ADR-0054 itens 1 a 6) | `tenant_behaviors` (`CHECK`s, PK, `ck_tenant_behaviors_enabled_by`), grants sem `UPDATE`/`DELETE` (0008) |
 | Rótulo da lista fixa, do comportamento certo e só de comportamento habilitado (ADR-0054 itens 8 e 10) | `ck_tenant_labels_label`, `fk_tenant_labels_behavior` (0008) |
+| Prato com preço único ou com tamanhos, nunca os dois; o "vende no site" do prato com tamanho fica em cada tamanho (ADR-0056 item 6, ADR-0057 item 1) | `ck_dishes_price` (0009) |
+| "Vende no site" exige preço de site maior que zero (ADR-0057 item 2) | `ck_*_site_price` e `CHECK (site_price > 0)` em `dishes`, `dish_sizes`, `beverage_sizes`, `combos`, `marmita_sizes` (0009) |
+| Componente de combo: um prato no tamanho **daquele** prato, ou um tamanho de bebida, de 1 a 10 (ADR-0056 item 13) | `ck_combo_components_target`, `fk_combo_components_dish_size` (0009) |
+| Sabor do tamanho de bebida, acréscimo nunca negativo (ADR-0056 itens 9 e 10, Q-305) | `fk_beverage_flavors_size`, `CHECK (extra_price >= 0)` (0009) |
+| Grupo de adicionais ligado a uma categoria ou a um prato, sem repetir (ADR-0056 item 18) | `ck_addon_group_links_target`, `ux_addon_group_links_*` (0009) |
+| Itens do cardápio fixo inativados, nunca apagados (ADR-0056 item 26) | grants (0009: `DELETE` só em `combo_components` e `addon_group_links`) |
+| Preço de site de produto só em bebida (Q-307, Q-308); pedido do app na tabela de balcão (ADR-0057 item 7) | `ck_products_site_price`, `ck_orders_price_list` (0009; contração pendente) |
 
 ## 5.16 Validação
 
-O script foi validado em 2026-10-27 num PostgreSQL 16 (Docker): os blocos `sql` deste documento aplicados do zero (36 tabelas e 65 políticas na `0001`; 40 e 76 com as alterações até a `0004`; 42 e 80 até a `0005`; 44 e 86 até a `0006`; 44 e 87 até a `0007`; 46 e 91 até a `0008`) e depois o teste de fumaça [`05-ddl-smoke-test.sql`](05-ddl-smoke-test.sql), que roda como `almoseis_app`/`almoseis_platform` e confere 59 regras (22 da `0001`, 9 da `0003`, 10 da `0004`, 4 da `0005`, 5 da `0006`, 9 da `0008`): isolamento entre dois tenants, plataforma do aparelho compartilhado, login, convite por código, totais, cancelamento, troco, estorno, conciliação, imutabilidade, casos com `NULL` e, desde a `0003`, o pedido da página (sem número, sem produção e sem autor enquanto aguarda aceite; recusa coerente; atendimento só em entrega) e, desde a `0004`, a página de pedidos (endereço para ativar, slug atual único e no formato, troco só em dinheiro, campos da página só em `WEB`, idempotência anônima, slug e token resolvíveis por outro tenant mas nunca gravados por ele, perfil e hash do IP isolados) e, desde a `0005`, a taxa por distância (cotação por distância completa, confirmação do ponto só com ponto, origem da taxa só em entrega, cotação e cache isolados) e, desde a `0006`, o push (token no formato do Expo e único, entrega com ticket ou erro, registro e entregas isolados, só quem comprova o token tira o aparelho do outro tenant; desde a `0007`, só a mesma instalação, pela função, e o token de acompanhamento só pela função de resolução) e, desde a `0008`, os comportamentos e rótulos (comportamento e origem da lista, rótulo do comportamento certo e só de comportamento habilitado, comportamento nunca alterado nem apagado pela aplicação, rótulo removível, isolamento e acréscimo pela plataforma). Toda mudança neste documento deve repetir os dois passos:
+O script foi validado em 2026-10-27 num PostgreSQL 16 (Docker): os blocos `sql` deste documento aplicados do zero (36 tabelas e 65 políticas na `0001`; 40 e 76 com as alterações até a `0004`; 42 e 80 até a `0005`; 44 e 86 até a `0006`; 44 e 87 até a `0007`; 46 e 91 até a `0008`; 57 e 113 até a `0009`) e depois o teste de fumaça [`05-ddl-smoke-test.sql`](05-ddl-smoke-test.sql), que roda como `almoseis_app`/`almoseis_platform` e confere 74 regras (22 da `0001`, 9 da `0003`, 10 da `0004`, 4 da `0005`, 5 da `0006`, 9 da `0008`, 15 da `0009`): isolamento entre dois tenants, plataforma do aparelho compartilhado, login, convite por código, totais, cancelamento, troco, estorno, conciliação, imutabilidade, casos com `NULL` e, desde a `0003`, o pedido da página (sem número, sem produção e sem autor enquanto aguarda aceite; recusa coerente; atendimento só em entrega) e, desde a `0004`, a página de pedidos (endereço para ativar, slug atual único e no formato, troco só em dinheiro, campos da página só em `WEB`, idempotência anônima, slug e token resolvíveis por outro tenant mas nunca gravados por ele, perfil e hash do IP isolados) e, desde a `0005`, a taxa por distância (cotação por distância completa, confirmação do ponto só com ponto, origem da taxa só em entrega, cotação e cache isolados) e, desde a `0006`, o push (token no formato do Expo e único, entrega com ticket ou erro, registro e entregas isolados, só quem comprova o token tira o aparelho do outro tenant; desde a `0007`, só a mesma instalação, pela função, e o token de acompanhamento só pela função de resolução) e, desde a `0008`, os comportamentos e rótulos (comportamento e origem da lista, rótulo do comportamento certo e só de comportamento habilitado, comportamento nunca alterado nem apagado pela aplicação, rótulo removível, isolamento e acréscimo pela plataforma) e, desde a `0009`, o cardápio fixo e o preço de site (prato com preço único ou tamanhos, "vende no site" com preço de site maior que zero em prato, tamanho, bebida, combo e marmita, componente de combo com o tamanho do próprio prato, acréscimo do sabor, vínculo de grupo único com categoria ou prato, preço de site só em bebida, tabela de preço do pedido, itens inativados e nunca apagados, componentes e vínculos trocados na edição, isolamento e combo de um tenant sem prato do outro). Toda mudança neste documento deve repetir os dois passos:
 
 ```text
 docker run -d --name almoseis-ddl-test -e POSTGRES_PASSWORD=test postgres:16
 # concatenar os blocos sql deste arquivo, na ordem, em schema.sql; então:
-psql -U postgres -v ON_ERROR_STOP=1 -f schema.sql && psql -U postgres -f docs/05-ddl-smoke-test.sql
+# papéis do §5.1 e, para que as funções SECURITY DEFINER (0007) sejam do mesmo dono das tabelas, o schema como almoseis_migrator:
+psql -U postgres -c "ALTER SCHEMA public OWNER TO almoseis_migrator"   # depois de criar os papéis
+(echo 'SET ROLE almoseis_migrator;'; cat schema.sql) | psql -U postgres -v ON_ERROR_STOP=1 && psql -U postgres -f docs/05-ddl-smoke-test.sql
 ```
 
 **Regras que ficam só na aplicação** (dependem de outra tabela ou de estado): `menu_items.section = products.kind`; `pf_price` obrigatório em menu PF; pedido com ao menos um item ou pesagem ativa; `items_total`/`weighings_total` = soma dos filhos; `paid_amount` = soma dos pagamentos `CONFIRMED`; pedido pago imutável; pelo menos um `OWNER` ativo; método de pagamento habilitado no tenant; adicional filho só de `MARMITA`/`PF`.
@@ -1738,4 +1747,300 @@ END $$;
 GRANT SELECT ON tenant_behaviors, tenant_labels TO almoseis_app, almoseis_platform;
 GRANT INSERT ON tenant_behaviors TO almoseis_app, almoseis_platform;
 GRANT INSERT, DELETE ON tenant_labels TO almoseis_app;
+```
+
+### 0009_FixedMenuSitePrice — 2026-11-22 (ADR-0056, ADR-0057)
+
+Cardápio fixo e preço de site (EP-003 fatia 2, F-306 a F-311). ADR-0056 e ADR-0057 estão `Proposto`.
+
+- **Cardápio fixo** (ADR-0056): onze tabelas de tenant no módulo Catalog, separadas de `products` e `marmita_sizes` (item 4). Os agregados [V][S] são **`dish_categories`**, **`dishes`** (com os filhos `dish_sizes`), **`beverage_types`** (com `beverage_sizes` e, abaixo de cada tamanho, `beverage_flavors`: o sabor é **do tamanho**, Q-305), **`combos`** (com `combo_components`) e **`addon_groups`** (com `addon_options` e `addon_group_links`). Os filhos não têm versão própria: toda alteração neles, inclusive a pausa, incrementa a `version` da raiz (ADR-0034) e gera a entrada do feed da raiz (ADR-0032), como `menus`/`menu_items`.
+- **Prato** (itens 5 a 8): `has_sizes` desligado exige `price`; ligado proíbe `price`, `sells_on_site` e `site_price` no próprio prato, porque o preço e o "vende no site" passam a ser **de cada tamanho** (`ck_dishes_price`). "Pelo menos um tamanho ativo" depende de outra tabela e fica na aplicação. Preço de balcão de prato, tamanho, tamanho de bebida e combo é `> 0` (como `marmita_sizes.price`), porque o preço de site começa igual a ele e precisa ser `> 0` (ADR-0057 item 2). Opção de adicional pode custar `0.00`; o acréscimo do sabor é `>= 0`, padrão `0.00`.
+- **Combo** (item 13): cada componente é **um prato** (`dish_id` + `dish_size_id`, nulo se o prato não tem tamanho) **ou** **um tamanho de bebida** (`beverage_size_id`; o sabor é escolhido no pedido), com quantidade de 1 a 10 (`ck_combo_components_target`). A FK `(tenant_id, dish_id, dish_size_id) → dish_sizes (tenant_id, dish_id, id)` garante que o tamanho é **daquele** prato. "Tamanho obrigatório se o prato tem tamanho" e "pelo menos um componente" ficam na aplicação. Os componentes não são referenciados por pedido (o pedido grava o snapshot, ADR-0058), então a edição do combo os troca (`DELETE` permitido).
+- **Grupos de adicionais** (itens 17 a 20): o vínculo é com **uma categoria ou um prato** (`ck_addon_group_links_target`), único por par. Os vínculos não têm valor histórico: `DELETE` permitido.
+- **Pausa** (itens 21 a 25): `is_paused` em prato, tamanho de prato, tamanho de bebida, sabor, combo e opção de adicional. Fica até alguém reativar: nenhuma rotina do expediente toca na coluna. A **disponibilidade é derivada**, nunca gravada: o combo não tem coluna de "pausado por componente", e os índices `ix_combo_components_*` servem à consulta "combos que usam este prato/tamanho/bebida" (propagação da pausa, e o `409` ao inativar um prato usado em combo ativo, item 26). A permissão `catalog.availability` (ADR-0028, Q-306) é constante em código (04 §4.1), sem tabela.
+- **Exclusão** (item 26): pratos, tamanhos, bebidas, sabores, combos e opções são inativados (`is_active`), nunca apagados: o papel da aplicação não tem `DELETE` neles. O nome é único entre os ativos do mesmo pai.
+- **"Vende no site" e preço de site** (ADR-0057 itens 1 a 5): `sells_on_site` + `site_price` em `dishes` (sem tamanho), `dish_sizes`, `beverage_sizes`, `combos` e **`marmita_sizes`**; ligado exige `site_price` (`> 0`). Desligado, o `site_price` pode ficar guardado (volta preenchido se a chave for religada). As bebidas do restaurante (`products` `BEVERAGE`, Q-307) usam o `is_visible_on_page` existente como "vende no site" e ganham `site_price`; adicionais (`ADDON`) e opções de grupo não têm preço de site (Q-308, `ck_products_site_price`).
+- **`orders.price_list`** (ADR-0057 item 7): `COUNTER` ou `SITE`. Os pedidos existentes ficam `COUNTER`, e os do site (`origin = 'WEB'`) já gravados viram `SITE`. O "Vendido pelo site" do fechamento (item 12) é da fatia 3, junto com a linha `A_LA_CARTE` (F-314). A estrutura de `order_items` para o cardápio fixo e o combo também é da fatia 3 (ADR-0058): por isso `dish_sizes`, `beverage_flavors` e `addon_options` já nascem com `UNIQUE (tenant_id, id)` (alvo das FKs compostas do item do pedido).
+
+**Correção de dados** (ADR-0057 item 15, critério 7 da fatia 2): todo tamanho de marmita **ativo** recebe `sells_on_site = true` e `site_price = price`; toda bebida com `is_visible_on_page = true` recebe `site_price = default_price`. A bebida visível com `default_price = 0.00` não pode ter preço de site (`> 0`), por isso deixa de ser vendida no site (`is_visible_on_page = false`) e o estabelecimento decide depois. A versão das linhas não muda (a correção não é edição do usuário, como na 0003). A RLS de `marmita_sizes`, `products` e `orders` é `FORCE`: o `FORCE` sai só durante cada `UPDATE`, na mesma transação (§5.1).
+
+**Expand/contract (09 §9.4):** só acrescenta. Na janela do deploy, a API anterior continua gravando sem as colunas novas: tamanho de marmita novo nasce com `sells_on_site = false` (não aparece no site até o estabelecimento ligar a chave); bebida nova visível nasce sem `site_price`; pedido do site nasce `COUNTER` (cobrado a preço de balcão, que é o que a API anterior faz). Por isso esta alteração **não** exige `site_price` na bebida visível nem `SITE` no pedido `WEB`: o `CHECK` só proíbe o contrário (`ck_products_site_price`, `ck_orders_price_list`). A API desta versão sempre grava os dois. **Contração pendente** (próxima release): `site_price = default_price` nas bebidas visíveis sem preço de site (e `is_visible_on_page = false` nas de `0.00`), `price_list = 'SITE'` nos pedidos `WEB` com `COUNTER`, e então `ADD CONSTRAINT ck_products_beverage_site_price CHECK (kind <> 'BEVERAGE' OR NOT is_visible_on_page OR site_price IS NOT NULL)`, a troca de `ck_orders_price_list` por `CHECK ((origin = 'WEB') = (price_list = 'SITE'))` e `ALTER TABLE orders ALTER COLUMN price_list DROP DEFAULT`.
+
+```sql
+-- Categorias do cardápio fixo (ADR-0056 item 5)
+CREATE TABLE dish_categories (
+  id          uuid         PRIMARY KEY,
+  tenant_id   uuid         NOT NULL REFERENCES tenants (id),
+  name        varchar(40)  NOT NULL CHECK (char_length(name) >= 1),
+  sort_order  integer      NOT NULL DEFAULT 0,
+  is_active   boolean      NOT NULL DEFAULT true,
+  created_at  timestamptz  NOT NULL,
+  updated_at  timestamptz  NOT NULL,
+  version     integer      NOT NULL DEFAULT 1,
+  CONSTRAINT ux_dish_categories_tenant_id UNIQUE (tenant_id, id)
+);
+CREATE UNIQUE INDEX ux_dish_categories_active_name ON dish_categories (tenant_id, lower(name)) WHERE is_active;
+
+-- Pratos: preço único ou tamanho por prato; "vende no site" no prato sem tamanho (ADR-0056 itens 6 a 8, ADR-0057)
+CREATE TABLE dishes (
+  id                    uuid           PRIMARY KEY,
+  tenant_id             uuid           NOT NULL REFERENCES tenants (id),
+  dish_category_id      uuid           NOT NULL,
+  name                  varchar(80)    NOT NULL CHECK (char_length(name) >= 1),
+  description           varchar(300),
+  image_storage_key     varchar(200),
+  requires_preparation  boolean        NOT NULL DEFAULT true,
+  has_sizes             boolean        NOT NULL DEFAULT false,
+  price                 numeric(12,2)  CHECK (price > 0),
+  sells_on_site         boolean        NOT NULL DEFAULT false,
+  site_price            numeric(12,2)  CHECK (site_price > 0),
+  sort_order            integer        NOT NULL DEFAULT 0,
+  is_active             boolean        NOT NULL DEFAULT true,
+  is_paused             boolean        NOT NULL DEFAULT false,
+  created_at            timestamptz    NOT NULL,
+  updated_at            timestamptz    NOT NULL,
+  version               integer        NOT NULL DEFAULT 1,
+  CONSTRAINT ux_dishes_tenant_id UNIQUE (tenant_id, id),
+  CONSTRAINT ck_dishes_price CHECK (
+       (NOT has_sizes AND price IS NOT NULL)
+    OR (has_sizes AND price IS NULL AND NOT sells_on_site AND site_price IS NULL)),
+  CONSTRAINT ck_dishes_site_price CHECK (NOT sells_on_site OR site_price IS NOT NULL),
+  CONSTRAINT fk_dishes_category FOREIGN KEY (tenant_id, dish_category_id) REFERENCES dish_categories (tenant_id, id)
+);
+CREATE UNIQUE INDEX ux_dishes_active_name ON dishes (tenant_id, lower(name)) WHERE is_active;
+CREATE INDEX ix_dishes_category ON dishes (tenant_id, dish_category_id);
+
+-- Tamanho do prato, com preço próprio e "vende no site" (ADR-0056 item 6, ADR-0057 item 1)
+CREATE TABLE dish_sizes (
+  id             uuid           PRIMARY KEY,
+  tenant_id      uuid           NOT NULL,
+  dish_id        uuid           NOT NULL,
+  name           varchar(30)    NOT NULL CHECK (char_length(name) >= 1),
+  price          numeric(12,2)  NOT NULL CHECK (price > 0),
+  sells_on_site  boolean        NOT NULL DEFAULT false,
+  site_price     numeric(12,2)  CHECK (site_price > 0),
+  sort_order     integer        NOT NULL DEFAULT 0,
+  is_active      boolean        NOT NULL DEFAULT true,
+  is_paused      boolean        NOT NULL DEFAULT false,
+  CONSTRAINT ux_dish_sizes_tenant_id UNIQUE (tenant_id, id),
+  -- Alvo da FK do componente de combo: o tamanho é do prato do componente.
+  CONSTRAINT ux_dish_sizes_tenant_dish_id UNIQUE (tenant_id, dish_id, id),
+  CONSTRAINT ck_dish_sizes_site_price CHECK (NOT sells_on_site OR site_price IS NOT NULL),
+  CONSTRAINT fk_dish_sizes_dish FOREIGN KEY (tenant_id, dish_id) REFERENCES dishes (tenant_id, id)
+);
+CREATE UNIQUE INDEX ux_dish_sizes_active_name ON dish_sizes (dish_id, lower(name)) WHERE is_active;
+
+-- Bebidas: tipo → tamanho (com preço) → sabor do tamanho (ADR-0056 itens 9 a 12, Q-305)
+CREATE TABLE beverage_types (
+  id          uuid         PRIMARY KEY,
+  tenant_id   uuid         NOT NULL REFERENCES tenants (id),
+  name        varchar(40)  NOT NULL CHECK (char_length(name) >= 1),
+  sort_order  integer      NOT NULL DEFAULT 0,
+  is_active   boolean      NOT NULL DEFAULT true,
+  created_at  timestamptz  NOT NULL,
+  updated_at  timestamptz  NOT NULL,
+  version     integer      NOT NULL DEFAULT 1,
+  CONSTRAINT ux_beverage_types_tenant_id UNIQUE (tenant_id, id)
+);
+CREATE UNIQUE INDEX ux_beverage_types_active_name ON beverage_types (tenant_id, lower(name)) WHERE is_active;
+
+CREATE TABLE beverage_sizes (
+  id                uuid           PRIMARY KEY,
+  tenant_id         uuid           NOT NULL,
+  beverage_type_id  uuid           NOT NULL,
+  name              varchar(30)    NOT NULL CHECK (char_length(name) >= 1),
+  price             numeric(12,2)  NOT NULL CHECK (price > 0),
+  sells_on_site     boolean        NOT NULL DEFAULT false,
+  site_price        numeric(12,2)  CHECK (site_price > 0),
+  sort_order        integer        NOT NULL DEFAULT 0,
+  is_active         boolean        NOT NULL DEFAULT true,
+  is_paused         boolean        NOT NULL DEFAULT false,
+  CONSTRAINT ux_beverage_sizes_tenant_id UNIQUE (tenant_id, id),
+  CONSTRAINT ck_beverage_sizes_site_price CHECK (NOT sells_on_site OR site_price IS NOT NULL),
+  CONSTRAINT fk_beverage_sizes_type FOREIGN KEY (tenant_id, beverage_type_id) REFERENCES beverage_types (tenant_id, id)
+);
+CREATE UNIQUE INDEX ux_beverage_sizes_active_name ON beverage_sizes (beverage_type_id, lower(name)) WHERE is_active;
+CREATE INDEX ix_beverage_sizes_type ON beverage_sizes (tenant_id, beverage_type_id);
+
+-- Sem sabor cadastrado, o tamanho é vendido sem escolha; com sabores, o sabor é obrigatório no pedido (item 11)
+CREATE TABLE beverage_flavors (
+  id                uuid           PRIMARY KEY,
+  tenant_id         uuid           NOT NULL,
+  beverage_size_id  uuid           NOT NULL,
+  name              varchar(40)    NOT NULL CHECK (char_length(name) >= 1),
+  extra_price       numeric(12,2)  NOT NULL DEFAULT 0 CHECK (extra_price >= 0),
+  sort_order        integer        NOT NULL DEFAULT 0,
+  is_active         boolean        NOT NULL DEFAULT true,
+  is_paused         boolean        NOT NULL DEFAULT false,
+  CONSTRAINT ux_beverage_flavors_tenant_id UNIQUE (tenant_id, id),
+  -- Alvo da FK do item do pedido (fatia 3): o sabor é do tamanho escolhido.
+  CONSTRAINT ux_beverage_flavors_tenant_size_id UNIQUE (tenant_id, beverage_size_id, id),
+  CONSTRAINT fk_beverage_flavors_size FOREIGN KEY (tenant_id, beverage_size_id) REFERENCES beverage_sizes (tenant_id, id)
+);
+CREATE UNIQUE INDEX ux_beverage_flavors_active_name ON beverage_flavors (beverage_size_id, lower(name)) WHERE is_active;
+
+-- Combo fixo com preço fechado (ADR-0056 itens 13 a 16, ADR-0057 item 4)
+CREATE TABLE combos (
+  id                 uuid           PRIMARY KEY,
+  tenant_id          uuid           NOT NULL REFERENCES tenants (id),
+  name               varchar(80)    NOT NULL CHECK (char_length(name) >= 1),
+  description        varchar(300),
+  image_storage_key  varchar(200),
+  price              numeric(12,2)  NOT NULL CHECK (price > 0),
+  sells_on_site      boolean        NOT NULL DEFAULT false,
+  site_price         numeric(12,2)  CHECK (site_price > 0),
+  sort_order         integer        NOT NULL DEFAULT 0,
+  is_active          boolean        NOT NULL DEFAULT true,
+  is_paused          boolean        NOT NULL DEFAULT false,
+  created_at         timestamptz    NOT NULL,
+  updated_at         timestamptz    NOT NULL,
+  version            integer        NOT NULL DEFAULT 1,
+  CONSTRAINT ux_combos_tenant_id UNIQUE (tenant_id, id),
+  CONSTRAINT ck_combos_site_price CHECK (NOT sells_on_site OR site_price IS NOT NULL)
+);
+CREATE UNIQUE INDEX ux_combos_active_name ON combos (tenant_id, lower(name)) WHERE is_active;
+
+-- Componente: prato com tamanho fixo OU tamanho de bebida (sabor escolhido no pedido)
+CREATE TABLE combo_components (
+  id                uuid         PRIMARY KEY,
+  tenant_id         uuid         NOT NULL,
+  combo_id          uuid         NOT NULL,
+  kind              text         NOT NULL CHECK (kind IN ('DISH', 'BEVERAGE')),
+  dish_id           uuid,
+  dish_size_id      uuid,
+  beverage_size_id  uuid,
+  quantity          integer      NOT NULL CHECK (quantity BETWEEN 1 AND 10),
+  sort_order        integer      NOT NULL DEFAULT 0,
+  CONSTRAINT ck_combo_components_target CHECK (
+       (kind = 'DISH'     AND dish_id IS NOT NULL AND beverage_size_id IS NULL)
+    OR (kind = 'BEVERAGE' AND beverage_size_id IS NOT NULL AND dish_id IS NULL AND dish_size_id IS NULL)),
+  CONSTRAINT fk_combo_components_combo FOREIGN KEY (tenant_id, combo_id) REFERENCES combos (tenant_id, id),
+  CONSTRAINT fk_combo_components_dish FOREIGN KEY (tenant_id, dish_id) REFERENCES dishes (tenant_id, id),
+  CONSTRAINT fk_combo_components_dish_size FOREIGN KEY (tenant_id, dish_id, dish_size_id)
+    REFERENCES dish_sizes (tenant_id, dish_id, id),
+  CONSTRAINT fk_combo_components_beverage_size FOREIGN KEY (tenant_id, beverage_size_id)
+    REFERENCES beverage_sizes (tenant_id, id)
+);
+CREATE INDEX ix_combo_components_combo ON combo_components (tenant_id, combo_id);
+-- Disponibilidade derivada e inativação (itens 23 e 26): quais combos usam este prato, tamanho ou bebida
+CREATE INDEX ix_combo_components_dish ON combo_components (tenant_id, dish_id) WHERE dish_id IS NOT NULL;
+CREATE INDEX ix_combo_components_dish_size ON combo_components (tenant_id, dish_size_id) WHERE dish_size_id IS NOT NULL;
+CREATE INDEX ix_combo_components_beverage_size ON combo_components (tenant_id, beverage_size_id)
+  WHERE beverage_size_id IS NOT NULL;
+
+-- Grupos de adicionais do cardápio fixo (ADR-0056 itens 17 a 20)
+CREATE TABLE addon_groups (
+  id          uuid         PRIMARY KEY,
+  tenant_id   uuid         NOT NULL REFERENCES tenants (id),
+  name        varchar(60)  NOT NULL CHECK (char_length(name) >= 1),
+  sort_order  integer      NOT NULL DEFAULT 0,
+  is_active   boolean      NOT NULL DEFAULT true,
+  created_at  timestamptz  NOT NULL,
+  updated_at  timestamptz  NOT NULL,
+  version     integer      NOT NULL DEFAULT 1,
+  CONSTRAINT ux_addon_groups_tenant_id UNIQUE (tenant_id, id)
+);
+CREATE UNIQUE INDEX ux_addon_groups_active_name ON addon_groups (tenant_id, lower(name)) WHERE is_active;
+
+-- Mesmo preço no balcão e no site (Q-308); pode custar 0.00
+CREATE TABLE addon_options (
+  id              uuid           PRIMARY KEY,
+  tenant_id       uuid           NOT NULL,
+  addon_group_id  uuid           NOT NULL,
+  name            varchar(80)    NOT NULL CHECK (char_length(name) >= 1),
+  price           numeric(12,2)  NOT NULL CHECK (price >= 0),
+  sort_order      integer        NOT NULL DEFAULT 0,
+  is_active       boolean        NOT NULL DEFAULT true,
+  is_paused       boolean        NOT NULL DEFAULT false,
+  CONSTRAINT ux_addon_options_tenant_id UNIQUE (tenant_id, id),
+  CONSTRAINT fk_addon_options_group FOREIGN KEY (tenant_id, addon_group_id) REFERENCES addon_groups (tenant_id, id)
+);
+CREATE UNIQUE INDEX ux_addon_options_active_name ON addon_options (addon_group_id, lower(name)) WHERE is_active;
+CREATE INDEX ix_addon_options_group ON addon_options (tenant_id, addon_group_id);
+
+-- Vínculo do grupo com uma categoria OU um prato (item 18)
+CREATE TABLE addon_group_links (
+  id                uuid  PRIMARY KEY,
+  tenant_id         uuid  NOT NULL,
+  addon_group_id    uuid  NOT NULL,
+  dish_category_id  uuid,
+  dish_id           uuid,
+  CONSTRAINT ck_addon_group_links_target CHECK (num_nonnulls(dish_category_id, dish_id) = 1),
+  CONSTRAINT fk_addon_group_links_group FOREIGN KEY (tenant_id, addon_group_id) REFERENCES addon_groups (tenant_id, id),
+  CONSTRAINT fk_addon_group_links_category FOREIGN KEY (tenant_id, dish_category_id)
+    REFERENCES dish_categories (tenant_id, id),
+  CONSTRAINT fk_addon_group_links_dish FOREIGN KEY (tenant_id, dish_id) REFERENCES dishes (tenant_id, id)
+);
+CREATE UNIQUE INDEX ux_addon_group_links_category ON addon_group_links (tenant_id, addon_group_id, dish_category_id)
+  WHERE dish_category_id IS NOT NULL;
+CREATE UNIQUE INDEX ux_addon_group_links_dish ON addon_group_links (tenant_id, addon_group_id, dish_id)
+  WHERE dish_id IS NOT NULL;
+-- Adicionais de um prato = grupos da categoria dele ∪ grupos do próprio prato
+CREATE INDEX ix_addon_group_links_by_category ON addon_group_links (tenant_id, dish_category_id)
+  WHERE dish_category_id IS NOT NULL;
+CREATE INDEX ix_addon_group_links_by_dish ON addon_group_links (tenant_id, dish_id) WHERE dish_id IS NOT NULL;
+
+-- Preço de site do tamanho de marmita (ADR-0057 item 1)
+ALTER TABLE marmita_sizes
+  ADD COLUMN sells_on_site  boolean        NOT NULL DEFAULT false,
+  ADD COLUMN site_price     numeric(12,2)  CHECK (site_price > 0);
+ALTER TABLE marmita_sizes
+  ADD CONSTRAINT ck_marmita_sizes_site_price CHECK (NOT sells_on_site OR site_price IS NOT NULL);
+
+-- Bebida do restaurante: is_visible_on_page é o "vende no site", com preço de site (Q-307); adicional sem (Q-308)
+ALTER TABLE products ADD COLUMN site_price numeric(12,2) CHECK (site_price > 0);
+ALTER TABLE products ADD CONSTRAINT ck_products_site_price CHECK (site_price IS NULL OR kind = 'BEVERAGE');
+
+-- Tabela de preço do pedido (ADR-0057 item 7): APP → COUNTER, WEB → SITE
+ALTER TABLE orders
+  ADD COLUMN price_list text NOT NULL DEFAULT 'COUNTER' CHECK (price_list IN ('COUNTER', 'SITE'));
+ALTER TABLE orders ADD CONSTRAINT ck_orders_price_list CHECK (origin = 'WEB' OR price_list = 'COUNTER');
+
+-- Carga inicial (ADR-0057 item 15): nenhuma página muda de preço.
+-- A RLS das três tabelas é FORCE: o FORCE sai só durante cada UPDATE, na mesma transação (§5.1).
+ALTER TABLE marmita_sizes NO FORCE ROW LEVEL SECURITY;
+UPDATE marmita_sizes SET sells_on_site = true, site_price = price WHERE is_active;
+ALTER TABLE marmita_sizes FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE products NO FORCE ROW LEVEL SECURITY;
+UPDATE products SET site_price = default_price
+ WHERE kind = 'BEVERAGE' AND is_visible_on_page AND default_price > 0;
+-- Bebida de 0.00 não tem preço de site (> 0): sai do site até o estabelecimento decidir
+UPDATE products SET is_visible_on_page = false
+ WHERE kind = 'BEVERAGE' AND is_visible_on_page AND site_price IS NULL;
+ALTER TABLE products FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE orders NO FORCE ROW LEVEL SECURITY;
+UPDATE orders SET price_list = 'SITE' WHERE origin = 'WEB';
+ALTER TABLE orders FORCE ROW LEVEL SECURITY;
+
+-- RLS: tabelas de tenant
+DO $$
+DECLARE
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'dish_categories', 'dishes', 'dish_sizes', 'beverage_types', 'beverage_sizes', 'beverage_flavors',
+    'combos', 'combo_components', 'addon_groups', 'addon_options', 'addon_group_links'] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format(
+      'CREATE POLICY tenant_isolation ON %I TO almoseis_app '
+      'USING (tenant_id = app_tenant_id()) WITH CHECK (tenant_id = app_tenant_id())', t);
+    EXECUTE format(
+      'CREATE POLICY platform_access ON %I TO almoseis_platform USING (true) WITH CHECK (true)', t);
+  END LOOP;
+END $$;
+
+-- Grants (tabelas novas). Itens vendáveis são inativados, nunca apagados (ADR-0056 item 26);
+-- componentes de combo e vínculos de grupo não têm valor histórico e são trocados na edição.
+GRANT SELECT ON
+  dish_categories, dishes, dish_sizes, beverage_types, beverage_sizes, beverage_flavors,
+  combos, combo_components, addon_groups, addon_options, addon_group_links
+TO almoseis_app, almoseis_platform;
+GRANT INSERT, UPDATE ON
+  dish_categories, dishes, dish_sizes, beverage_types, beverage_sizes, beverage_flavors,
+  combos, combo_components, addon_groups, addon_options, addon_group_links
+TO almoseis_app;
+GRANT DELETE ON combo_components, addon_group_links TO almoseis_app;
 ```
