@@ -26,12 +26,16 @@ internal sealed class Product : AggregateRoot, ITenantOwned, ISyncTracked
 
     /// Bebidas e adicionais podem ser escondidos da página de pedidos (ADR-0044 item 5). Pratos seguem o cardápio do dia.
     public bool IsVisibleOnPage { get; private set; } = true;
+
+    /// Preço de site da bebida (ADR-0057 item 5, Q-307): o `IsVisibleOnPage` é o "vende no site" dela. Só `BEVERAGE`
+    /// (`ck_products_site_price`); adicional usa o mesmo preço no site (Q-308).
+    public Money? SitePrice { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
     public static Product Create(
         Guid id, Guid tenantId, ProductKind kind, string name, string? description, string? category,
-        Money? defaultPrice, bool? requiresPreparation, DateTimeOffset now)
+        Money? defaultPrice, bool? requiresPreparation, DateTimeOffset now, Money? sitePrice = null)
     {
         var product = new Product
         {
@@ -48,6 +52,7 @@ internal sealed class Product : AggregateRoot, ITenantOwned, ISyncTracked
             UpdatedAt = now,
         };
         product.EnsurePriceMatchesKind();
+        product.ApplySitePrice(sitePrice is null ? default : new Optional<Money?>(sitePrice), creating: true);
         product.Raise(new CatalogChanged(product.Id, "PRODUCT", now));
         return product;
     }
@@ -80,6 +85,7 @@ internal sealed class Product : AggregateRoot, ITenantOwned, ISyncTracked
         IsVisibleOnPage = changes.IsVisibleOnPage.GetValueOr(IsVisibleOnPage);
 
         EnsurePriceMatchesKind();
+        ApplySitePrice(changes.SitePrice, creating: false);
 
         if (!Equals(Snapshot(), before))
         {
@@ -108,8 +114,49 @@ internal sealed class Product : AggregateRoot, ITenantOwned, ISyncTracked
         }
     }
 
+    /// A API desta versão **sempre** grava `site_price` na bebida vendida no site (05 §5.17 0009, janela do deploy).
+    /// Sem preço de site informado, vem o de balcão (ADR-0057 item 2). Bebida de `0.00` não tem preço de site (> 0):
+    /// no cadastro ela nasce fora do site, como na correção da migration; na edição, ligar o site exige o preço.
+    private void ApplySitePrice(Optional<Money?> sitePrice, bool creating)
+    {
+        if (Kind != ProductKind.Beverage)
+        {
+            if (sitePrice is { HasValue: true, Value: not null })
+            {
+                throw BusinessException.Validation("sitePrice", "Só bebidas têm preço de site; adicionais usam o mesmo preço.");
+            }
+
+            SitePrice = null;
+            return;
+        }
+
+        SitePrice = sitePrice.GetValueOr(SitePrice);
+        if (!IsVisibleOnPage || SitePrice is not null)
+        {
+            return;
+        }
+
+        if (sitePrice.HasValue && !creating)
+        {
+            throw BusinessException.Validation("sitePrice", "Informe o preço de site da bebida vendida no site.");
+        }
+
+        if (DefaultPrice is { } price && price > Money.Zero)
+        {
+            SitePrice = price;
+        }
+        else if (creating)
+        {
+            IsVisibleOnPage = false;
+        }
+        else
+        {
+            throw BusinessException.Validation("sitePrice", "Informe o preço de site da bebida vendida no site.");
+        }
+    }
+
     private object Snapshot() =>
-        (Kind, Name, Description, Category, DefaultPrice, RequiresPreparation, ImageStorageKey, IsActive, IsAvailable, IsVisibleOnPage);
+        (Kind, Name, Description, Category, DefaultPrice, RequiresPreparation, ImageStorageKey, IsActive, IsAvailable, IsVisibleOnPage, SitePrice);
 
     private static string? Clean(string? text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
 }
@@ -125,7 +172,8 @@ internal sealed record ProductChanges(
     Optional<string?> ImageStorageKey,
     Optional<bool> IsActive,
     Optional<bool> IsAvailable,
-    Optional<bool> IsVisibleOnPage);
+    Optional<bool> IsVisibleOnPage,
+    Optional<Money?> SitePrice = default);
 
 /// Tamanho de marmita (P/M/G) com o preço da marmita (ADR-0020).
 internal sealed class MarmitaSize : AggregateRoot, ITenantOwned, ISyncTracked
@@ -141,22 +189,35 @@ internal sealed class MarmitaSize : AggregateRoot, ITenantOwned, ISyncTracked
     public int SortOrder { get; private set; }
     public bool IsActive { get; private set; } = true;
 
-    public static MarmitaSize Create(Guid id, Guid tenantId, string name, Money price, int sortOrder, DateTimeOffset now)
+    /// "Vende no site" e preço de site do tamanho (ADR-0057 item 1). Desligada, o tamanho não aparece na página.
+    public bool SellsOnSite { get; private set; }
+    public Money? SitePrice { get; private set; }
+
+    public static MarmitaSize Create(
+        Guid id, Guid tenantId, string name, Money price, int sortOrder, DateTimeOffset now, bool sellsOnSite = false, Money? sitePrice = null)
     {
-        var size = new MarmitaSize { Id = id, TenantId = tenantId, Name = name.Trim(), Price = price, SortOrder = sortOrder };
+        var size = new MarmitaSize
+        {
+            Id = id, TenantId = tenantId, Name = name.Trim(), Price = price, SortOrder = sortOrder,
+            SellsOnSite = sellsOnSite, SitePrice = SitePricing.Resolve(sellsOnSite, sitePrice, price),
+        };
         size.Raise(new CatalogChanged(id, "MARMITA_SIZE", now));
         return size;
     }
 
-    public void Apply(Optional<string> name, Optional<Money> price, Optional<int> sortOrder, Optional<bool> isActive, DateTimeOffset now)
+    public void Apply(
+        Optional<string> name, Optional<Money> price, Optional<int> sortOrder, Optional<bool> isActive, DateTimeOffset now,
+        Optional<bool> sellsOnSite = default, Optional<Money?> sitePrice = default)
     {
-        var before = (Name, Price, SortOrder, IsActive);
+        var before = (Name, Price, SortOrder, IsActive, SellsOnSite, SitePrice);
         Name = name.HasValue ? name.Value.Trim() : Name;
         Price = price.GetValueOr(Price);
         SortOrder = sortOrder.GetValueOr(SortOrder);
         IsActive = isActive.GetValueOr(IsActive);
+        SellsOnSite = sellsOnSite.GetValueOr(SellsOnSite);
+        SitePrice = SitePricing.Resolve(SellsOnSite, sitePrice.GetValueOr(SitePrice), Price);
 
-        if ((Name, Price, SortOrder, IsActive) != before)
+        if ((Name, Price, SortOrder, IsActive, SellsOnSite, SitePrice) != before)
         {
             Touch(new CatalogChanged(Id, "MARMITA_SIZE", now));
         }

@@ -31,6 +31,8 @@ internal sealed class CatalogModelConfiguration : IModuleModelConfiguration
             b.HasKey(x => x.Id);
             b.Property(x => x.Name).HasMaxLength(20);
         });
+
+        FixedMenuModel.Configure(modelBuilder);
     }
 }
 
@@ -49,7 +51,7 @@ internal sealed class CatalogReader(AppDbContext db, IObjectStorage storage) : I
             p => p.Id,
             p => new CatalogProduct(
                 p.Id, p.Kind, p.Name, p.Description, p.DefaultPrice, p.RequiresPreparation,
-                storage.PublicUrl(p.ImageStorageKey), p.IsActive, p.IsAvailable, p.IsVisibleOnPage));
+                storage.PublicUrl(p.ImageStorageKey), p.IsActive, p.IsAvailable, p.IsVisibleOnPage, p.SitePrice));
     }
 
     public async Task<IReadOnlyList<CatalogProduct>> ListActiveAsync(IReadOnlyCollection<ProductKind> kinds, CancellationToken cancellationToken)
@@ -60,7 +62,7 @@ internal sealed class CatalogReader(AppDbContext db, IObjectStorage storage) : I
             .ToListAsync(cancellationToken);
         return rows.Select(p => new CatalogProduct(
                 p.Id, p.Kind, p.Name, p.Description, p.DefaultPrice, p.RequiresPreparation,
-                storage.PublicUrl(p.ImageStorageKey), p.IsActive, p.IsAvailable, p.IsVisibleOnPage))
+                storage.PublicUrl(p.ImageStorageKey), p.IsActive, p.IsAvailable, p.IsVisibleOnPage, p.SitePrice))
             .ToList();
     }
 
@@ -68,13 +70,13 @@ internal sealed class CatalogReader(AppDbContext db, IObjectStorage storage) : I
         await db.Set<MarmitaSize>().AsNoTracking()
             .Where(s => s.IsActive)
             .OrderBy(s => s.SortOrder).ThenBy(s => s.Name)
-            .Select(s => new CatalogMarmitaSize(s.Id, s.Name, s.Price, s.IsActive, s.SortOrder))
+            .Select(s => new CatalogMarmitaSize(s.Id, s.Name, s.Price, s.IsActive, s.SortOrder, s.SellsOnSite, s.SitePrice))
             .ToListAsync(cancellationToken);
 
     public async Task<CatalogMarmitaSize?> GetMarmitaSizeAsync(Guid marmitaSizeId, CancellationToken cancellationToken) =>
         await db.Set<MarmitaSize>().AsNoTracking()
             .Where(s => s.Id == marmitaSizeId)
-            .Select(s => new CatalogMarmitaSize(s.Id, s.Name, s.Price, s.IsActive, s.SortOrder))
+            .Select(s => new CatalogMarmitaSize(s.Id, s.Name, s.Price, s.IsActive, s.SortOrder, s.SellsOnSite, s.SitePrice))
             .SingleOrDefaultAsync(cancellationToken);
 }
 

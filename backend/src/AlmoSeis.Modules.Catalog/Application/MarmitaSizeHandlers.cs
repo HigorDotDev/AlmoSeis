@@ -22,7 +22,8 @@ internal sealed class CreateMarmitaSizeHandler(
     {
         await MarmitaSizeRules.EnsureNameAvailableAsync(db, command.Name, exceptId: null, cancellationToken);
 
-        var size = MarmitaSize.Create(ids.New(), tenant.TenantId!.Value, command.Name, command.Price, command.SortOrder, time.GetUtcNow());
+        var size = MarmitaSize.Create(
+            ids.New(), tenant.TenantId!.Value, command.Name, command.Price, command.SortOrder, time.GetUtcNow(), command.SellsOnSite, command.SitePrice);
         db.Add(size);
 
         audit.Add("MarmitaSizeCreated", size.SyncEntityType, size.Id, after: MarmitaSizeRules.AuditView(size));
@@ -51,7 +52,7 @@ internal sealed class UpdateMarmitaSizeHandler(
         }
 
         var before = MarmitaSizeRules.AuditView(size);
-        size.Apply(changes.Name, changes.Price, changes.SortOrder, changes.IsActive, time.GetUtcNow());
+        size.Apply(changes.Name, changes.Price, changes.SortOrder, changes.IsActive, time.GetUtcNow(), changes.SellsOnSite, changes.SitePrice);
 
         if (db.Entry(size).State == EntityState.Modified)
         {
@@ -107,7 +108,8 @@ internal static class MarmitaSizeRules
         }
     }
 
-    public static MarmitaSizeDto ToDto(MarmitaSize s) => new(s.Id, s.Version, s.Name, s.Price, s.SortOrder, s.IsActive);
+    public static MarmitaSizeDto ToDto(MarmitaSize s) => new(s.Id, s.Version, s.Name, s.Price, s.SortOrder, s.IsActive, s.SellsOnSite, s.SitePrice);
 
-    public static object AuditView(MarmitaSize s) => new { s.Name, price = s.Price.ToString(), s.SortOrder, s.IsActive };
+    public static object AuditView(MarmitaSize s) =>
+        new { s.Name, price = s.Price.ToString(), s.SortOrder, s.IsActive, s.SellsOnSite, sitePrice = s.SitePrice?.ToString() };
 }

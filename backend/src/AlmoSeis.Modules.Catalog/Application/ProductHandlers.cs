@@ -25,7 +25,7 @@ internal sealed class CreateProductHandler(
 
         var product = Product.Create(
             ids.New(), tenant.TenantId!.Value, command.Kind, command.Name, command.Description, command.Category,
-            command.DefaultPrice, command.RequiresPreparation, time.GetUtcNow());
+            command.DefaultPrice, command.RequiresPreparation, time.GetUtcNow(), command.SitePrice);
         db.Add(product);
 
         audit.Add("ProductCreated", product.SyncEntityType, product.Id, after: ProductRules.AuditView(product));
@@ -81,7 +81,8 @@ internal sealed class UpdateProductHandler(
         product.Apply(
             new ProductChanges(
                 changes.Kind, changes.Name, changes.Description, changes.Category, changes.DefaultPrice,
-                changes.RequiresPreparation, changes.ImageStorageKey, changes.IsActive, changes.IsAvailable, changes.IsVisibleOnPage),
+                changes.RequiresPreparation, changes.ImageStorageKey, changes.IsActive, changes.IsAvailable, changes.IsVisibleOnPage,
+                changes.SitePrice),
             kindLocked,
             time.GetUtcNow());
 
@@ -158,6 +159,7 @@ internal static class ProductRules
         p.IsActive,
         p.IsAvailable,
         p.IsVisibleOnPage,
+        sitePrice = p.SitePrice?.ToString(),
     };
 }
 
@@ -165,7 +167,7 @@ internal static class ProductMapping
 {
     public static ProductDto ToDto(Product p, IObjectStorage storage) => new(
         p.Id, p.Version, p.Kind, p.Name, p.Description, p.Category, p.DefaultPrice, p.RequiresPreparation,
-        storage.PublicUrl(p.ImageStorageKey), p.IsActive, p.IsAvailable, p.IsVisibleOnPage, p.CreatedAt, p.UpdatedAt);
+        storage.PublicUrl(p.ImageStorageKey), p.IsActive, p.IsAvailable, p.IsVisibleOnPage, p.SitePrice, p.CreatedAt, p.UpdatedAt);
 }
 
 /// POST /products/{id}/image-upload: URL pré-assinada de PUT direto no R2 (06 §6.5). Nada é gravado aqui: o app envia

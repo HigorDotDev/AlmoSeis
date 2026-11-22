@@ -3,6 +3,7 @@ using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Tenancy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Shouldly;
 
@@ -342,7 +343,11 @@ public sealed class SchemaTests(PostgresFixture db)
     {
         var options = new DbContextOptionsBuilder<AppDbContext>();
         options.UseAlmoSeisNpgsql(db.SuperuserConnectionString);
-        await using var context = new AppDbContext(options.Options, new TenantContext(), Array.Empty<IModuleModelConfiguration>());
+        // As configurações de todos os módulos, como a API registra (inclui o cardápio fixo da 0009).
+        using var api = new ApiFactory(db);
+        var modules = api.Services.GetServices<IModuleModelConfiguration>().ToList();
+        modules.ShouldNotBeEmpty();
+        await using var context = new AppDbContext(options.Options, new TenantContext(), modules);
 
         foreach (var entityType in context.Model.GetEntityTypes())
         {

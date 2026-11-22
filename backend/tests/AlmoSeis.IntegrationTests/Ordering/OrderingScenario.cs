@@ -70,7 +70,7 @@ public sealed class OrderingScenario
         Coca = await ProductAsync("BEVERAGE", "Coca-Cola 350ml", "6.00");
         Ovo = await ProductAsync("ADDON", "Ovo frito", "2.00");
 
-        var size = await (await Client.PostAsJsonAsync("/api/v1/marmita-sizes", new { name = "M", price = "20.00", sortOrder = 2 }, Ct))
+        var size = await (await Client.PostAsJsonAsync("/api/v1/marmita-sizes", new { name = "M", price = "20.00", sortOrder = 2, sellsOnSite = true }, Ct))
             .ExpectAsync(HttpStatusCode.Created, Api);
         SizeM = Guid.Parse(size.GetProperty("id").GetString()!);
 

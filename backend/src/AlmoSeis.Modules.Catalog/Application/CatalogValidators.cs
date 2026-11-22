@@ -14,6 +14,7 @@ internal sealed class CreateProductCommandValidator : AbstractValidator<CreatePr
         RuleFor(x => x.Description).MaximumLength(300);
         RuleFor(x => x.Category).MaximumLength(40);
         RuleFor(x => x.DefaultPrice).Must(p => p is null || p.Value >= Money.Zero).WithMessage("O preço não pode ser negativo.");
+        RuleFor(x => x.SitePrice).Must(p => p is null || p.Value > Money.Zero).WithMessage("O preço de site deve ser maior que zero.");
     }
 }
 
@@ -29,6 +30,8 @@ internal sealed class UpdateProductRequestValidator : AbstractValidator<UpdatePr
         RuleFor(x => x.DefaultPrice.Value).Must(p => p is null || p.Value >= Money.Zero).WithMessage("O preço não pode ser negativo.")
             .When(x => x.DefaultPrice.HasValue).OverridePropertyName("defaultPrice");
         RuleFor(x => x.ImageStorageKey.Value).MaximumLength(200).When(x => x.ImageStorageKey.HasValue).OverridePropertyName("imageStorageKey");
+        RuleFor(x => x.SitePrice.Value).Must(p => p is null || p.Value > Money.Zero).WithMessage("O preço de site deve ser maior que zero.")
+            .When(x => x.SitePrice.HasValue).OverridePropertyName("sitePrice");
     }
 }
 
@@ -39,6 +42,7 @@ internal sealed class CreateMarmitaSizeCommandValidator : AbstractValidator<Crea
         RuleFor(x => x.Name).NotEmpty().WithMessage("Informe o nome.").MaximumLength(20);
         RuleFor(x => x.Price).Must(p => p > Money.Zero).WithMessage("O preço deve ser maior que zero.");
         RuleFor(x => x.SortOrder).GreaterThanOrEqualTo(0);
+        RuleFor(x => x.SitePrice).Must(p => p is null || p.Value > Money.Zero).WithMessage("O preço de site deve ser maior que zero.");
     }
 }
 
@@ -51,5 +55,7 @@ internal sealed class UpdateMarmitaSizeRequestValidator : AbstractValidator<Upda
         RuleFor(x => x.Price.Value).Must(p => p > Money.Zero).WithMessage("O preço deve ser maior que zero.")
             .When(x => x.Price.HasValue).OverridePropertyName("price");
         RuleFor(x => x.SortOrder.Value).GreaterThanOrEqualTo(0).When(x => x.SortOrder.HasValue).OverridePropertyName("sortOrder");
+        RuleFor(x => x.SitePrice.Value).Must(p => p is null || p.Value > Money.Zero).WithMessage("O preço de site deve ser maior que zero.")
+            .When(x => x.SitePrice.HasValue).OverridePropertyName("sitePrice");
     }
 }

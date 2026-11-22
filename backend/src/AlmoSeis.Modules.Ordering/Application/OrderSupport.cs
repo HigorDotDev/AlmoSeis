@@ -14,11 +14,12 @@ using Microsoft.EntityFrameworkCore;
 namespace AlmoSeis.Modules.Ordering.Application;
 
 /// Transforma os itens do corpo em `NewItem` com preço, nome e composição do catálogo e do cardápio do dia
-/// (ADR-0020). Nada de preço ou nome vem do cliente.
+/// (ADR-0020). Nada de preço ou nome vem do cliente. O preço sai da tabela do pedido (ADR-0057): `SITE` usa o preço de
+/// site de quem vende no site (tamanho de marmita, bebida) e o de balcão no resto (Q-309); adicional, o mesmo (Q-308).
 internal sealed class OrderItemResolver(ICatalogReader catalog, IMenuReader menus)
 {
     public async Task<IReadOnlyList<NewItem>> ResolveAsync(
-        IReadOnlyList<OrderItemInput> inputs, DateOnly businessDate, CancellationToken cancellationToken)
+        IReadOnlyList<OrderItemInput> inputs, DateOnly businessDate, PriceList priceList, CancellationToken cancellationToken)
     {
         var productIds = inputs
             .SelectMany(i => (i.MainDishProductIds ?? []).Concat(i.SideDishProductIds ?? []).Concat((i.Addons ?? []).Select(a => a.ProductId)))
@@ -39,7 +40,7 @@ internal sealed class OrderItemResolver(ICatalogReader catalog, IMenuReader menu
         {
             var input = inputs[i];
             var field = $"items[{i}]";
-            var addons = (input.Addons ?? []).Select((a, j) => Simple(OrderItemKind.Addon, null, a.ProductId, a.Quantity, a.Notes, products, $"{field}.addons[{j}]")).ToList();
+            var addons = (input.Addons ?? []).Select((a, j) => Simple(OrderItemKind.Addon, null, a.ProductId, a.Quantity, a.Notes, products, $"{field}.addons[{j}]", priceList)).ToList();
             if (addons.Count > 0 && input.ItemKind is not (OrderItemKind.Marmita or OrderItemKind.Pf))
             {
                 throw BusinessException.Validation($"{field}.addons", "Só marmita e PF têm adicionais.");
@@ -47,9 +48,9 @@ internal sealed class OrderItemResolver(ICatalogReader catalog, IMenuReader menu
 
             result.Add(input.ItemKind switch
             {
-                OrderItemKind.Marmita => await MarmitaAsync(input, marmitaMenu!, products, addons, field, cancellationToken),
+                OrderItemKind.Marmita => await MarmitaAsync(input, marmitaMenu!, products, addons, field, priceList, cancellationToken),
                 OrderItemKind.Pf => Pf(input, pfMenu!, products, addons, field),
-                _ => Simple(input.ItemKind, input.ParentOrderItemId, input.ProductId, input.Quantity, input.Notes, products, field),
+                _ => Simple(input.ItemKind, input.ParentOrderItemId, input.ProductId, input.Quantity, input.Notes, products, field, priceList),
             });
         }
 
@@ -58,7 +59,7 @@ internal sealed class OrderItemResolver(ICatalogReader catalog, IMenuReader menu
 
     private async Task<NewItem> MarmitaAsync(
         OrderItemInput input, DailyMenu menu, IReadOnlyDictionary<Guid, CatalogProduct> products, IReadOnlyList<NewItem> addons,
-        string field, CancellationToken cancellationToken)
+        string field, PriceList priceList, CancellationToken cancellationToken)
     {
         var size = input.MarmitaSizeId is { } sizeId ? await catalog.GetMarmitaSizeAsync(sizeId, cancellationToken) : null;
         if (size is not { IsActive: true })
@@ -83,7 +84,7 @@ internal sealed class OrderItemResolver(ICatalogReader catalog, IMenuReader menu
         }
 
         return new NewItem(
-            OrderItemKind.Marmita, null, null, size.Id, input.Quantity, size.Price, Truncate($"Marmita {size.Name}", 80), Truncate(composition, 500),
+            OrderItemKind.Marmita, null, null, size.Id, input.Quantity, size.PriceFor(priceList), Truncate($"Marmita {size.Name}", 80), Truncate(composition, 500),
             RequiresPreparation: true, input.Notes, components, addons);
 
         NewComponent Component(Guid productId, ComponentRole role, MenuSection section)
@@ -110,7 +111,8 @@ internal sealed class OrderItemResolver(ICatalogReader catalog, IMenuReader menu
 
     /// Bebida ou adicional: preço do produto, em qualquer modalidade (RN-002.5).
     private static NewItem Simple(
-        OrderItemKind kind, Guid? parentId, Guid? productId, int quantity, string? notes, IReadOnlyDictionary<Guid, CatalogProduct> products, string field)
+        OrderItemKind kind, Guid? parentId, Guid? productId, int quantity, string? notes, IReadOnlyDictionary<Guid, CatalogProduct> products, string field,
+        PriceList priceList)
     {
         var expected = kind == OrderItemKind.Beverage ? ProductKind.Beverage : ProductKind.Addon;
         if (productId is not { } id || !products.TryGetValue(id, out var product) || product.Kind != expected)
@@ -119,7 +121,7 @@ internal sealed class OrderItemResolver(ICatalogReader catalog, IMenuReader menu
         }
 
         EnsureSellable(product);
-        return new NewItem(kind, parentId, id, null, quantity, product.DefaultPrice!.Value, product.Name, null, product.RequiresPreparation, notes, [], []);
+        return new NewItem(kind, parentId, id, null, quantity, product.PriceFor(priceList)!.Value, product.Name, null, product.RequiresPreparation, notes, [], []);
     }
 
     private static CatalogProduct EnsureOnMenu(DailyMenu menu, Guid productId, MenuSection section, IReadOnlyDictionary<Guid, CatalogProduct> products)
@@ -328,7 +330,7 @@ internal sealed class OrderDtoBuilder(IEmployeeDirectory employees, IOrderPaymen
             : null;
 
         return new OrderDto(
-            order.Id, order.Version, order.OrderNumber, order.BusinessDayId, order.BusinessDate, order.OrderType, order.Origin,
+            order.Id, order.Version, order.OrderNumber, order.BusinessDayId, order.BusinessDate, order.OrderType, order.Origin, order.PriceList,
             order.FulfillmentType, customer, order.DeliveryAddress, order.TableLabel, order.TabNumber, order.Notes,
             order.ExpectedPaymentMethod, order.ChangeFor, order.RiskFlag,
             order.DeliveryFee, order.DeliveryFeeSource, order.DeliveryDistanceKm, order.ItemsTotal, order.WeighingsTotal, order.TotalAmount, order.PaidAmount, order.Balance, order.IsPaid,

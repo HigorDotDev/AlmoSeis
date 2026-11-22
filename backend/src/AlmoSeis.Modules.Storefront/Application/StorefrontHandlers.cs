@@ -143,7 +143,8 @@ internal sealed class UpdateStorefrontHandler(
             await slugs.ChangeAsync(tenantId, current, slug, now, cancellationToken);
         }
 
-        var hasActiveSize = !request.IsPageActive || (await catalog.ListActiveMarmitaSizesAsync(cancellationToken)).Count > 0;
+        // A página precisa de um tamanho vendido no site (ADR-0057 item 3); sem ele, não haveria o que vender.
+        var hasActiveSize = !request.IsPageActive || (await catalog.ListActiveMarmitaSizesAsync(cancellationToken)).Any(s => s.SellsOnSite);
         var delivery = request.Delivery;
         var changed = settings.Update(
             new StorefrontChanges(

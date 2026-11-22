@@ -93,6 +93,9 @@ public static class ErrorCodes
     // ---------- Comportamentos e módulos (EP-003 fatia 1, ADR-0054) ----------
     public static readonly ErrorCode ModuleNotEnabled = new("ModuleNotEnabled", 403, "Este recurso não está habilitado no estabelecimento.");
 
+    // ---------- Cardápio fixo (EP-003 fatia 2, ADR-0056 item 26) ----------
+    public static readonly ErrorCode UsedInActiveCombos = new("UsedInActiveCombos", 409, "O item é usado em combos ativos.");
+
     public static IReadOnlyList<ErrorCode> All { get; } =
     [
         MalformedRequest, Unauthenticated, InvalidCredentials, InvalidRefreshToken, InvalidDeviceSecret,
@@ -106,6 +109,6 @@ public static class ErrorCodes
         PaymentMethodDisabled, ProductUnavailable, KiloPriceNotConfigured, JustificationRequired, PinLocked,
         AppVersionUnsupported, IdempotencyKeyRequired, IfMatchRequired, TooManyRequests,
         StoreNotFound, StoreUnavailable, CartChanged, DeliveryUnavailable, CaptchaFailed, TooManyPendingOrders, TrackingExpired,
-        OutOfDeliveryArea, DeliveryQuoteChanged, PushTokenInUse, ModuleNotEnabled,
+        OutOfDeliveryArea, DeliveryQuoteChanged, PushTokenInUse, ModuleNotEnabled, UsedInActiveCombos,
     ];
 }

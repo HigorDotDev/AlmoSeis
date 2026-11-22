@@ -24,12 +24,12 @@ public sealed class RolePermissionsTests
     [Fact]
     public void Attendant_matrix() =>
         RolePermissions.For(Role.Attendant).ShouldBe(
-            ["orders.view", "orders.create", "orders.edit", "customers.manage", "orders.accept", "orders.fulfillment.update"], ignoreOrder: true);
+            ["orders.view", "orders.create", "orders.edit", "customers.manage", "orders.accept", "orders.fulfillment.update", "catalog.availability"], ignoreOrder: true);
 
     [Fact]
     public void Kitchen_matrix() =>
         RolePermissions.For(Role.Kitchen).ShouldBe(
-            ["orders.view", "production.view", "production.update", "orders.fulfillment.update"], ignoreOrder: true);
+            ["orders.view", "production.view", "production.update", "orders.fulfillment.update", "catalog.availability"], ignoreOrder: true);
 
     [Fact]
     public void Cashier_matrix() =>
@@ -47,6 +47,18 @@ public sealed class RolePermissionsTests
             var permissions = RolePermissions.For(role);
             permissions.Contains(Permissions.Orders.Accept).ShouldBe(role != Role.Kitchen, role.ToString());
             permissions.Contains(Permissions.Orders.UpdateFulfillment).ShouldBeTrue(role.ToString());
+        }
+    }
+
+    /// EP-003 Q-306: pausar e reativar o cardápio fixo para quem está no balcão e na cozinha; editar continua com catalog.manage.
+    [Fact]
+    public void Catalog_availability_follows_q306()
+    {
+        foreach (var role in Enum.GetValues<Role>())
+        {
+            var permissions = RolePermissions.For(role);
+            permissions.Contains(Permissions.CatalogAvailability).ShouldBe(role != Role.Cashier, role.ToString());
+            permissions.Contains(Permissions.CatalogManage).ShouldBe(role is Role.Owner or Role.Manager, role.ToString());
         }
     }
 

@@ -26,10 +26,12 @@ public sealed record ProductDto(
     bool IsActive,
     bool IsAvailable,
     bool IsVisibleOnPage,
+    Money? SitePrice,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt) : IVersionedDto;
 
-public sealed record MarmitaSizeDto(Guid Id, int Version, string Name, Money Price, int SortOrder, bool IsActive) : IVersionedDto;
+public sealed record MarmitaSizeDto(
+    Guid Id, int Version, string Name, Money Price, int SortOrder, bool IsActive, bool SellsOnSite, Money? SitePrice) : IVersionedDto;
 
 // ---------- Comandos e consultas ----------
 
@@ -39,7 +41,8 @@ public sealed record CreateProductCommand(
     string? Description,
     string? Category,
     Money? DefaultPrice,
-    bool? RequiresPreparation);
+    bool? RequiresPreparation,
+    Money? SitePrice = null);
 
 /// Corpo do PATCH /products/{id}: só os campos presentes mudam.
 public sealed record UpdateProductRequest(
@@ -52,7 +55,8 @@ public sealed record UpdateProductRequest(
     Optional<string?> ImageStorageKey,
     Optional<bool> IsActive,
     Optional<bool> IsAvailable,
-    Optional<bool> IsVisibleOnPage = default);
+    Optional<bool> IsVisibleOnPage = default,
+    Optional<Money?> SitePrice = default);
 
 public sealed record UpdateProductCommand(Guid ProductId, UpdateProductRequest Changes);
 
@@ -67,9 +71,15 @@ public sealed record GetProductQuery(Guid ProductId);
 
 public sealed record ListProductsQuery(ProductKind? Kind, bool IncludeInactive);
 
-public sealed record CreateMarmitaSizeCommand(string Name, Money Price, int SortOrder);
+public sealed record CreateMarmitaSizeCommand(string Name, Money Price, int SortOrder, bool SellsOnSite = false, Money? SitePrice = null);
 
-public sealed record UpdateMarmitaSizeRequest(Optional<string> Name, Optional<Money> Price, Optional<int> SortOrder, Optional<bool> IsActive);
+public sealed record UpdateMarmitaSizeRequest(
+    Optional<string> Name,
+    Optional<Money> Price,
+    Optional<int> SortOrder,
+    Optional<bool> IsActive,
+    Optional<bool> SellsOnSite = default,
+    Optional<Money?> SitePrice = default);
 
 public sealed record UpdateMarmitaSizeCommand(Guid MarmitaSizeId, UpdateMarmitaSizeRequest Changes);
 
@@ -87,9 +97,21 @@ public sealed record CatalogProduct(
     string? ImageUrl,
     bool IsActive,
     bool IsAvailable,
-    bool IsVisibleOnPage = true);
+    bool IsVisibleOnPage = true,
+    Money? SitePrice = null)
+{
+    /// Preço da tabela do pedido (ADR-0057 itens 5 a 8): bebida vendida no site (`IsVisibleOnPage`) com preço de site
+    /// num pedido `SITE` → o de site; o resto, o de balcão. Adicional: o mesmo preço (Q-308). Bebida visível ainda sem
+    /// preço de site (gravada pela API anterior na janela do deploy da 0009) → o de balcão, como a página mostra.
+    public Money? PriceFor(PriceList priceList) =>
+        priceList == PriceList.Site && Kind == ProductKind.Beverage && IsVisibleOnPage && SitePrice is { } site ? site : DefaultPrice;
+}
 
-public sealed record CatalogMarmitaSize(Guid Id, string Name, Money Price, bool IsActive, int SortOrder = 0);
+public sealed record CatalogMarmitaSize(Guid Id, string Name, Money Price, bool IsActive, int SortOrder = 0, bool SellsOnSite = false, Money? SitePrice = null)
+{
+    /// Pedido `SITE` → preço de site quando o tamanho vende no site; senão o de balcão (ADR-0057 itens 6 e 8, Q-309).
+    public Money PriceFor(PriceList priceList) => priceList == PriceList.Site && SellsOnSite && SitePrice is { } site ? site : Price;
+}
 
 /// Leitura do catálogo por outros módulos (Menu, Ordering), sempre no tenant corrente.
 public interface ICatalogReader

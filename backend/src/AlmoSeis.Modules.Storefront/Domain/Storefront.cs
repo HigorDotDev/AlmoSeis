@@ -55,7 +55,7 @@ internal sealed class StorefrontSettings : AggregateRoot, ITenantOwned
     };
 
     /// PUT /storefront. `slugChanged` sobe a versão mesmo sem outra mudança (o slug mora em `store_slugs`).
-    /// `hasActiveMarmitaSize`: ativar a página exige pelo menos um tamanho ativo (ADR-0044 item 11).
+    /// `hasActiveMarmitaSize`: ativar a página exige pelo menos um tamanho ativo que vende no site (ADR-0044 item 11, ADR-0057 item 3).
     public bool Update(StorefrontChanges changes, bool slugChanged, bool hasActiveMarmitaSize, DateTimeOffset now)
     {
         var before = Snapshot();
@@ -107,7 +107,7 @@ internal sealed class StorefrontSettings : AggregateRoot, ITenantOwned
 
             if (!hasActiveMarmitaSize)
             {
-                throw BusinessException.Validation("isPageActive", "Para ativar a página, cadastre pelo menos um tamanho de marmita ativo.");
+                throw BusinessException.Validation("isPageActive", "Para ativar a página, cadastre pelo menos um tamanho de marmita ativo que vende no site.");
             }
         }
 

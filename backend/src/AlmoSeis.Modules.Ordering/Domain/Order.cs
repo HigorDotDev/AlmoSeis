@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AlmoSeis.Modules.Ordering.Contracts;
+using AlmoSeis.Modules.Catalog.Contracts;
 using AlmoSeis.SharedKernel.Application;
 using AlmoSeis.SharedKernel.Domain;
 using AlmoSeis.SharedKernel.Errors;
@@ -27,6 +28,10 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     public int? OrderNumber { get; private set; }
     public OrderType OrderType { get; private set; }
     public OrderOrigin Origin { get; private set; }
+
+    /// Tabela de preço (ADR-0057 item 7): `APP` → `COUNTER`, `WEB` → `SITE`. Imutável. A API desta versão sempre grava
+    /// `SITE` no pedido da página (05 §5.17 0009, janela do deploy).
+    public PriceList PriceList { get; private set; }
     public FulfillmentType FulfillmentType { get; private set; }
     public Guid? CustomerId { get; private set; }
     public string? CustomerName { get; private set; }
@@ -145,6 +150,7 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
             OrderNumber = orderNumber,
             OrderType = data.OrderType,
             Origin = OrderOrigin.App,
+            PriceList = PriceList.Counter,
             FulfillmentType = data.FulfillmentType,
             CustomerId = data.CustomerId,
             CustomerName = data.CustomerName,
@@ -212,6 +218,7 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
             OrderNumber = null,
             OrderType = data.OrderType,
             Origin = OrderOrigin.Web,
+            PriceList = PriceList.Site,
             FulfillmentType = data.FulfillmentType,
             CustomerId = null,
             CustomerName = data.CustomerName,

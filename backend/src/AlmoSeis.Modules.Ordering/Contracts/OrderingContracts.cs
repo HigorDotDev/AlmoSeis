@@ -1,3 +1,4 @@
+using AlmoSeis.Modules.Catalog.Contracts;
 using AlmoSeis.SharedKernel.Application;
 using AlmoSeis.SharedKernel.Domain;
 
@@ -176,6 +177,7 @@ public sealed record OrderDto(
     DateOnly BusinessDate,
     OrderType OrderType,
     OrderOrigin Origin,
+    PriceList PriceList,
     FulfillmentType FulfillmentType,
     OrderCustomerDto? Customer,
     DeliveryAddressDto? DeliveryAddress,

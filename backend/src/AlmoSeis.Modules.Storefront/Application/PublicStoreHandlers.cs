@@ -63,8 +63,9 @@ internal sealed class StorefrontGate(
         menus.BuildAsync(businessDate, cancellationToken);
 }
 
-/// Cardápio da página (ADR-0044 item 5, RF-202): o `DAILY` de `MARMITA` da data do expediente aberto, tamanhos ativos,
-/// adicionais e bebidas ativos e visíveis na página. Indisponíveis aparecem desabilitados. Sem cardápio do dia → nulo.
+/// Cardápio da página (ADR-0044 item 5, RF-202): o `DAILY` de `MARMITA` da data do expediente aberto, tamanhos ativos
+/// que vendem no site, adicionais e bebidas ativos e visíveis na página. Indisponíveis aparecem desabilitados. Sem
+/// cardápio do dia → nulo. Preços da tabela `SITE` (ADR-0057): o de site do tamanho e da bebida; adicional, o mesmo (Q-308).
 internal sealed class PublicMenuBuilder(IMenuReader menus, ICatalogReader catalog)
 {
     public async Task<PublicMenuDto?> BuildAsync(DateOnly businessDate, CancellationToken cancellationToken)
@@ -87,11 +88,11 @@ internal sealed class PublicMenuBuilder(IMenuReader menus, ICatalogReader catalo
 
         List<PublicPricedProductDto> Priced(ProductKind kind) => extras
             .Where(p => p.Kind == kind && p.IsVisibleOnPage && p.DefaultPrice is not null)
-            .Select(p => new PublicPricedProductDto(p.Id, p.Name, p.Description, p.ImageUrl, p.DefaultPrice!.Value, p.IsAvailable))
+            .Select(p => new PublicPricedProductDto(p.Id, p.Name, p.Description, p.ImageUrl, p.PriceFor(PriceList.Site)!.Value, p.IsAvailable))
             .ToList();
 
         return new PublicMenuDto(
-            sizes.Select(s => new PublicMarmitaSizeDto(s.Id, s.Name, s.Price)).ToList(),
+            sizes.Where(s => s.SellsOnSite).Select(s => new PublicMarmitaSizeDto(s.Id, s.Name, s.PriceFor(PriceList.Site))).ToList(),
             Section(MenuSection.MainDish),
             Section(MenuSection.SideDish),
             Priced(ProductKind.Addon),

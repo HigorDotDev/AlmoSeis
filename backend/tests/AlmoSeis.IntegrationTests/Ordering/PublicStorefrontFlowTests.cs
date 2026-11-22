@@ -709,6 +709,90 @@ public sealed class PublicStorefrontFlowTests(PostgresFixture db) : IDisposable
     private HttpClient Public(bool followRedirects = true) =>
         _api.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions { AllowAutoRedirect = followRedirects });
 
+    // ---------- Preço de site (EP-003 fatia 2, ADR-0057) ----------
+
+    /// Todo pedido do site usa o preço de site; o do app, o de balcão (ADR-0057 itens 6 e 7). Marmita M: balcão 20,00,
+    /// site 19,00 (pode ser menor, não é desconto); Coca: balcão 6,00, site 6,50. Site: 2 × (19,00 + 2,00 do ovo) + 6,50 = 48,50;
+    /// app: 2 × (20,00 + 2,00) + 6,00 = 50,00 + 5,00 de entrega. Item acrescentado no app ao pedido do site: preço de site de quem vende no site, senão o de
+    /// balcão (Q-309).
+    [Fact]
+    public async Task Web_order_uses_site_prices_and_app_order_uses_counter_prices()
+    {
+        var s = await OrderingScenario.CreateAsync(_api, db);
+        var size = (await (await s.Client.GetAsync("/api/v1/marmita-sizes", Ct)).ExpectAsync(HttpStatusCode.OK, _api)).GetProperty("items")[0];
+        size.GetProperty("sellsOnSite").GetBoolean().ShouldBeTrue();
+        size.GetProperty("sitePrice").GetString().ShouldBe("20.00", "ao ligar a chave, vem o preço de balcão");
+        (await (await s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/marmita-sizes/{s.SizeM}", new { sitePrice = "19.00" }, size.Version()))
+            .ExpectAsync(HttpStatusCode.OK, _api)).GetProperty("sitePrice").GetString().ShouldBe("19.00");
+
+        var coca = await (await s.Client.GetAsync($"/api/v1/products/{s.Coca}", Ct)).ExpectAsync(HttpStatusCode.OK, _api);
+        coca.GetProperty("sitePrice").GetString().ShouldBe("6.00", "bebida visível sempre grava o preço de site");
+        await (await s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/products/{s.Coca}", new { sitePrice = "6.50" }, coca.Version()))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+        (await (await s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/products/{s.Ovo}", new { sitePrice = "3.00" }, 1))
+            .ExpectAsync(HttpStatusCode.UnprocessableEntity, _api)).GetProperty("errors").TryGetProperty("sitePrice", out _).ShouldBeTrue();
+
+        // Tamanho que não vende no site não aparece na página.
+        var g = (await (await s.Client.PostAsJsonAsync("/api/v1/marmita-sizes", new { name = "G", price = "25.00", sortOrder = 3 }, Ct))
+            .ExpectAsync(HttpStatusCode.Created, _api)).Id();
+
+        var slug = await ActivateAsync(s);
+        var menu = (await PublicGet(slug)).GetProperty("menu");
+        menu.GetProperty("marmitaSizes").GetArrayLength().ShouldBe(1);
+        menu.GetProperty("marmitaSizes")[0].GetProperty("price").GetString().ShouldBe("19.00");
+        menu.GetProperty("beverages")[0].GetProperty("price").GetString().ShouldBe("6.50");
+        menu.GetProperty("addons")[0].GetProperty("price").GetString().ShouldBe("2.00", "adicional: mesmo preço no site (Q-308)");
+
+        (await (await Public().PostIdempotentAsync($"/api/v1/public/stores/{slug}/orders", Order(s), Guid.NewGuid()))
+            .ExpectAsync(HttpStatusCode.Conflict, _api)).GetProperty("errorCode").GetString().ShouldBe("CartChanged");
+        (await (await Public().PostIdempotentAsync($"/api/v1/public/stores/{slug}/orders", Order(s, expectedTotal: "48.50"), Guid.NewGuid()))
+            .ExpectAsync(HttpStatusCode.Created, _api)).GetProperty("totalAmount").GetString().ShouldBe("48.50");
+
+        var webId = await s.ScalarAsync<Guid>("SELECT id FROM orders WHERE tenant_id = @t AND origin = 'WEB'");
+        var web = await s.GetOrderAsync(webId);
+        web.GetProperty("priceList").GetString().ShouldBe("SITE");
+        web.GetProperty("items")[0].GetProperty("unitPrice").GetString().ShouldBe("19.00");
+
+        var app = await s.CreateOrderAsync(s.MarmitaDelivery());
+        app.GetProperty("priceList").GetString().ShouldBe("COUNTER");
+        app.GetProperty("items")[0].GetProperty("unitPrice").GetString().ShouldBe("20.00");
+        app.GetProperty("totalAmount").GetString().ShouldBe("55.00");
+
+        // Aceito, o pedido do site recebe itens do app: Coca a 6,50 (vende no site) e marmita G a 25,00 (não vende).
+        var accept = new HttpRequestMessage(HttpMethod.Post, $"/api/v1/orders/{webId}/accept") { Content = JsonContent.Create(new { estimatedReadyMinutes = (int?)null }) };
+        accept.Headers.TryAddWithoutValidation("Idempotency-Key", Guid.NewGuid().ToString());
+        accept.Headers.TryAddWithoutValidation("If-Match", $"\"{web.Version()}\"");
+        var accepted = await (await s.Client.SendAsync(accept, Ct)).ExpectAsync(HttpStatusCode.OK, _api);
+        var added = await (await s.Client.SendWithKeyAsync(HttpMethod.Post, $"/api/v1/orders/{webId}/items",
+                new
+                {
+                    items = new object[]
+                    {
+                        new { itemKind = "BEVERAGE", productId = s.Coca, quantity = 1 },
+                        new { itemKind = "MARMITA", marmitaSizeId = g, quantity = 1, mainDishProductIds = new[] { s.Frango } },
+                    },
+                },
+                accepted.Version()))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+        var prices = added.GetProperty("items").EnumerateArray().Select(i => (i.GetProperty("name").GetString(), i.GetProperty("unitPrice").GetString())).ToList();
+        prices.ShouldContain(("Coca-Cola 350ml", "6.50"));
+        prices.ShouldContain(("Marmita G", "25.00"));
+        added.GetProperty("priceList").GetString().ShouldBe("SITE");
+    }
+
+    /// Ativar a página exige um tamanho que vende no site (ADR-0057 item 3).
+    [Fact]
+    public async Task Page_activation_requires_a_size_sold_on_site()
+    {
+        var s = await OrderingScenario.CreateAsync(_api, db);
+        await (await s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/marmita-sizes/{s.SizeM}", new { sellsOnSite = false }, 1))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+        var config = await (await s.Client.GetAsync("/api/v1/storefront", Ct)).ExpectAsync(HttpStatusCode.OK, _api);
+        var problem = await (await PutStorefront(s, StorefrontBody(config.GetProperty("slug").GetString()!), config.Version()))
+            .ExpectAsync(HttpStatusCode.UnprocessableEntity, _api);
+        problem.GetProperty("errors").GetProperty("isPageActive")[0].GetString()!.ShouldContain("vende no site");
+    }
+
     private async Task<JsonElement> PublicGet(string slug) =>
         await (await Public().GetAsync($"/api/v1/public/stores/{slug}", Ct)).ExpectAsync(HttpStatusCode.OK, _api);
 

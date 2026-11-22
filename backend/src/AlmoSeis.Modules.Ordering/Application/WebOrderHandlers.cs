@@ -6,6 +6,7 @@ using AlmoSeis.Modules.Closing.Contracts;
 using AlmoSeis.Modules.Identity.Contracts;
 using AlmoSeis.Modules.Ordering.Contracts;
 using AlmoSeis.Modules.Ordering.Domain;
+using AlmoSeis.Modules.Catalog.Contracts;
 using AlmoSeis.SharedKernel.Application;
 using AlmoSeis.SharedKernel.Domain;
 using AlmoSeis.SharedKernel.Errors;
@@ -247,7 +248,8 @@ internal sealed class WebOrderSubmitter(
     public async Task<Order> SubmitAsync(SubmitWebOrderCommand command, CancellationToken cancellationToken)
     {
         var day = await businessDays.GetOpenAsync(cancellationToken) ?? throw new BusinessException(ErrorCodes.BusinessDayRequired);
-        var resolved = await items.ResolveAsync(command.Items, day.BusinessDate, cancellationToken);
+        // Todo pedido do site usa o preço de site (ADR-0057 item 6).
+        var resolved = await items.ResolveAsync(command.Items, day.BusinessDate, PriceList.Site, cancellationToken);
         var now = time.GetUtcNow();
 
         var order = Order.SubmitFromWeb(

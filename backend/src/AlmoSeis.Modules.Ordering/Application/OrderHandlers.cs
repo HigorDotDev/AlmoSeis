@@ -9,6 +9,7 @@ using AlmoSeis.Modules.Closing.Contracts;
 using AlmoSeis.Modules.Identity.Contracts;
 using AlmoSeis.Modules.Ordering.Contracts;
 using AlmoSeis.Modules.Ordering.Domain;
+using AlmoSeis.Modules.Catalog.Contracts;
 using AlmoSeis.SharedKernel.Application;
 using AlmoSeis.SharedKernel.Domain;
 using AlmoSeis.SharedKernel.Errors;
@@ -53,7 +54,7 @@ internal sealed class CreateOrderHandler(
         }
 
         var weighings = OrderRules.Weighings(command.Weighings ?? [], config.KiloPricePerKg);
-        var resolvedItems = await items.ResolveAsync(command.Items, day.BusinessDate, cancellationToken);
+        var resolvedItems = await items.ResolveAsync(command.Items, day.BusinessDate, PriceList.Counter, cancellationToken);
         var customer = await customers.ResolveAsync(command, cancellationToken);
         var number = await numbers.NextAsync(day.BusinessDate, cancellationToken);
 
@@ -148,8 +149,8 @@ internal sealed class AddOrderItemsHandler(
         var order = await OrderRules.LoadAsync(db, command.OrderId, cancellationToken);
         order.EnsureVersion(concurrency.ExpectedVersion);
 
-        // O cardápio é o da data do pedido, não o de hoje.
-        var specs = await resolver.ResolveAsync(command.Request.Items, order.BusinessDate, cancellationToken);
+        // O cardápio é o da data do pedido, não o de hoje; a tabela de preço é a do pedido (ADR-0057 item 8, Q-309).
+        var specs = await resolver.ResolveAsync(command.Request.Items, order.BusinessDate, order.PriceList, cancellationToken);
         var added = order.AddItems(specs, tenant.EmployeeId!.Value, ids.New, time.GetUtcNow());
 
         foreach (var item in added)

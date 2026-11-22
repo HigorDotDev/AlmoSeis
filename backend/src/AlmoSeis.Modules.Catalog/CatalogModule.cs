@@ -15,6 +15,11 @@ public static class CatalogModule
         services.AddScoped<ICatalogReader, CatalogReader>();
         services.AddSingleton<AlmoSeis.Infrastructure.Realtime.IOutboxConsumer, ProductImageCleanup>();
 
+        // Cardápio fixo (ADR-0056): carregamento único, porta de leitura para o pedido (fatia 3) e limpeza das imagens.
+        services.AddScoped<AlmoSeis.Modules.Catalog.Application.FixedMenuLoader>();
+        services.AddScoped<IFixedMenuReader, AlmoSeis.Modules.Catalog.Application.FixedMenuReader>();
+        services.AddSingleton<AlmoSeis.Infrastructure.Realtime.IOutboxConsumer, FixedMenuImageCleanup>();
+
         services.Scan(scan => scan
             .FromAssemblyOf<CatalogReader>()
             .AddClasses(c => c.AssignableTo(typeof(ICommandHandler<,>)), publicOnly: false).AsImplementedInterfaces().WithScopedLifetime()

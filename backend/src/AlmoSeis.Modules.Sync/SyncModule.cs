@@ -35,6 +35,12 @@ internal sealed class GetSyncChangesQueryHandler(AppDbContext db, ITenantContext
         ["TENANT_SETTINGS"] = Permissions.Orders.View,
         ["PRODUCT"] = Permissions.Orders.View,
         ["MARMITA_SIZE"] = Permissions.Orders.View,
+        // Cardápio fixo (ADR-0056): as cinco raízes; o app recarrega `GET /fixed-menu` (a disponibilidade dos combos é derivada).
+        ["DISH_CATEGORY"] = Permissions.Orders.View,
+        ["DISH"] = Permissions.Orders.View,
+        ["BEVERAGE_TYPE"] = Permissions.Orders.View,
+        ["COMBO"] = Permissions.Orders.View,
+        ["ADDON_GROUP"] = Permissions.Orders.View,
         ["MENU"] = Permissions.Orders.View,
         ["CUSTOMER"] = Permissions.Orders.View,
         ["ORDER"] = Permissions.Orders.View,

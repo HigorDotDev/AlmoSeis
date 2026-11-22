@@ -45,6 +45,9 @@ public static class Permissions
 
     public const string MenuManage = "menu.manage";
     public const string CatalogManage = "catalog.manage";
+
+    /// Pausar e reativar itens do cardápio fixo (EP-003 Q-306, ADR-0028 complementado, ADR-0056 item 25).
+    public const string CatalogAvailability = "catalog.availability";
     public const string CustomersManage = "customers.manage";
     public const string EmployeesManage = "employees.manage";
     public const string DevicesManage = "devices.manage";
@@ -62,7 +65,7 @@ public static class Permissions
         Payments.Register, Payments.Reverse,
         Cash.Open, Cash.Movement,
         Closing.View, Closing.Finalize, Closing.Adjust,
-        MenuManage, CatalogManage, CustomersManage,
+        MenuManage, CatalogManage, CatalogAvailability, CustomersManage,
         EmployeesManage, DevicesManage, SettingsManage, StorefrontManage, AuditView, SubscriptionView,
     ];
 }
@@ -88,12 +91,12 @@ public static class RolePermissions
         [Role.Attendant] = new HashSet<string>
         {
             Permissions.Orders.View, Permissions.Orders.Create, Permissions.Orders.Edit, Permissions.CustomersManage,
-            Permissions.Orders.Accept, Permissions.Orders.UpdateFulfillment,
+            Permissions.Orders.Accept, Permissions.Orders.UpdateFulfillment, Permissions.CatalogAvailability,
         },
         [Role.Kitchen] = new HashSet<string>
         {
             Permissions.Orders.View, Permissions.Production.View, Permissions.Production.Update,
-            Permissions.Orders.UpdateFulfillment,
+            Permissions.Orders.UpdateFulfillment, Permissions.CatalogAvailability,
         },
         [Role.Cashier] = new HashSet<string>
         {

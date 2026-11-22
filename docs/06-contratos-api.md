@@ -147,6 +147,7 @@ Conflito de versão (`409`) traz o estado atual em `current` (ADR-0034):
 | 429 | `TooManyPendingOrders` | o telefone já tem 2 pedidos aguardando aceite no restaurante, ou o IP já tem 3 (ADR-0045 item 13) |
 | 410 | `TrackingExpired` | acompanhamento com mais de 7 dias (ADR-0047 item 4) |
 | 409 | `PushTokenInUse` | `PUT /devices/push-token` com um token já registrado por **outra instalação** em outro estabelecimento (05 §5.17 0007, ADR-0049 item 4). O registro do outro aparelho não é tocado. O app não mostra erro: tenta de novo na próxima abertura (o registro antigo some no logout dele ou em 30 dias sem uso) |
+| 409 | `UsedInActiveCombos` | inativar prato, tamanho de prato, tipo ou tamanho de bebida do cardápio fixo usado por combo ativo (ADR-0056 item 26). Extensão `combos` (`[{ "id", "name" }]`): o estabelecimento ajusta ou inativa os combos antes (§6.5 "Cardápio fixo") |
 | 403 | `ModuleNotEnabled` | operação de um módulo que o estabelecimento não tem (ADR-0054 item 14; mapa em §6.3 "Comportamentos, rótulos e módulos"). Extensão `module` (`MARMITA`, `PF`, `KILO`, `DAILY_MENU`…). Vem depois do `401`/`403 PermissionDenied` e **antes** de qualquer outro erro da rota (validação do corpo, `If-Match`, `Idempotency-Key`, assinatura, expediente). Leitura de cadastro de módulo ausente não dá erro: devolve lista vazia |
 
 ---
@@ -169,6 +170,7 @@ Cada endpoint indica a permissão exigida. Matriz em código (`Permissions.cs` /
 | `cash.open`, `cash.movement`, `closing.view`, `closing.finalize` | ✓ | ✓ | | | ✓ |
 | `closing.adjust` | ✓ | ✓ | | | |
 | `menu.manage`, `catalog.manage` | ✓ | ✓ | | | |
+| `catalog.availability` (pausar e reativar itens do cardápio fixo; EP-003 Q-306, ADR-0028) | ✓ | ✓ | ✓ | ✓ | |
 | `customers.manage` | ✓ | ✓ | ✓ | | ✓ |
 | `employees.manage` | ✓ | | | | |
 | `devices.manage`, `settings.manage`, `audit.view` | ✓ | ✓ | | | |
@@ -177,15 +179,15 @@ Cada endpoint indica a permissão exigida. Matriz em código (`Permissions.cs` /
 
 Leitura de produtos, tamanhos, cardápios e clientes exige só `orders.view`.
 
-As permissões dizem **quem** pode; os **módulos** do estabelecimento (ADR-0054, §6.3) dizem **o que** existe nele. Uma rota de módulo ausente responde `403 ModuleNotEnabled` mesmo para o `OWNER`. Não há permissão nova na fatia 1 do EP-003: os rótulos são editados com `settings.manage` (`PATCH /tenant`), e o acréscimo de comportamento é rota de plataforma (§6.15).
+As permissões dizem **quem** pode; os **módulos** do estabelecimento (ADR-0054, §6.3) dizem **o que** existe nele. Uma rota de módulo ausente responde `403 ModuleNotEnabled` mesmo para o `OWNER`. A fatia 2 do EP-003 acrescenta `catalog.availability` (pausa do cardápio fixo, separada da edição com `catalog.manage`). Não há permissão nova na fatia 1 do EP-003: os rótulos são editados com `settings.manage` (`PATCH /tenant`), e o acréscimo de comportamento é rota de plataforma (§6.15).
 
 `GET /roles` (autenticado, qualquer perfil) → `200`:
 
 ```json
 {
   "items": [
-    { "role": "OWNER", "name": "Proprietário", "permissions": ["orders.view", "orders.create", "orders.edit", "orders.cancel", "orders.delivery-fee.edit", "orders.accept", "orders.fulfillment.update", "production.view", "production.update", "payments.register", "payments.reverse", "cash.open", "cash.movement", "closing.view", "closing.finalize", "closing.adjust", "menu.manage", "catalog.manage", "customers.manage", "employees.manage", "devices.manage", "settings.manage", "storefront.manage", "audit.view", "subscription.view"] },
-    { "role": "KITCHEN", "name": "Cozinha", "permissions": ["orders.view", "production.view", "production.update", "orders.fulfillment.update"] }
+    { "role": "OWNER", "name": "Proprietário", "permissions": ["orders.view", "orders.create", "orders.edit", "orders.cancel", "orders.delivery-fee.edit", "orders.accept", "orders.fulfillment.update", "production.view", "production.update", "payments.register", "payments.reverse", "cash.open", "cash.movement", "closing.view", "closing.finalize", "closing.adjust", "menu.manage", "catalog.manage", "catalog.availability", "customers.manage", "employees.manage", "devices.manage", "settings.manage", "storefront.manage", "audit.view", "subscription.view"] },
+    { "role": "KITCHEN", "name": "Cozinha", "permissions": ["orders.view", "production.view", "production.update", "orders.fulfillment.update", "catalog.availability"] }
   ]
 }
 ```
@@ -224,7 +226,7 @@ Com `X-App-Platform: WEB`, `refreshToken` vem `null` e o refresh vai no cookie `
     "modules": ["MARMITA", "PF", "KILO", "DAILY_MENU"]
   },
   "employee": { "id": "0192d6a0-0000-7000-8000-000000000301", "displayName": "Ana", "roles": ["OWNER"], "hasPin": true },
-  "permissions": ["orders.view", "orders.create", "orders.edit", "orders.cancel", "orders.delivery-fee.edit", "orders.accept", "orders.fulfillment.update", "production.view", "production.update", "payments.register", "payments.reverse", "cash.open", "cash.movement", "closing.view", "closing.finalize", "closing.adjust", "menu.manage", "catalog.manage", "customers.manage", "employees.manage", "devices.manage", "settings.manage", "audit.view", "subscription.view"],
+  "permissions": ["orders.view", "orders.create", "orders.edit", "orders.cancel", "orders.delivery-fee.edit", "orders.accept", "orders.fulfillment.update", "production.view", "production.update", "payments.register", "payments.reverse", "cash.open", "cash.movement", "closing.view", "closing.finalize", "closing.adjust", "menu.manage", "catalog.manage", "catalog.availability", "customers.manage", "employees.manage", "devices.manage", "settings.manage", "audit.view", "subscription.view"],
   "memberships": [
     { "tenantId": "0192d6a0-0000-7000-8000-000000000001", "tenantName": "Marmitaria da Ana", "employeeId": "0192d6a0-0000-7000-8000-000000000301", "roles": ["OWNER"] }
   ],
@@ -910,12 +912,15 @@ Convite inexistente, expirado ou já usado → `404 NotFound` (não diferencia, 
   "isActive": true,
   "isAvailable": true,
   "isVisibleOnPage": true,
+  "sitePrice": null,
   "createdAt": "2026-10-27T09:40:00Z",
   "updatedAt": "2026-10-27T09:40:00Z"
 }
 ```
 
 `isVisibleOnPage` (ADR-0044 item 5): bebidas e adicionais com `false` não aparecem na página de pedidos (§6.19). Nasce `true`; muda pelo `PATCH`. Pratos e acompanhamentos seguem o cardápio do dia.
+
+`sitePrice` (EP-003, ADR-0057 item 5, Q-307): **só em `BEVERAGE`**, `> 0`. Na bebida, `isVisibleOnPage` é o "vende no site", e o pedido do site cobra o `sitePrice` (§6.19); adicionais usam o mesmo preço no site (Q-308) e têm `sitePrice: null` (enviar um valor → `422` em `errors.sitePrice`). A API **sempre** grava o preço de site da bebida visível: sem `sitePrice` no `POST`, ou ao tornar a bebida visível sem ele, vale o `defaultPrice`. Bebida de `"0.00"` não tem preço de site: no `POST` ela nasce com `isVisibleOnPage: false`; no `PATCH`, ficar visível sem `sitePrice` → `422` em `errors.sitePrice`. Bebida criada antes da migração 0009 (ou pela API anterior durante o deploy) pode vir visível com `sitePrice: null`: a página usa o `defaultPrice` até a próxima edição gravar o preço de site.
 
 | Método e rota | Permissão | Corpo → resposta |
 |---|---|---|
@@ -934,14 +939,17 @@ Convite inexistente, expirado ou já usado → `404 NotFound` (não diferencia, 
   "description": null,
   "category": "Refrigerantes",
   "defaultPrice": "6.00",
-  "requiresPreparation": false
+  "requiresPreparation": false,
+  "sitePrice": "6.50"
 }
 ```
+
+`sitePrice` é opcional (só bebida).
 
 `PATCH /products/{id}`:
 
 ```json
-{ "defaultPrice": "6.50", "isAvailable": false, "imageStorageKey": "t/0192d6a0-0000-7000-8000-000000000001/p/0192d6a0-0000-7000-8000-000000000121-20261027.jpg" }
+{ "defaultPrice": "6.50", "sitePrice": "7.00", "isAvailable": false, "imageStorageKey": "t/0192d6a0-0000-7000-8000-000000000001/p/0192d6a0-0000-7000-8000-000000000121-20261027.jpg" }
 ```
 
 `kind` não pode mudar depois que o produto foi vendido ou entrou em algum cardápio (`422`, em `errors.kind`). `imageStorageKey` só aceita chaves do próprio produto (`t/{tenantId}/p/{productId}-*`). Para "excluir", use `{ "isActive": false }` (RN-002.6).
@@ -968,15 +976,332 @@ Tipos aceitos: `image/jpeg`, `image/png`, `image/webp`, até 2 MB. Depois do `PU
 
 ### Tamanhos de marmita
 
-`MarmitaSize`: `{ "id": "0192d6a0-0000-7000-8000-000000000202", "version": 1, "name": "M", "price": "20.00", "sortOrder": 2, "isActive": true }`
+`MarmitaSize`: `{ "id": "0192d6a0-0000-7000-8000-000000000202", "version": 1, "name": "M", "price": "20.00", "sortOrder": 2, "isActive": true, "sellsOnSite": true, "sitePrice": "21.90" }`
+
+`sellsOnSite` e `sitePrice` (EP-003, ADR-0057 item 1): o tamanho só aparece na página com `sellsOnSite: true`, e o pedido do site cobra o `sitePrice` (pode ser maior, menor ou igual ao `price`; não é desconto nem taxa, item 11). Ligar sem `sitePrice` (ausente ou `null`) grava o `price` como preço de site (item 2). Desligada, o `sitePrice` fica guardado. No `POST`, `sellsOnSite` ausente = `false`. A migração 0009 ligou a chave em todo tamanho ativo, com `sitePrice = price`.
 
 | Método e rota | Permissão | Corpo → resposta |
 |---|---|---|
 | `GET /marmita-sizes?includeInactive=false` | `orders.view` | → `200 { "items": [MarmitaSize] }` |
-| `POST /marmita-sizes` | `catalog.manage` | `{ "name": "G", "price": "25.00", "sortOrder": 3 }` → `201 MarmitaSize` |
-| `PATCH /marmita-sizes/{id}` [M] | `catalog.manage` | `{ "price": "26.00", "isActive": true }` → `200 MarmitaSize` |
+| `POST /marmita-sizes` | `catalog.manage` | `{ "name": "G", "price": "25.00", "sortOrder": 3, "sellsOnSite": true, "sitePrice": "26.90" }` → `201 MarmitaSize` |
+| `PATCH /marmita-sizes/{id}` [M] | `catalog.manage` | `{ "price": "26.00", "isActive": true, "sellsOnSite": true, "sitePrice": null }` → `200 MarmitaSize` |
 
 Módulo `MARMITA` (ADR-0054): sem ele, `POST` e `PATCH` → `403 ModuleNotEnabled` (`"module": "MARMITA"`), e o `GET` → `200 { "items": [] }`.
+
+### Cardápio fixo (EP-003 fatia 2; ADR-0056, ADR-0057)
+
+Cardápio permanente da lanchonete, sem data: a edição vale na hora para os pedidos seguintes, e o pedido grava o snapshot (ADR-0020). Cinco recursos raiz, cada um com versão própria (`If-Match`/`ETag`, ADR-0034), auditoria, `CatalogUpdated` e entrada no feed: **categoria** (`DISH_CATEGORY`), **prato** com os tamanhos (`DISH`), **tipo de bebida** com tamanhos e sabores (`BEVERAGE_TYPE`), **combo** com componentes (`COMBO`) e **grupo de adicionais** com opções e vínculos (`ADDON_GROUP`). Os filhos não têm versão: alterar ou pausar um tamanho, sabor ou opção sobe a versão da raiz.
+
+**Módulo `FIXED_MENU`** (ADR-0054): sem ele, toda escrita e toda leitura por id → `403 ModuleNotEnabled` (`"module": "FIXED_MENU"`), antes da validação do corpo; `GET /fixed-menu` → `200` com as cinco listas vazias.
+
+**Permissões:** leitura `orders.view`; cadastro `catalog.manage` (OWNER, MANAGER); **pausar e reativar** `catalog.availability` (OWNER, MANAGER, ATTENDANT, KITCHEN; Q-306), só pelas rotas `…/availability`. Nenhuma rota do cardápio fixo exige `Idempotency-Key` (fora da lista do ADR-0033, como `/products`).
+
+| Método e rota | Permissão | Corpo → resposta |
+|---|---|---|
+| `GET /fixed-menu?includeInactive=false` | `orders.view` | → `200 FixedMenu` (tudo numa chamada, com a disponibilidade derivada) |
+| `GET /fixed-menu/dish-categories/{id}` | `orders.view` | → `200 DishCategory` |
+| `POST /fixed-menu/dish-categories` | `catalog.manage` | `{ "name": "Lanches", "sortOrder": 1 }` → `201 DishCategory` |
+| `PATCH /fixed-menu/dish-categories/{id}` [M] | `catalog.manage` | `{ "name"?, "sortOrder"?, "isActive"? }` → `200 DishCategory` |
+| `GET /fixed-menu/dishes/{id}` | `orders.view` | → `200 Dish` |
+| `POST /fixed-menu/dishes` | `catalog.manage` | ver abaixo → `201 Dish` |
+| `PATCH /fixed-menu/dishes/{id}` [M] | `catalog.manage` | campos parciais → `200 Dish` |
+| `PATCH /fixed-menu/dishes/{id}/availability` [M] | `catalog.availability` | `{ "isPaused": true, "sizes": [{ "id", "isPaused" }] }` → `200 Dish` |
+| `POST /fixed-menu/dishes/{id}/image-upload` | `catalog.manage` | como `/products/{id}/image-upload` → `201` |
+| `GET /fixed-menu/beverage-types/{id}` | `orders.view` | → `200 BeverageType` |
+| `POST /fixed-menu/beverage-types` | `catalog.manage` | ver abaixo → `201 BeverageType` |
+| `PATCH /fixed-menu/beverage-types/{id}` [M] | `catalog.manage` | campos parciais → `200 BeverageType` |
+| `PATCH /fixed-menu/beverage-types/{id}/availability` [M] | `catalog.availability` | `{ "sizes": [{ "id", "isPaused" }], "flavors": [{ "id", "isPaused" }] }` → `200 BeverageType` |
+| `GET /fixed-menu/combos/{id}` | `orders.view` | → `200 Combo` |
+| `POST /fixed-menu/combos` | `catalog.manage` | ver abaixo → `201 Combo` |
+| `PATCH /fixed-menu/combos/{id}` [M] | `catalog.manage` | campos parciais → `200 Combo` |
+| `PATCH /fixed-menu/combos/{id}/availability` [M] | `catalog.availability` | `{ "isPaused": true }` → `200 Combo` |
+| `POST /fixed-menu/combos/{id}/image-upload` | `catalog.manage` | como `/products/{id}/image-upload` → `201` |
+| `GET /fixed-menu/addon-groups/{id}` | `orders.view` | → `200 AddonGroup` |
+| `POST /fixed-menu/addon-groups` | `catalog.manage` | ver abaixo → `201 AddonGroup` |
+| `PATCH /fixed-menu/addon-groups/{id}` [M] | `catalog.manage` | campos parciais → `200 AddonGroup` |
+| `PATCH /fixed-menu/addon-groups/{id}/availability` [M] | `catalog.availability` | `{ "options": [{ "id", "isPaused" }] }` → `200 AddonGroup` |
+
+#### `GET /fixed-menu` → `200 FixedMenu`
+
+Listas planas, cada uma na ordem de `sortOrder` e nome; o app agrupa os pratos por `dishCategoryId` (abas **Pratos**, **Bebidas** e **Combos**, ADR-0056 item 3). `includeInactive=false` (padrão) tira as raízes inativas e os filhos inativos (tamanhos, sabores, opções); `true` traz tudo, para a tela de cadastro. As leituras por id trazem sempre os filhos inativos também.
+
+```json
+{
+  "categories": [
+    { "id": "0192d6a0-0000-7000-8000-000000001001", "version": 1, "name": "Lanches", "sortOrder": 1, "isActive": true, "createdAt": "2026-11-22T10:00:00Z", "updatedAt": "2026-11-22T10:00:00Z" },
+    { "id": "0192d6a0-0000-7000-8000-000000001002", "version": 1, "name": "Porções", "sortOrder": 2, "isActive": true, "createdAt": "2026-11-22T10:00:00Z", "updatedAt": "2026-11-22T10:00:00Z" }
+  ],
+  "dishes": [
+    {
+      "id": "0192d6a0-0000-7000-8000-000000001101",
+      "version": 1,
+      "dishCategoryId": "0192d6a0-0000-7000-8000-000000001001",
+      "name": "X-Burguer",
+      "description": "Pão, hambúrguer 150 g, queijo",
+      "imageUrl": null,
+      "requiresPreparation": true,
+      "hasSizes": false,
+      "price": "22.00",
+      "sellsOnSite": true,
+      "sitePrice": "23.90",
+      "sortOrder": 1,
+      "isActive": true,
+      "isPaused": false,
+      "isSellable": true,
+      "sizes": [],
+      "addonGroupIds": ["0192d6a0-0000-7000-8000-000000001501"],
+      "createdAt": "2026-11-22T10:01:00Z",
+      "updatedAt": "2026-11-22T10:01:00Z"
+    },
+    {
+      "id": "0192d6a0-0000-7000-8000-000000001102",
+      "version": 3,
+      "dishCategoryId": "0192d6a0-0000-7000-8000-000000001002",
+      "name": "Batata frita",
+      "description": null,
+      "imageUrl": null,
+      "requiresPreparation": true,
+      "hasSizes": true,
+      "price": null,
+      "sellsOnSite": false,
+      "sitePrice": null,
+      "sortOrder": 1,
+      "isActive": true,
+      "isPaused": false,
+      "isSellable": true,
+      "sizes": [
+        { "id": "0192d6a0-0000-7000-8000-000000001201", "name": "P", "price": "12.00", "sellsOnSite": true, "sitePrice": "13.00", "sortOrder": 1, "isActive": true, "isPaused": true, "isSellable": false },
+        { "id": "0192d6a0-0000-7000-8000-000000001202", "name": "G", "price": "18.00", "sellsOnSite": true, "sitePrice": "19.50", "sortOrder": 2, "isActive": true, "isPaused": false, "isSellable": true }
+      ],
+      "addonGroupIds": [],
+      "createdAt": "2026-11-22T10:02:00Z",
+      "updatedAt": "2026-11-22T11:30:00Z"
+    }
+  ],
+  "beverageTypes": [
+    {
+      "id": "0192d6a0-0000-7000-8000-000000001301",
+      "version": 2,
+      "name": "Refrigerante",
+      "sortOrder": 1,
+      "isActive": true,
+      "sizes": [
+        {
+          "id": "0192d6a0-0000-7000-8000-000000001311",
+          "name": "Lata 350 ml",
+          "price": "6.00",
+          "sellsOnSite": true,
+          "sitePrice": "6.50",
+          "sortOrder": 1,
+          "isActive": true,
+          "isPaused": false,
+          "isSellable": true,
+          "flavors": [
+            { "id": "0192d6a0-0000-7000-8000-000000001321", "name": "Coca-Cola", "extraPrice": "0.00", "sortOrder": 1, "isActive": true, "isPaused": true },
+            { "id": "0192d6a0-0000-7000-8000-000000001322", "name": "Coca-Cola Zero", "extraPrice": "0.50", "sortOrder": 2, "isActive": true, "isPaused": false }
+          ]
+        }
+      ],
+      "createdAt": "2026-11-22T10:03:00Z",
+      "updatedAt": "2026-11-22T11:00:00Z"
+    }
+  ],
+  "combos": [
+    {
+      "id": "0192d6a0-0000-7000-8000-000000001401",
+      "version": 1,
+      "name": "X-Burguer + batata + refri",
+      "description": null,
+      "imageUrl": null,
+      "price": "32.00",
+      "sellsOnSite": true,
+      "sitePrice": "34.90",
+      "sortOrder": 1,
+      "isActive": true,
+      "isPaused": false,
+      "isSellable": false,
+      "components": [
+        { "id": "0192d6a0-0000-7000-8000-000000001411", "kind": "DISH", "dishId": "0192d6a0-0000-7000-8000-000000001101", "dishSizeId": null, "beverageSizeId": null, "name": "X-Burguer", "quantity": 1, "sortOrder": 0, "isSellable": true },
+        { "id": "0192d6a0-0000-7000-8000-000000001412", "kind": "DISH", "dishId": "0192d6a0-0000-7000-8000-000000001102", "dishSizeId": "0192d6a0-0000-7000-8000-000000001201", "beverageSizeId": null, "name": "Batata frita P", "quantity": 1, "sortOrder": 1, "isSellable": false },
+        { "id": "0192d6a0-0000-7000-8000-000000001413", "kind": "BEVERAGE", "dishId": null, "dishSizeId": null, "beverageSizeId": "0192d6a0-0000-7000-8000-000000001311", "name": "Refrigerante Lata 350 ml", "quantity": 1, "sortOrder": 2, "isSellable": true }
+      ],
+      "createdAt": "2026-11-22T10:05:00Z",
+      "updatedAt": "2026-11-22T10:05:00Z"
+    }
+  ],
+  "addonGroups": [
+    {
+      "id": "0192d6a0-0000-7000-8000-000000001501",
+      "version": 1,
+      "name": "Adicionais de lanche",
+      "sortOrder": 1,
+      "isActive": true,
+      "options": [
+        { "id": "0192d6a0-0000-7000-8000-000000001511", "name": "Bacon", "price": "4.00", "sortOrder": 1, "isActive": true, "isPaused": false },
+        { "id": "0192d6a0-0000-7000-8000-000000001512", "name": "Sem cebola", "price": "0.00", "sortOrder": 2, "isActive": true, "isPaused": false }
+      ],
+      "dishCategoryIds": ["0192d6a0-0000-7000-8000-000000001001"],
+      "dishIds": [],
+      "createdAt": "2026-11-22T10:06:00Z",
+      "updatedAt": "2026-11-22T10:06:00Z"
+    }
+  ]
+}
+```
+
+**Disponibilidade derivada** (`isSellable`, calculada a cada leitura, **nunca gravada**, ADR-0056 item 23):
+
+| Onde | `isSellable` |
+|---|---|
+| prato | ativo, não pausado e, com `hasSizes`, pelo menos um tamanho vendável |
+| tamanho de prato | prato ativo e não pausado, tamanho ativo e não pausado |
+| tamanho de bebida | tipo e tamanho ativos, tamanho não pausado e, com sabores ativos, pelo menos um não pausado (sem sabor ativo é vendido sem escolha) |
+| componente de combo | o prato no tamanho fixo vendável (prato sem tamanho: o prato vendável); o tamanho de bebida vendável |
+| combo | ativo, não pausado e **todos** os componentes vendáveis |
+
+Pausar um componente tira de venda os combos que o usam **sem tocar no combo** (versão e `isPaused` do combo não mudam); reativar devolve. O motivo para o app ("Pausado: Batata frita P") é o `name` dos componentes com `isSellable: false`. Por isso, a cada `CatalogUpdated` ou entrada de feed de uma raiz do cardápio fixo, o app recarrega o `GET /fixed-menu` inteiro. A pausa fica até alguém reativar: abrir ou fechar o expediente não mexe nela (item 22).
+
+`addonGroupIds` do prato: os grupos **ativos** ligados à categoria dele ∪ os ligados ao próprio prato, sem repetir, na ordem dos grupos (item 18). O preço do adicional é o mesmo para qualquer tamanho e no site (Q-308).
+
+#### "Vende no site" e preço de site (ADR-0057)
+
+Em prato sem tamanho, cada tamanho de prato, cada tamanho de bebida e combo: `sellsOnSite` (padrão `false`) e `sitePrice`. Com `sellsOnSite: true` e `sitePrice` ausente ou `null`, a API grava o **preço de balcão** como preço de site (item 2); o app mostra o campo preenchido e o estabelecimento ajusta. O preço de site pode ser maior, menor ou igual ao de balcão. Desligada, a unidade não aparece na página, e o `sitePrice` fica guardado (volta se a chave for religada). Prato com tamanho não tem `price`, `sellsOnSite` nem `sitePrice` próprios: ficam em cada tamanho. Acréscimo de sabor e opção de adicional não têm preço de site (Q-308).
+
+#### `POST /fixed-menu/dishes`
+
+```json
+{
+  "dishCategoryId": "0192d6a0-0000-7000-8000-000000001002",
+  "name": "Açaí",
+  "description": null,
+  "requiresPreparation": true,
+  "hasSizes": true,
+  "price": null,
+  "sellsOnSite": false,
+  "sitePrice": null,
+  "sortOrder": 1,
+  "sizes": [
+    { "id": null, "name": "300 ml", "price": "14.00", "sellsOnSite": true, "sitePrice": null, "sortOrder": 1 },
+    { "id": null, "name": "500 ml", "price": "18.00", "sellsOnSite": true, "sitePrice": "19.00", "sortOrder": 2 },
+    { "id": null, "name": "700 ml", "price": "23.00", "sellsOnSite": false, "sitePrice": null, "sortOrder": 3 }
+  ]
+}
+```
+
+Prato sem tamanho: `"hasSizes": false`, `"price": "22.00"`, `"sizes": []` (ou `null`). `requiresPreparation` ausente ou `null` = `true`.
+
+**`PATCH /fixed-menu/dishes/{id}`**: `dishCategoryId`, `name`, `description`, `requiresPreparation`, `hasSizes`, `price`, `sellsOnSite`, `sitePrice`, `sortOrder`, `isActive`, `imageStorageKey`, `sizes`. Só os presentes mudam. **`sizes` presente substitui a lista**: item com `id` atualiza aquele tamanho (e o reativa, se estava inativo); sem `id` cria; tamanho do prato ausente da lista é **inativado**, nunca apagado. A pausa de cada tamanho não muda pelo `PATCH` (só por `…/availability`). Desligar `hasSizes` inativa todos os tamanhos e exige `price`; ligar exige pelo menos um tamanho ativo e limpa `price`/`sellsOnSite`/`sitePrice`. `imageStorageKey` segue as regras de `/products` com a chave `t/{tenantId}/d/{dishId}-*` (combo: `t/{tenantId}/c/{comboId}-*`).
+
+```json
+{ "price": "23.00", "sellsOnSite": true, "sitePrice": "24.90" }
+```
+
+#### `POST /fixed-menu/beverage-types`
+
+O sabor é **do tamanho** (Q-305): cada tamanho tem a sua lista. "Copiar sabores de outro tamanho" é do app (envia a mesma lista no outro tamanho).
+
+```json
+{
+  "name": "Refrigerante",
+  "sortOrder": 1,
+  "sizes": [
+    {
+      "id": null, "name": "Lata 350 ml", "price": "6.00", "sellsOnSite": true, "sitePrice": "6.50", "sortOrder": 1,
+      "flavors": [
+        { "id": null, "name": "Coca-Cola", "extraPrice": "0.00", "sortOrder": 1 },
+        { "id": null, "name": "Coca-Cola Zero", "extraPrice": "0.50", "sortOrder": 2 }
+      ]
+    },
+    { "id": null, "name": "2 L", "price": "14.00", "sellsOnSite": false, "sitePrice": null, "sortOrder": 2, "flavors": [] }
+  ]
+}
+```
+
+Preço da bebida = preço do tamanho (ou o de site, no pedido do site) + `extraPrice` do sabor: Suco 500 ml `"9.00"` + "Laranja com acerola" `"1.00"` = `"10.00"`. `extraPrice` ausente = `"0.00"`. **`PATCH /fixed-menu/beverage-types/{id}`**: `name`, `sortOrder`, `isActive`, `sizes`; `sizes` (e o `flavors` de cada tamanho enviado) substitui a lista como em `dishes`: o que fica de fora é inativado.
+
+#### `POST /fixed-menu/combos`
+
+```json
+{
+  "name": "X-Burguer + batata + refri",
+  "description": null,
+  "price": "32.00",
+  "sellsOnSite": true,
+  "sitePrice": "34.90",
+  "sortOrder": 1,
+  "components": [
+    { "kind": "DISH", "dishId": "0192d6a0-0000-7000-8000-000000001101", "dishSizeId": null, "beverageSizeId": null, "quantity": 1 },
+    { "kind": "DISH", "dishId": "0192d6a0-0000-7000-8000-000000001102", "dishSizeId": "0192d6a0-0000-7000-8000-000000001201", "beverageSizeId": null, "quantity": 1 },
+    { "kind": "BEVERAGE", "dishId": null, "dishSizeId": null, "beverageSizeId": "0192d6a0-0000-7000-8000-000000001311", "quantity": 1 }
+  ]
+}
+```
+
+- `DISH`: prato **ativo**; `dishSizeId` obrigatório se o prato tem tamanho (e precisa ser um tamanho ativo **daquele** prato), `null` se não tem. `BEVERAGE`: `beverageSizeId` de um tamanho ativo de tipo ativo; o sabor é escolhido no pedido (fatia 3). Item pausado pode entrar: o combo só fica fora de venda enquanto durar a pausa.
+- `quantity` de 1 a 10; 1 a 10 componentes; a ordem da lista é o `sortOrder` do componente.
+- O combo vende no site pela chave **dele**; os componentes não precisam vender no site, só estar vendáveis (ADR-0057 item 4).
+- **`PATCH /fixed-menu/combos/{id}`**: `name`, `description`, `price`, `sellsOnSite`, `sitePrice`, `sortOrder`, `isActive`, `imageStorageKey`, `components`. `components` presente **troca** a lista inteira (os componentes não têm valor histórico; a mesma lista não sobe a versão).
+
+Exemplo do pedido (fatia 3, ADR-0058): combo `"32.00"` + bacon `"4.00"` + Coca-Cola Zero (`"0.50"`) = **`"36.50"`**.
+
+#### `POST /fixed-menu/addon-groups`
+
+```json
+{
+  "name": "Adicionais de lanche",
+  "sortOrder": 1,
+  "options": [
+    { "id": null, "name": "Bacon", "price": "4.00", "sortOrder": 1 },
+    { "id": null, "name": "Sem cebola", "price": "0.00", "sortOrder": 2 }
+  ],
+  "dishCategoryIds": ["0192d6a0-0000-7000-8000-000000001001"],
+  "dishIds": []
+}
+```
+
+Vínculo com categorias e pratos **ativos** do estabelecimento. **`PATCH`**: `name`, `sortOrder`, `isActive`, `options` (substitui a lista; opção ausente é inativada), `dishCategoryIds` e `dishIds` (cada um substitui os vínculos daquele tipo; o outro tipo fica). Sem limite mínimo/máximo nem "grátis até N" nesta fase (item 19).
+
+#### Pausa (`…/availability`, `catalog.availability`) [M]
+
+Só os itens enviados mudam; `id` de outro prato, tipo ou grupo → `422` em `sizes[i].id`/`flavors[i].id`/`options[i].id`. Repetir o mesmo estado não sobe a versão. Auditoria `FixedMenuAvailabilityChanged`.
+
+```json
+{ "isPaused": null, "sizes": [{ "id": "0192d6a0-0000-7000-8000-000000001201", "isPaused": true }] }
+```
+
+#### Regras e erros
+
+| Situação | Resposta |
+|---|---|
+| nome vazio ou longo (categoria 40, prato 80, tamanho 30, tipo 40, sabor 40, combo 80, grupo 60, opção 80), descrição > 300, `sortOrder` < 0; preço de prato, tamanho, tamanho de bebida e combo `<= 0`; `sitePrice` `<= 0`; `extraPrice` e preço de opção `< 0`; mais de 20 tamanhos, 50 sabores por tamanho, 10 componentes, 50 opções ou 100 vínculos de cada tipo | `422 ValidationFailed` no campo |
+| nome repetido entre os ativos (raiz: no estabelecimento; filho: no mesmo pai) | `422` em `name` / `sizes[i].name` / `sizes[i].flavors[j].name` / `options[i].name` |
+| prato com `hasSizes: true` sem tamanho ativo; com `price` ou `sellsOnSite` no prato | `422` em `sizes` / `price` / `sellsOnSite` |
+| prato sem tamanho sem `price`, ou com `sizes` | `422` em `price` / `sizes` |
+| `dishCategoryId` inexistente, de outro estabelecimento ou inativa | `422` em `dishCategoryId` |
+| componente de combo fora das regras acima (inclusive de outro estabelecimento) | `422` em `components[i].dishId` / `.dishSizeId` / `.beverageSizeId`; lista vazia → `components` |
+| vínculo com categoria ou prato inexistente/inativo | `422` em `dishCategoryIds[i]` / `dishIds[i]` |
+| inativar categoria com prato ativo | `422` em `isActive` |
+| **inativar** prato, tamanho de prato (inclusive deixá-lo fora de `sizes` ou desligar `hasSizes`), tipo ou tamanho de bebida usado por **combo ativo**, ou ligar `hasSizes` num prato que um combo ativo usa sem tamanho (item 26) | `409 UsedInActiveCombos` com `combos` |
+| recurso de outro estabelecimento ou inexistente | `404 NotFound` |
+| `If-Match` ausente / desatualizado | `428 IfMatchRequired` / `409 VersionConflict` com o recurso em `current` |
+
+```json
+{
+  "type": "urn:almoseis:error:used-in-active-combos",
+  "title": "O item é usado em combos ativos.",
+  "status": 409,
+  "detail": "Ajuste ou inative antes: Batata + refri, X-Burguer + batata + refri.",
+  "errorCode": "UsedInActiveCombos",
+  "traceId": "00-7a1b2c3d4e5f60718293a4b5c6d7e8f9-7a1b2c3d4e5f6071-01",
+  "combos": [
+    { "id": "0192d6a0-0000-7000-8000-000000001402", "name": "Batata + refri" },
+    { "id": "0192d6a0-0000-7000-8000-000000001401", "name": "X-Burguer + batata + refri" }
+  ]
+}
+```
+
+Auditoria: `FixedMenuItemCreated`, `FixedMenuItemUpdated` (nomes, preços, chaves e pausas; nunca a entidade inteira) e `FixedMenuAvailabilityChanged`, com o `entityType` da raiz.
+
 
 ---
 
@@ -1188,6 +1513,7 @@ Fiado (`pendingAmount`, `pendingOrderCount` e `pending-orders`) só considera pe
   "businessDate": "2026-10-27",
   "orderType": "MARMITA",
   "origin": "APP",
+  "priceList": "COUNTER",
   "fulfillmentType": "DELIVERY",
   "customer": { "id": "0192d6a0-0000-7000-8000-000000000801", "name": "João Silva", "phoneNumber": "+5534999991234" },
   "deliveryAddress": { "street": "Rua das Acácias", "number": "120", "complement": "Ap 201", "neighborhood": "Santa Mônica", "reference": "Em frente à padaria" },
@@ -1299,6 +1625,7 @@ Fiado (`pendingAmount`, `pendingOrderCount` e `pending-orders`) só considera pe
 - `customer` existe quando há cliente cadastrado **ou** nome avulso. Com nome avulso (ex.: `"Mesa 3"` num pedido por quilo), `customer.id` é `null`. Sem nenhum dos dois, `customer` é `null`.
 - `items` e `addons` saem na ordem de inclusão.
 - **Aceite e atendimento (ADR-0046)**, duas dimensões independentes da produção, do financeiro e do cancelamento:
+  - `priceList` (EP-003, ADR-0057 item 7): a tabela de preço do pedido, imutável. `APP` → `COUNTER` (preço de balcão); `WEB` → `SITE` (preço de site do tamanho de marmita e da bebida; adicional pelo mesmo preço, Q-308). Item **acrescentado no app** a um pedido `SITE` usa o preço de site de quem vende no site e o de balcão no resto (Q-309); o `unitPrice` de cada linha guarda o que foi cobrado. Pedidos anteriores à migração 0009: `COUNTER`, e os `WEB` já gravados, `SITE`.
   - `origin`: `APP` (criado no app) ou `WEB` (página de pedidos, EP-002). Pedido `WEB` tem `createdBy: null`, e os itens montados pelo cliente também (`items[].createdBy: null`, `addons[].createdBy: null`).
   - `acceptanceStatus`: `AWAITING_ACCEPTANCE`, `ACCEPTED`, `REJECTED`, `EXPIRED`, `WITHDRAWN` (e `AWAITING_PAYMENT`, reservado à Fase 2). **Todo pedido do app nasce `ACCEPTED`**, com `acceptedAt = createdAt` e `acceptedBy = createdBy`. Enquanto não é `ACCEPTED`: `orderNumber`, `productionStatus`, `fulfillmentStatus` e `customer.id` são `null`, e toda escrita responde `409 OrderNotAccepted`. `REJECTED`, `EXPIRED` e `WITHDRAWN` são finais e nunca recebem número.
   - `acceptanceDeadline`: prazo do aceite (envio + 10 min); `null` em pedido do app. `estimatedReadyMinutes`: 15, 30, 45 ou 60, informado no aceite (opcional).
@@ -1331,6 +1658,7 @@ Pedido "pagar na entrega/retirada" enviado pela página, aguardando aceite. A ro
   "businessDate": "2026-10-27",
   "orderType": "MARMITA",
   "origin": "WEB",
+  "priceList": "SITE",
   "fulfillmentType": "DELIVERY",
   "customer": { "id": null, "name": "Carla Souza", "phoneNumber": "+5534988887777" },
   "deliveryAddress": { "street": "Rua das Palmeiras", "number": "45", "complement": "Casa 2", "neighborhood": "Centro", "reference": null },
@@ -2161,6 +2489,7 @@ O fechamento original **não muda** (ADR-0014). O ajuste aparece em `adjustments
 | `EMPLOYEE` | `GET /auth/me` (se for o próprio) / `GET /employees/{id}` |
 | `PRODUCT` | `GET /products/{id}` |
 | `MARMITA_SIZE` | `GET /marmita-sizes` |
+| `DISH_CATEGORY`, `DISH`, `BEVERAGE_TYPE`, `COMBO`, `ADDON_GROUP` | `GET /fixed-menu` (cardápio fixo inteiro: pausar um prato muda a disponibilidade dos combos sem entrada `COMBO`) |
 | `MENU` | `GET /menus/{id}` |
 | `CUSTOMER` | `GET /customers/{id}` |
 | `ORDER` | `GET /orders/{id}` |
@@ -2263,7 +2592,7 @@ Uma repetição de `POST /orders` com a mesma chave e o mesmo corpo devolve **a 
 | `OrderAlertCreated` | orders, production | `orderNumber`, `changeKind`, `affectsProduction` |
 | `OrderAlertAcknowledged` | `employee:{id}` | `eventIds` |
 | `MenuUpdated` | catalog | `menuType`, `date` |
-| `CatalogUpdated` | catalog | `entityType` (`PRODUCT`/`MARMITA_SIZE`/`TENANT_SETTINGS`) |
+| `CatalogUpdated` | catalog | `entityType` (`PRODUCT`/`MARMITA_SIZE`/`TENANT_SETTINGS`; cardápio fixo: `DISH_CATEGORY`/`DISH`/`BEVERAGE_TYPE`/`COMBO`/`ADDON_GROUP`, e o app recarrega o `GET /fixed-menu`) |
 | `BusinessDayOpened` | todos do tenant | `businessDate` |
 | `ClosingUpdated` | closing | — (recarregar o summary; agrupado no servidor, no máximo 1 a cada 5 s) |
 | `ClosingFinalized` | todos do tenant | `businessDate`, `dailyClosingId` |
@@ -2436,7 +2765,7 @@ Regras (`422 ValidationFailed`, com o campo em `errors`):
 | Campo | Regra |
 |---|---|
 | `slug` | `a-z`, `0-9` e `-`; 3 a 40; sem `-` no começo, no fim ou repetido; não só números; fora da lista de reservados (`admin`, `pedidos`, `restaurantes`…, ADR-0044 item 16) e de palavras ofensivas; livre (nem atual nem antigo de outro tenant). Maiúsculas viram minúsculas. Trocar guarda o anterior (redireciona); voltar a um antigo do próprio tenant o reativa; depois de 5 trocas, só pelo suporte |
-| `isPageActive: true` | exige `address` com rua, número, bairro, cidade e UF, e pelo menos um tamanho de marmita ativo (ADR-0044 item 11) |
+| `isPageActive: true` | exige `address` com rua, número, bairro, cidade e UF, e pelo menos um tamanho de marmita ativo **com `sellsOnSite: true`** (ADR-0044 item 11, ADR-0057 item 3) |
 | `offersDelivery`, `offersPickup` | pelo menos um verdadeiro |
 | `publicName` | 2 a 80 |
 | `contactPhone` | E.164 ou `null` |
@@ -2531,7 +2860,7 @@ Perfil, estado e cardápio do dia. Estado calculado a cada requisição (ADR-004
 }
 ```
 
-- `menu`: o `DAILY` de `MARMITA` da `businessDate` (ADR-0038) + tamanhos ativos + adicionais e bebidas ativos com `isVisibleOnPage`. `isAvailable: false` → "Acabou" (desabilitado). Sem cardápio publicado → `menu: null`. PF e quilo nunca aparecem.
+- `menu`: o `DAILY` de `MARMITA` da `businessDate` (ADR-0038) + tamanhos ativos **que vendem no site** + adicionais e bebidas ativos com `isVisibleOnPage`. **Todo preço é o de site** (EP-003, ADR-0057 item 6): `marmitaSizes[].price` = `sitePrice` do tamanho; `beverages[].price` = `sitePrice` da bebida (o `defaultPrice` só para bebida ainda sem preço de site, §6.5); `addons[].price` = `defaultPrice` (Q-308). O envio recalcula com os mesmos preços, e o pedido nasce com `priceList: "SITE"`. `isAvailable: false` → "Acabou" (desabilitado). Sem cardápio publicado → `menu: null`. PF e quilo nunca aparecem.
 - `pickupAvailable` / `deliveryAvailable`: o que a página oferece agora. `deliveryAvailable` = entrega ligada (`offersDelivery` e `isDeliveryEnabled`) e, no modo `DISTANCE`, preço por km, ponto do restaurante confirmado e provedor de mapas configurado na API (o mesmo que `pageDelivery.available`, §6.18). Uma falha momentânea do provedor **não** muda este campo: a cotação responde `422 DeliveryUnavailable` e a página oferece retirada. `deliveryRule` (só com `deliveryAvailable: true`): `DISTANCE` → `{ "feeMode": "DISTANCE", "pricePerKm": "0.80", "minimumFee": "3.00", "maxDistanceKm": "6.0", "fixedFee": null }` ("R$ 0,80/km, mínimo R$ 3,00, até 6 km"); `FIXED` → `{ "feeMode": "FIXED", "pricePerKm": null, "minimumFee": null, "maxDistanceKm": null, "fixedFee": "5.00" }`.
 - `privacy` (ADR-0052 item 1): dados variáveis do aviso "Seus dados são usados por **{controllerName}** para preparar e entregar o pedido". O texto completo é da página (revisão jurídica). `thirdParties`: `ANTI_BOT` (Cloudflare Turnstile, quando ligado); `MAPS` (entrega por distância disponível e provedor externo, `Osm` ou `Google`; o `Fake` não manda o endereço a ninguém) e `PAYMENTS` com a Fase 2.
 - `Cache-Control: no-cache`: o servidor da página revalida a cada uso (pausa e "Acabou" aparecem em até 30 s, RF-202/RF-205).
