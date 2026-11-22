@@ -24,7 +24,7 @@ Tipos usados nas tabelas: `Guid`, `string(n)`, `Money`, `int`, `bool`, `DateOnly
 
 | Módulo | Entidades |
 |---|---|
-| Identity | `User`, `Tenant`, `TenantSettings`, `TenantEmployee`, `TenantEmployeeRole`, `EmployeeInvitation`, `SharedDevice`, `RefreshToken` |
+| Identity | `User`, `Tenant`, `TenantSettings`, `TenantBehavior`, `TenantLabel`, `TenantEmployee`, `TenantEmployeeRole`, `EmployeeInvitation`, `SharedDevice`, `RefreshToken` |
 | Billing | `Subscription`, `TrialClaim`, `BillingWebhookEvent` |
 | Catalog | `Product`, `MarmitaSize` |
 | Menu | `Menu`, `MenuItem` |
@@ -44,6 +44,8 @@ Tipos usados nas tabelas: `Guid`, `string(n)`, `Money`, `int`, `bool`, `DateOnly
 ```mermaid
 erDiagram
   Tenant ||--|| TenantSettings : tem
+  Tenant ||--|{ TenantBehavior : habilita
+  TenantBehavior ||--o{ TenantLabel : "rotula"
   Tenant ||--|| Subscription : tem
   User ||--o{ TenantEmployee : "vincula-se"
   Tenant ||--o{ TenantEmployee : emprega
@@ -113,6 +115,29 @@ Identidade autenticada (ASP.NET Core Identity, ADR-0027).
 | DefaultDeliveryFee | Money | ≥ 0, padrão 0 (ADR-0021) |
 | EnabledPaymentMethods | enum[] | subconjunto de `CASH`, `PIX`, `CARD`; pelo menos 1 |
 | SharedDeviceIdleSeconds | int | padrão 120 (ADR-0027) |
+
+### TenantBehavior [T] — comportamento habilitado (EP-003, ADR-0054 itens 1 a 6)
+
+Conjunto: uma linha por comportamento habilitado. **Pelo menos um** por tenant.
+
+| Campo | Tipo | Regra |
+|---|---|---|
+| TenantId, Behavior | Guid, enum `RESTAURANT`, `SNACK_BAR` | chave `(TenantId, Behavior)` |
+| Origin | enum `SIGNUP`, `PLATFORM_ADMIN`, `SYSTEM` | `SIGNUP`: escolhido no autocadastro (exatamente um, sem padrão); `PLATFORM_ADMIN`: acrescentado pelo admin (ADR-0025), auditado; `SYSTEM`: migração 0008 dos tenants existentes |
+| EnabledAt | DateTimeOffset | |
+| EnabledByUserId | Guid? | `User` (o proprietário ou o admin da plataforma); nulo ⇔ `SYSTEM` |
+
+**Invariantes:** fixo depois do cadastro; só o admin acrescenta; nenhuma linha é alterada nem removida nesta fase. Os **módulos** (`TenantModule`: `MARMITA`, `PF`, `KILO`, `DAILY_MENU`, `A_LA_CARTE`, `DELIVERY`, `FIXED_MENU`) não são persistidos: são a união do mapa fixo em código de cada comportamento (ADR-0054 item 12), lidos por `ITenantModules`.
+
+### TenantLabel [T] — rótulo informativo (ADR-0054 itens 7 a 11)
+
+| Campo | Tipo | Regra |
+|---|---|---|
+| TenantId, Label | Guid, enum (lista fixa) | chave `(TenantId, Label)`. `RESTAURANT`: `RESTAURANT`, `MARMITARIA`, `SELF_SERVICE`. `SNACK_BAR`: `BURGER_JOINT`, `PASTEL_SHOP`, `ACAI_SHOP`, `PIZZERIA`, `SNACK_BAR`, `ICE_CREAM_SHOP`, `CAFE`, `BAKERY`, `SKEWER_BAR`, `SUSHI`, `SWEETS_SHOP`, `OTHER`. O texto em pt-BR fica em código |
+| Behavior | enum | o comportamento do rótulo (derivado do `Label`); precisa estar habilitado no tenant |
+| CreatedAt | DateTimeOffset | |
+
+**Invariantes:** pelo menos um rótulo; vários permitidos (Q-302: recomendação de permitir também no restaurante); só de comportamento habilitado (`422` em `labels`). Editáveis pelo `PATCH /tenant` (`settings.manage`), como parte do agregado `Tenant` (`Tenant.Version`). **Nenhuma regra de negócio lê o rótulo.** Tenants migrados: `RESTAURANT` (Q-303).
 
 ### TenantEmployee [T][V][S] — vínculo usuário ↔ estabelecimento
 

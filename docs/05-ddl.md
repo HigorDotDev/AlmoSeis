@@ -1059,10 +1059,12 @@ Cada entidade [S] alterada na transação recebe seu próprio `seq`, porque a PK
 | Troco só em dinheiro; campos da página só em pedido `WEB` (ADR-0044 item 19) | `ck_orders_change_for`, `ck_orders_web_fields` (0004) |
 | Um registro de push por instalação e tenant; um token em um registro só; push nunca cruza tenants (ADR-0049 item 4) | `ux_push_registrations_installation`, `ux_push_registrations_token`, RLS (0006) + `release_push_token`, só da mesma instalação (0007) |
 | Push enviado uma vez por mensagem do outbox e aparelho (ADR-0049 item 8) | PK de `push_deliveries`, `ck_push_deliveries_ticket` (0006) |
+| Comportamento da lista, autor coerente com a origem, nunca removido (ADR-0054 itens 1 a 6) | `tenant_behaviors` (`CHECK`s, PK, `ck_tenant_behaviors_enabled_by`), grants sem `UPDATE`/`DELETE` (0008) |
+| Rótulo da lista fixa, do comportamento certo e só de comportamento habilitado (ADR-0054 itens 8 e 10) | `ck_tenant_labels_label`, `fk_tenant_labels_behavior` (0008) |
 
 ## 5.16 Validação
 
-O script foi validado em 2026-10-27 num PostgreSQL 16 (Docker): os blocos `sql` deste documento aplicados do zero (36 tabelas e 65 políticas na `0001`; 40 e 76 com as alterações até a `0004`; 42 e 80 até a `0005`; 44 e 86 até a `0006`; 44 e 87 até a `0007`) e depois o teste de fumaça [`05-ddl-smoke-test.sql`](05-ddl-smoke-test.sql), que roda como `almoseis_app`/`almoseis_platform` e confere 50 regras (22 da `0001`, 9 da `0003`, 10 da `0004`, 4 da `0005`, 5 da `0006`): isolamento entre dois tenants, plataforma do aparelho compartilhado, login, convite por código, totais, cancelamento, troco, estorno, conciliação, imutabilidade, casos com `NULL` e, desde a `0003`, o pedido da página (sem número, sem produção e sem autor enquanto aguarda aceite; recusa coerente; atendimento só em entrega) e, desde a `0004`, a página de pedidos (endereço para ativar, slug atual único e no formato, troco só em dinheiro, campos da página só em `WEB`, idempotência anônima, slug e token resolvíveis por outro tenant mas nunca gravados por ele, perfil e hash do IP isolados) e, desde a `0005`, a taxa por distância (cotação por distância completa, confirmação do ponto só com ponto, origem da taxa só em entrega, cotação e cache isolados) e, desde a `0006`, o push (token no formato do Expo e único, entrega com ticket ou erro, registro e entregas isolados, só quem comprova o token tira o aparelho do outro tenant; desde a `0007`, só a mesma instalação, pela função, e o token de acompanhamento só pela função de resolução). Toda mudança neste documento deve repetir os dois passos:
+O script foi validado em 2026-10-27 num PostgreSQL 16 (Docker): os blocos `sql` deste documento aplicados do zero (36 tabelas e 65 políticas na `0001`; 40 e 76 com as alterações até a `0004`; 42 e 80 até a `0005`; 44 e 86 até a `0006`; 44 e 87 até a `0007`; 46 e 91 até a `0008`) e depois o teste de fumaça [`05-ddl-smoke-test.sql`](05-ddl-smoke-test.sql), que roda como `almoseis_app`/`almoseis_platform` e confere 59 regras (22 da `0001`, 9 da `0003`, 10 da `0004`, 4 da `0005`, 5 da `0006`, 9 da `0008`): isolamento entre dois tenants, plataforma do aparelho compartilhado, login, convite por código, totais, cancelamento, troco, estorno, conciliação, imutabilidade, casos com `NULL` e, desde a `0003`, o pedido da página (sem número, sem produção e sem autor enquanto aguarda aceite; recusa coerente; atendimento só em entrega) e, desde a `0004`, a página de pedidos (endereço para ativar, slug atual único e no formato, troco só em dinheiro, campos da página só em `WEB`, idempotência anônima, slug e token resolvíveis por outro tenant mas nunca gravados por ele, perfil e hash do IP isolados) e, desde a `0005`, a taxa por distância (cotação por distância completa, confirmação do ponto só com ponto, origem da taxa só em entrega, cotação e cache isolados) e, desde a `0006`, o push (token no formato do Expo e único, entrega com ticket ou erro, registro e entregas isolados, só quem comprova o token tira o aparelho do outro tenant; desde a `0007`, só a mesma instalação, pela função, e o token de acompanhamento só pela função de resolução) e, desde a `0008`, os comportamentos e rótulos (comportamento e origem da lista, rótulo do comportamento certo e só de comportamento habilitado, comportamento nunca alterado nem apagado pela aplicação, rótulo removível, isolamento e acréscimo pela plataforma). Toda mudança neste documento deve repetir os dois passos:
 
 ```text
 docker run -d --name almoseis-ddl-test -e POSTGRES_PASSWORD=test postgres:16
@@ -1662,4 +1664,78 @@ ALTER TABLE geocode_cache_entries FORCE ROW LEVEL SECURITY;
 ALTER TABLE geocode_cache_entries
   ALTER COLUMN latitude TYPE numeric(7,4),
   ALTER COLUMN longitude TYPE numeric(7,4);
+```
+
+### 0008_EstablishmentBehaviors — 2026-11-22 (ADR-0054)
+
+Comportamentos e rótulos do estabelecimento (EP-003 fatia 1, F-301 a F-305). ADR-0054 e ADR-0055 estão `Proposto`.
+
+- **`tenant_behaviors`** [T] (ADR-0054 itens 1 a 6): o **conjunto** de comportamentos habilitados, uma linha por `(tenant_id, behavior)`, sem `id` próprio (como `tenant_employee_roles`). `enabled_by_user_id` é o usuário que habilitou: o proprietário no autocadastro (`origin = 'SIGNUP'`) ou o administrador da plataforma (`'PLATFORM_ADMIN'`, que é um `users` sem vínculo com o tenant, por isso a FK é para `users` e não para `tenant_employees`); nulo só em `'SYSTEM'` (a migração). Remover um comportamento está fora desta fase: nenhum papel tem `UPDATE` nem `DELETE` na tabela. Os **módulos** (`TenantModule`) não são tabela: saem do mapa fixo em código (item 12).
+- **`tenant_labels`** [T] (itens 7 a 11): os rótulos informativos, uma linha por `(tenant_id, label)`. A lista fixa e o comportamento de cada rótulo ficam no `ck_tenant_labels_label`; a FK composta `(tenant_id, behavior) → tenant_behaviors` garante no banco que só valem rótulos de comportamento **habilitado** (item 10; a API devolve o `422` antes). Vários rótulos por tenant são aceitos em qualquer comportamento (recomendação do Q-302; se o dono do produto decidir "um só no restaurante", a regra fica na aplicação). A edição em "Dados do estabelecimento" (`PATCH /tenant`) troca o conjunto, por isso o papel da aplicação tem `DELETE` (a linha não tem valor histórico; a mudança vai para a auditoria). Os rótulos fazem parte do agregado `Tenant`: o `If-Match` do `PATCH /tenant` usa `tenants.version`, sem versão própria.
+- **Ficam na aplicação** (dependem de mais de uma linha): pelo menos um comportamento (o autocadastro grava exatamente um, e nenhuma linha sai depois), pelo menos um rótulo, exatamente um comportamento no cadastro.
+- **`SNACK_BAR`** é ao mesmo tempo código de comportamento e de rótulo ("Lanchonete"), como no ADR-0054 item 8.
+
+**Correção de dados (Q-303):** todo tenant existente recebe `RESTAURANT` com `origin = 'SYSTEM'`, `enabled_at` = instante da migração e sem autor, e o rótulo `RESTAURANT` ("Restaurante"), editável depois pelo proprietário. A RLS de `tenants` é `FORCE`, então o `FORCE` sai só durante a leitura, como na 0004. As tabelas novas recebem a RLS depois do preenchimento.
+
+**Expand/contract (09 §9.4):** só acrescenta. A API anterior não lê as tabelas novas. Um tenant criado pela API anterior na janela do deploy (depois da migration, antes da API nova) fica **sem** comportamento: a API nova precisa tratar o tenant sem linha em `tenant_behaviors` como `RESTAURANT` até uma correção, ou o deploy repete o preenchimento abaixo (é idempotente pelo `NOT EXISTS`).
+
+```sql
+-- Comportamentos habilitados do tenant (ADR-0054 itens 1 a 6)
+CREATE TABLE tenant_behaviors (
+  tenant_id           uuid         NOT NULL REFERENCES tenants (id),
+  behavior            text         NOT NULL CHECK (behavior IN ('RESTAURANT', 'SNACK_BAR')),
+  origin              text         NOT NULL CHECK (origin IN ('SIGNUP', 'PLATFORM_ADMIN', 'SYSTEM')),
+  enabled_at          timestamptz  NOT NULL,
+  enabled_by_user_id  uuid         REFERENCES users (id),
+  PRIMARY KEY (tenant_id, behavior),
+  CONSTRAINT ck_tenant_behaviors_enabled_by CHECK ((origin = 'SYSTEM') = (enabled_by_user_id IS NULL))
+);
+
+-- Rótulos informativos, lista fixa por comportamento (ADR-0054 itens 7 a 11). Nenhuma regra de negócio lê esta tabela.
+CREATE TABLE tenant_labels (
+  tenant_id   uuid         NOT NULL,
+  label       text         NOT NULL,
+  behavior    text         NOT NULL,
+  created_at  timestamptz  NOT NULL,
+  PRIMARY KEY (tenant_id, label),
+  CONSTRAINT ck_tenant_labels_label CHECK (
+       (behavior = 'RESTAURANT' AND label IN ('RESTAURANT', 'MARMITARIA', 'SELF_SERVICE'))
+    OR (behavior = 'SNACK_BAR'  AND label IN ('BURGER_JOINT', 'PASTEL_SHOP', 'ACAI_SHOP', 'PIZZERIA', 'SNACK_BAR',
+                                              'ICE_CREAM_SHOP', 'CAFE', 'BAKERY', 'SKEWER_BAR', 'SUSHI', 'SWEETS_SHOP', 'OTHER'))),
+  -- Só rótulo de comportamento habilitado no tenant (item 10)
+  CONSTRAINT fk_tenant_labels_behavior FOREIGN KEY (tenant_id, behavior) REFERENCES tenant_behaviors (tenant_id, behavior)
+);
+
+-- Tenants existentes: RESTAURANT pela migração e o rótulo inicial "Restaurante" (ADR-0054 item 6, Q-303).
+-- A RLS de tenants é FORCE: sem tenant na sessão, o dono não veria nenhuma linha. O FORCE sai só durante a leitura.
+ALTER TABLE tenants NO FORCE ROW LEVEL SECURITY;
+INSERT INTO tenant_behaviors (tenant_id, behavior, origin, enabled_at)
+  SELECT t.id, 'RESTAURANT', 'SYSTEM', now() FROM tenants t
+   WHERE NOT EXISTS (SELECT 1 FROM tenant_behaviors b WHERE b.tenant_id = t.id);
+INSERT INTO tenant_labels (tenant_id, label, behavior, created_at)
+  SELECT t.id, 'RESTAURANT', 'RESTAURANT', now() FROM tenants t
+   WHERE NOT EXISTS (SELECT 1 FROM tenant_labels l WHERE l.tenant_id = t.id);
+ALTER TABLE tenants FORCE ROW LEVEL SECURITY;
+
+-- RLS: tabelas de tenant
+DO $$
+DECLARE
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['tenant_behaviors', 'tenant_labels'] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format(
+      'CREATE POLICY tenant_isolation ON %I TO almoseis_app '
+      'USING (tenant_id = app_tenant_id()) WITH CHECK (tenant_id = app_tenant_id())', t);
+    EXECUTE format(
+      'CREATE POLICY platform_access ON %I TO almoseis_platform USING (true) WITH CHECK (true)', t);
+  END LOOP;
+END $$;
+
+-- Grants (tabelas novas). Comportamento: só criado (autocadastro pela aplicação, acréscimo pelo admin), nunca alterado
+-- nem removido nesta fase. Rótulos: o PATCH /tenant troca o conjunto (INSERT/DELETE).
+GRANT SELECT ON tenant_behaviors, tenant_labels TO almoseis_app, almoseis_platform;
+GRANT INSERT ON tenant_behaviors TO almoseis_app, almoseis_platform;
+GRANT INSERT, DELETE ON tenant_labels TO almoseis_app;
 ```

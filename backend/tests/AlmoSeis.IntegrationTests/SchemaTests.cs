@@ -26,8 +26,8 @@ public sealed class SchemaTests(PostgresFixture db)
         await using var reader = await command.ExecuteReaderAsync(Ct);
         await reader.ReadAsync(Ct);
 
-        reader.GetInt64(0).ShouldBe(44, "tabelas de 05-ddl.md");
-        reader.GetInt64(1).ShouldBe(87, "políticas de RLS de 05 §5.12 e §5.17");
+        reader.GetInt64(0).ShouldBe(46, "tabelas de 05-ddl.md");
+        reader.GetInt64(1).ShouldBe(91, "políticas de RLS de 05 §5.12 e §5.17");
     }
 
     /// O mesmo teste de fumaça do 05 §5.16, agora sobre o schema criado pela migration.
@@ -50,7 +50,7 @@ public sealed class SchemaTests(PostgresFixture db)
 
         await transaction.RollbackAsync(Ct); // não deixa dados para os outros testes
 
-        notices.Count(n => n.StartsWith("ok:", StringComparison.Ordinal)).ShouldBe(50, string.Join(" | ", notices));
+        notices.Count(n => n.StartsWith("ok:", StringComparison.Ordinal)).ShouldBe(59, string.Join(" | ", notices));
     }
 
     /// 0003 (ADR-0046) num banco com pedidos: o backfill roda com a RLS `FORCE` de `orders` (o banco vazio dos outros
@@ -180,6 +180,72 @@ public sealed class SchemaTests(PostgresFixture db)
             reader.GetString(0).ShouldBe("marmitaria-da-zelia,marmitaria-da-zelia-uberlandia,marmitaria-da-zelia-2,admin-araguari");
             reader.GetInt64(1).ShouldBe(4);
             reader.GetBoolean(2).ShouldBeTrue("o FORCE da RLS de tenants volta depois do preenchimento");
+        }
+
+        NpgsqlConnection.ClearAllPools();
+        await db.ExecuteAsSuperuserAsync($"DROP DATABASE {database} WITH (FORCE)");
+    }
+
+    /// 0008 (ADR-0054, Q-303) num banco com tenants: cada um ganha `RESTAURANT` pela migração (sem autor) e o rótulo
+    /// `RESTAURANT`, lendo `tenants` com a RLS `FORCE`, que volta no fim.
+    [Fact]
+    public async Task Migration_0008_backfills_restaurant_behavior_and_label()
+    {
+        var database = "almoseis_behaviors_" + Guid.NewGuid().ToString("N")[..8];
+        await db.ExecuteAsSuperuserAsync($"CREATE DATABASE {database} OWNER almoseis_migrator");
+        var superuser = new NpgsqlConnectionStringBuilder(db.SuperuserConnectionString) { Database = database }.ConnectionString;
+        var migrator = new NpgsqlConnectionStringBuilder(db.ConnectionStringFor("almoseis_migrator_login", PostgresFixture.MigratorPassword))
+        {
+            Database = database,
+        }.ConnectionString;
+
+        var options = new DbContextOptionsBuilder<AppDbContext>();
+        options.UseAlmoSeisNpgsql(migrator);
+        await using (var context = new AppDbContext(options.Options, new TenantContext(), Array.Empty<IModuleModelConfiguration>()))
+        {
+            await context.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>().MigrateAsync("20261124000000_PublicPageHardening", Ct);
+        }
+
+        await using (var connection = new NpgsqlConnection(superuser))
+        {
+            await connection.OpenAsync(Ct);
+            await using var seed = new NpgsqlCommand(
+                """
+                INSERT INTO users (id, full_name, email, normalized_email, password_hash, security_stamp, concurrency_stamp, created_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000a1', 'Dona A', 'a@x.com', 'A@X.COM', 'h', 's', 'c', now());
+                INSERT INTO tenants (id, name, document_type, document_number, city, state, terms_version, terms_accepted_at, terms_accepted_by_user_id, created_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'Marmitaria A', 'CNPJ', '11222333000181', 'Uberlandia', 'MG', '2026-10', now(), 'aaaaaaaa-0000-0000-0000-0000000000a1', now()),
+                       ('aaaaaaaa-0000-0000-0000-000000000002', 'Restaurante B', 'CNPJ', '11222333000182', 'Uberlandia', 'MG', '2026-10', now(), 'aaaaaaaa-0000-0000-0000-0000000000a1', now());
+                """, connection);
+            await seed.ExecuteNonQueryAsync(Ct);
+        }
+
+        await using (var context = new AppDbContext(options.Options, new TenantContext(), Array.Empty<IModuleModelConfiguration>()))
+        {
+            await context.Database.MigrateAsync(Ct);
+        }
+
+        await using (var connection = new NpgsqlConnection(superuser))
+        {
+            await connection.OpenAsync(Ct);
+            await using var check = new NpgsqlCommand(
+                """
+                SELECT (SELECT count(*) FROM tenant_behaviors
+                         WHERE behavior = 'RESTAURANT' AND origin = 'SYSTEM' AND enabled_by_user_id IS NULL),
+                       (SELECT count(*) FROM tenant_behaviors),
+                       (SELECT count(*) FROM tenant_labels WHERE label = 'RESTAURANT' AND behavior = 'RESTAURANT'),
+                       (SELECT count(*) FROM tenant_labels),
+                       (SELECT relforcerowsecurity FROM pg_class WHERE relname = 'tenants'),
+                       (SELECT bool_and(relforcerowsecurity) FROM pg_class WHERE relname IN ('tenant_behaviors', 'tenant_labels'))
+                """, connection);
+            await using var reader = await check.ExecuteReaderAsync(Ct);
+            await reader.ReadAsync(Ct);
+            reader.GetInt64(0).ShouldBe(2);
+            reader.GetInt64(1).ShouldBe(2, "um comportamento por tenant migrado");
+            reader.GetInt64(2).ShouldBe(2);
+            reader.GetInt64(3).ShouldBe(2, "um rótulo por tenant migrado");
+            reader.GetBoolean(4).ShouldBeTrue("o FORCE da RLS de tenants volta depois do preenchimento");
+            reader.GetBoolean(5).ShouldBeTrue("as tabelas novas nascem com RLS FORCE");
         }
 
         NpgsqlConnection.ClearAllPools();

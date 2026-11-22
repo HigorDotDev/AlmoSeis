@@ -356,6 +356,56 @@ DO $$ BEGIN
   RAISE EXCEPTION 'FALHOU: entrega de push sem ticket nem erro aceita';
 EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: entrega de push com ticket ou erro'; END $$;
 
+-- ===== Comportamentos e rótulos do estabelecimento (ADR-0054, migration 0008) =====
+INSERT INTO tenant_behaviors (tenant_id, behavior, origin, enabled_at, enabled_by_user_id)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'RESTAURANT', 'SIGNUP', now(), 'aaaaaaaa-0000-0000-0000-0000000000a1');
+INSERT INTO tenant_labels (tenant_id, label, behavior, created_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'MARMITARIA', 'RESTAURANT', now()),
+       ('aaaaaaaa-0000-0000-0000-000000000001', 'SELF_SERVICE', 'RESTAURANT', now());
+
+DO $$ BEGIN
+  INSERT INTO tenant_behaviors (tenant_id, behavior, origin, enabled_at, enabled_by_user_id)
+  VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'BAR', 'SIGNUP', now(), 'aaaaaaaa-0000-0000-0000-0000000000a1');
+  RAISE EXCEPTION 'FALHOU: comportamento desconhecido aceito';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: comportamento em RESTAURANT ou SNACK_BAR'; END $$;
+
+DO $$ BEGIN
+  INSERT INTO tenant_behaviors (tenant_id, behavior, origin, enabled_at)
+  VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'SNACK_BAR', 'SIGNUP', now());
+  RAISE EXCEPTION 'FALHOU: comportamento do cadastro sem autor aceito';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: autor do comportamento coerente com a origem'; END $$;
+
+DO $$ BEGIN
+  INSERT INTO tenant_labels (tenant_id, label, behavior, created_at)
+  VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'BURGER_JOINT', 'RESTAURANT', now());
+  RAISE EXCEPTION 'FALHOU: rotulo de lanchonete marcado como restaurante';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: rotulo da lista e do comportamento certo'; END $$;
+
+DO $$ BEGIN
+  INSERT INTO tenant_labels (tenant_id, label, behavior, created_at)
+  VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'BURGER_JOINT', 'SNACK_BAR', now());
+  RAISE EXCEPTION 'FALHOU: rotulo de comportamento nao habilitado aceito';
+EXCEPTION WHEN foreign_key_violation THEN RAISE NOTICE 'ok: rotulo so de comportamento habilitado'; END $$;
+
+DO $$ BEGIN
+  BEGIN
+    DELETE FROM tenant_behaviors WHERE tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001';
+    RAISE EXCEPTION 'FALHOU: aplicacao apagou comportamento';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    UPDATE tenant_behaviors SET behavior = 'SNACK_BAR' WHERE tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001';
+    RAISE EXCEPTION 'FALHOU: aplicacao trocou comportamento';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  RAISE NOTICE 'ok: comportamento nao e alterado nem apagado pela aplicacao';
+END $$;
+
+DO $$ BEGIN
+  DELETE FROM tenant_labels WHERE tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001' AND label = 'SELF_SERVICE';
+  IF NOT FOUND THEN RAISE EXCEPTION 'FALHOU: rotulo nao removido'; END IF;
+  IF (SELECT count(*) FROM tenant_labels) <> 1 THEN RAISE EXCEPTION 'FALHOU: rotulos de A errados'; END IF;
+  RAISE NOTICE 'ok: rotulo removivel na edicao do estabelecimento';
+END $$;
+
 -- ===== Tenant B =====
 SELECT set_config('app.tenant_id', 'bbbbbbbb-0000-0000-0000-000000000002', false),
        set_config('app.user_id',   'bbbbbbbb-0000-0000-0000-0000000000b2', false);
@@ -452,6 +502,20 @@ DO $$ BEGIN
   RAISE EXCEPTION 'FALHOU: tenant B gravou token de A';
 EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'ok: tenant B nao grava token de A'; END $$;
 
+DO $$ BEGIN
+  IF (SELECT count(*) FROM tenant_behaviors) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve comportamentos de A'; END IF;
+  IF (SELECT count(*) FROM tenant_labels) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve rotulos de A'; END IF;
+  DELETE FROM tenant_labels WHERE tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001';
+  IF FOUND THEN RAISE EXCEPTION 'FALHOU: tenant B apagou rotulo de A'; END IF;
+  RAISE NOTICE 'ok: comportamentos e rotulos isolados';
+END $$;
+
+DO $$ BEGIN
+  INSERT INTO tenant_labels (tenant_id, label, behavior, created_at)
+  VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'RESTAURANT', 'RESTAURANT', now());
+  RAISE EXCEPTION 'FALHOU: tenant B gravou rotulo de A';
+EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'ok: tenant B nao grava rotulo de A'; END $$;
+
 -- ===== Login: sem tenant ativo, o usuário A enxerga só os próprios vínculos =====
 SELECT set_config('app.tenant_id', '', false), set_config('app.user_id', 'aaaaaaaa-0000-0000-0000-0000000000a1', false);
 DO $$ BEGIN
@@ -482,6 +546,16 @@ DO $$ BEGIN
     RAISE EXCEPTION 'FALHOU: plataforma nao ve todos os tenants';
   END IF;
   RAISE NOTICE 'ok: plataforma ve todos os tenants';
+END $$;
+
+-- Acréscimo de comportamento pelo admin (ADR-0054 item 5): só a plataforma grava em outro tenant
+DO $$ BEGIN
+  INSERT INTO tenant_behaviors (tenant_id, behavior, origin, enabled_at, enabled_by_user_id)
+  VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'SNACK_BAR', 'PLATFORM_ADMIN', now(), 'bbbbbbbb-0000-0000-0000-0000000000b2');
+  IF (SELECT count(*) FROM tenant_behaviors WHERE tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001') <> 2 THEN
+    RAISE EXCEPTION 'FALHOU: plataforma nao acrescentou comportamento';
+  END IF;
+  RAISE NOTICE 'ok: plataforma acrescenta comportamento';
 END $$;
 
 \echo SMOKE TEST OK
