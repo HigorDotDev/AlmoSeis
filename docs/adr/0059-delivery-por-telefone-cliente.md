@@ -17,11 +17,11 @@ A lanchonete recebe muitos pedidos por telefone, e o dono do produto quer um flu
 
 1. Vale para:
    - a lanchonete, na aba **Delivery** (`A_LA_CARTE`, `DELIVERY` ou `PICKUP`, ADR-0058);
-   - a **marmita por telefone** do restaurante, na aba Marmitas. Como a aba Marmitas também atende o balcão, a forma de distinguir os dois casos está na Q-312.
+   - a **marmita por telefone** do restaurante, na aba Marmitas. Como a aba Marmitas também atende o balcão, a regra é a da Q-312, decidida em 2026-11-22: nome e telefone obrigatórios só na **entrega** de marmita; na retirada, opcionais (balcão).
 2. **Nome e telefone obrigatórios** (telefone brasileiro, normalizado em E.164, como no ADR-0044 item 18).
-3. **Entrega:** endereço obrigatório (rua, número, complemento, bairro, referência) e **taxa de entrega manual**, digitada no pedido. Quem pode digitar e qual valor inicial o campo mostra estão na Q-315, porque hoje uma taxa diferente da padrão exige `orders.delivery-fee.edit` (ADR-0021).
+3. **Entrega:** endereço obrigatório (rua, número, complemento, bairro, referência) e **taxa de entrega manual**, digitada no pedido. O campo começa com a taxa padrão e quem cria o pedido pode alterá-lo só na criação, com auditoria; depois, só com `orders.delivery-fee.edit` (Q-315, decidida em 2026-11-22; ADR-0021).
 4. **Retirada:** sem endereço e sem taxa.
-5. **Forma de pagamento prevista** (`ExpectedPaymentMethod`: dinheiro, Pix ou cartão, dentro das formas habilitadas) e, se dinheiro, **"troco para quanto"** (`ChangeFor`, pelo menos o total), os mesmos campos do pedido do site. Obrigatoriedade na Q-316 (recomendação: obrigatória na entrega, opcional na retirada).
+5. **Forma de pagamento prevista** (`ExpectedPaymentMethod`: dinheiro, Pix ou cartão, dentro das formas habilitadas) e, se dinheiro, **"troco para quanto"** (`ChangeFor`, pelo menos o total), os mesmos campos do pedido do site. Obrigatória na entrega e opcional na retirada (Q-316, decidida em 2026-11-22). Vale também para a marmita.
 6. **Entra direto na cozinha e já ganha número**, sem fila de aceite: é um pedido do app (`Origin = APP`), que nasce `ACCEPTED` (ADR-0046 item 1). Não há `Origin` novo para telefone.
 7. Envio idempotente (ADR-0011): internet caindo no meio do registro não duplica o pedido.
 
@@ -56,7 +56,7 @@ A lanchonete recebe muitos pedidos por telefone, e o dono do produto quer um flu
 
 ## Consequências
 
-- O `CreateOrderCommand` do app ganha `expectedPaymentMethod` e `changeFor` (hoje só no pedido do site), e uma forma de dizer "pedido por telefone" para a marmita (Q-312).
+- O `CreateOrderCommand` do app ganha `expectedPaymentMethod` e `changeFor` (hoje só no pedido do site), sem marca de "pedido por telefone": na marmita, a entrega já exige nome e telefone (Q-312).
 - O `CustomerResolver` ganha o vínculo automático por telefone, sem gravar `CustomerAddress` nesse fluxo.
 - A aba Delivery e o formulário de delivery são novos no app; o formulário de marmita ganha a forma prevista e o "troco para".
 - Testes: telefone conhecido preenche o nome; pedido por telefone cria o cliente uma vez só (dois atendentes com o mesmo telefone ao mesmo tempo não criam dois clientes); a forma prevista Pix não marca pago.

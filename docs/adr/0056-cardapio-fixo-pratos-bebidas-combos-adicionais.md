@@ -35,7 +35,7 @@ O catálogo atual não serve como está: `MarmitaSize` é global com um preço, 
    - `BeverageType [T]`: tipo ("Refrigerante", "Suco"), ordem, ativo;
    - `BeverageSize [T]`: tamanho **com preço** ("Lata 350 ml", "2 L"), ordem, ativo, pausado;
    - `BeverageFlavor [T]`: sabor ou marca ("Coca-Cola", "Guaraná", "Laranja"), **acréscimo de preço opcional** (`ExtraPrice`, padrão `0.00`, nunca negativo), ordem, ativo, pausado.
-10. *Recomendação (Q-305):* o sabor pertence ao **tamanho** (cada tamanho tem a sua lista), seguindo a ordem tipo → tamanho → sabor da decisão. Assim "acabou a Coca lata" não pausa a Coca 2 L, e o acréscimo pode ser diferente por tamanho. O app oferece "copiar sabores de outro tamanho" para não redigitar.
+10. **Decidido em 2026-11-22 (Q-305):** o sabor pertence ao **tamanho** (cada tamanho tem a sua lista), seguindo a ordem tipo → tamanho → sabor da decisão. Assim "acabou a Coca lata" não pausa a Coca 2 L, e o acréscimo pode ser diferente por tamanho. O app oferece "copiar sabores de outro tamanho" para não redigitar.
 11. Um tamanho sem nenhum sabor cadastrado é vendido sem escolha de sabor (por exemplo, "Água 500 ml"). Com sabores, o sabor é obrigatório no pedido.
 12. Preço da bebida = preço do tamanho + acréscimo do sabor. Exemplo: Suco 500 ml R$ 9,00 + sabor "Laranja com acerola" (acréscimo R$ 1,00) = **R$ 10,00**.
 
@@ -74,7 +74,7 @@ O catálogo atual não serve como está: `MarmitaSize` é global com um preço, 
 
     Pausar um componente **pausa os combos que o usam** sem tocar no combo: reativar o componente volta o combo, salvo se o próprio combo foi pausado. O app mostra o motivo ("Pausado: Batata P").
 24. Pausar não altera pedidos já registrados. Incluir um item pausado num pedido → `409 ProductUnavailable` (o mesmo código da marmita).
-25. *Recomendação (Q-306):* pausar e reativar exigem uma permissão nova, `catalog.availability`, dada a quem está no balcão e na cozinha (ADR-0028). Editar preço e estrutura continua com `catalog.manage`.
+25. **Decidido em 2026-11-22 (Q-306):** pausar e reativar exigem uma permissão nova, `catalog.availability`, dada a quem está no balcão e na cozinha (ADR-0028). Editar preço e estrutura continua com `catalog.manage`.
 
 **Exclusão**
 

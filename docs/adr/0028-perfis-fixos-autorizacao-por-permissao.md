@@ -46,5 +46,5 @@ O épico lista 5 perfis de estabelecimento e um item de menu "Perfis e permissõ
 
 - **Módulos não são permissões.** O que o tenant pode fazer vem dos módulos dos comportamentos (ADR-0054). O servidor confere os dois: o módulo (`403 ModuleNotEnabled`) e a permissão (`403 PermissionDenied`). Habilitar comportamento é ação do administrador da plataforma (ADR-0025), sem permissão de tenant.
 - O cadastro do cardápio fixo usa `catalog.manage`. Os rótulos do estabelecimento usam `settings.manage` (`PATCH /tenant`).
-- **Permissão nova proposta, a confirmar (EP-003 Q-306):** `catalog.availability` (pausar e reativar prato, tamanho, sabor, combo e adicional do cardápio fixo), para OWNER, MANAGER, ATTENDANT e KITCHEN. Sem ela, a pausa exigiria `catalog.manage` (só OWNER e MANAGER), e o balcão não conseguiria pausar o que acabou.
+- **Permissão nova, decidida em 2026-11-22 (EP-003 Q-306):** `catalog.availability` (pausar e reativar prato, tamanho, sabor, combo e adicional do cardápio fixo), para OWNER, MANAGER, ATTENDANT e KITCHEN. Sem ela, a pausa exigiria `catalog.manage` (só OWNER e MANAGER), e o balcão não conseguiria pausar o que acabou.
 - A taxa de entrega manual do delivery por telefone pode mudar quem precisa de `orders.delivery-fee.edit` (EP-003 Q-315).

@@ -512,7 +512,7 @@ Complementados (status mantido): 0005, 0017, 0020, 0021, 0024, 0025, 0028, 0038,
 
 # 14. Questões em aberto
 
-Precisam de decisão do usuário antes do código que depende delas ir para produção. **N** = negócio (o usuário decide); **T** = técnica (há recomendação).
+Precisam de decisão do usuário antes do código que depende delas ir para produção. Em 2026-11-22 o usuário decidiu as Q-305, Q-306, Q-312, Q-315 e Q-316 e autorizou seguir; nas demais (exceto Q-301 e Q-310, que ficam sem código), a implementação segue a recomendação até a revisão. **N** = negócio (o usuário decide); **T** = técnica (há recomendação).
 
 | # | Tipo | Questão | Recomendação atual | ADR |
 |---|---|---|---|---|
@@ -520,18 +520,18 @@ Precisam de decisão do usuário antes do código que depende delas ir para prod
 | Q-302 | N | **Restaurante com mais de um rótulo?** A decisão diz "na lanchonete pode marcar mais de um" | Permitir também no restaurante (marmitaria que também é self-service) | 0054 |
 | Q-303 | N | **Rótulo inicial dos tenants migrados** | `RESTAURANT` (Restaurante), editável pelo proprietário | 0054 |
 | Q-304 | N | **Abas com os dois comportamentos** | Marmitas · Salão (PF, Quilo, Comandas) · Delivery · Cozinha · Fechamento | 0055 |
-| Q-305 | N | **Sabor da bebida no tamanho ou no tipo?** No tamanho, "acabou a Coca lata" não pausa a 2 L e o acréscimo varia por tamanho; no tipo, menos cadastro | No tamanho, com "copiar sabores de outro tamanho" | 0056 |
-| Q-306 | N | **Quem pode pausar.** Hoje o "acabou" do cardápio do dia exige `menu.manage` (só OWNER e MANAGER) | Permissão nova `catalog.availability` para OWNER, MANAGER, ATTENDANT e KITCHEN | 0028, 0056 |
+| Q-305 | N | **Sabor da bebida no tamanho ou no tipo?** No tamanho, "acabou a Coca lata" não pausa a 2 L e o acréscimo varia por tamanho; no tipo, menos cadastro | **Decidido em 2026-11-22:** No tamanho, com "copiar sabores de outro tamanho" | 0056 |
+| Q-306 | N | **Quem pode pausar.** Hoje o "acabou" do cardápio do dia exige `menu.manage` (só OWNER e MANAGER) | **Decidido em 2026-11-22:** `catalog.availability` para OWNER, MANAGER, ATTENDANT e KITCHEN | 0028, 0056 |
 | Q-307 | N | **Bebidas do restaurante na página** (`Product` `BEVERAGE` com `IsVisibleOnPage`): ganham preço de site? | Sim: `IsVisibleOnPage` vira o "vende no site" delas, com `SitePrice` | 0057 |
 | Q-308 | N | **Adicionais e acréscimo de sabor no site:** preço próprio? | Mesmo preço do balcão nesta fase | 0057 |
 | Q-309 | N | **Item acrescentado no app a um pedido do site:** qual preço? | Preço de site quando o item vende no site; senão o de balcão | 0057 |
 | Q-310 | N | **Cobrança da plataforma sobre as vendas do site:** percentual, base (com ou sem a taxa de entrega), se vale também para "pagar na entrega/retirada" (sem Asaas), forma de cobrança e relação com o split da Fase 2 | Em aberto por decisão do usuário. Só gravar `PriceList` e mostrar "Vendido pelo site". Relacionada à Q-01 e à Q-04 do EP-002 | 0050, 0057 |
 | Q-311 | N | **Fechamento da lanchonete:** "À la carte" numa linha só ou aberta por salão, entrega e retirada? | Uma linha, com a abertura por atendimento como informação | 0058 |
-| Q-312 | N | **Marmita por telefone × marmita de balcão.** A aba Marmitas atende os dois, e hoje o telefone é opcional. Como saber que é "por telefone" para exigir nome e telefone? | Exigir telefone só na **entrega** de marmita; na retirada, continua opcional (balcão). Forma prevista e "troco para" disponíveis nas duas | 0059 |
+| Q-312 | N | **Marmita por telefone × marmita de balcão.** A aba Marmitas atende os dois, e hoje o telefone é opcional. Como saber que é "por telefone" para exigir nome e telefone? | **Decidido em 2026-11-22:** Telefone e nome obrigatórios só na entrega de marmita | 0059 |
 | Q-313 | N | **Endereços salvos da marmita.** Hoje "salvar cliente" grava o endereço em `CustomerAddress` e o app oferece os endereços salvos. A decisão diz "endereço só no pedido". Remover os endereços salvos da marmita? | Manter os endereços salvos já existentes e o fluxo da marmita; o delivery da lanchonete não grava endereço e oferece "usar o endereço do último pedido" | 0021, 0059 |
 | Q-314 | N | **Telefone cadastrado com outro nome:** atualizar o cadastro? | Não: o pedido guarda o nome digitado; o cadastro muda só pela tela de clientes | 0059 |
-| Q-315 | N | **Taxa de entrega manual:** hoje taxa diferente da padrão exige `orders.delivery-fee.edit` (OWNER e MANAGER). O atendente pode digitar a taxa ao criar o pedido por telefone? O campo começa com a taxa padrão ou vazio? | Campo começa com a taxa padrão e é editável por quem cria o pedido (`orders.create`), só na criação, com auditoria; editar depois continua com `orders.delivery-fee.edit`. Muda o ADR-0021 (`Aceito`) e precisa de confirmação | 0021, 0028, 0059 |
-| Q-316 | N | **Forma prevista obrigatória?** | Obrigatória na entrega; opcional na retirada | 0059 |
+| Q-315 | N | **Taxa de entrega manual:** hoje taxa diferente da padrão exige `orders.delivery-fee.edit` (OWNER e MANAGER). O atendente pode digitar a taxa ao criar o pedido por telefone? O campo começa com a taxa padrão ou vazio? | **Decidido em 2026-11-22:** Começa com a taxa padrão; quem cria edita só na criação, com auditoria; depois, `orders.delivery-fee.edit` (ADR-0021 complementado) | 0021, 0028, 0059 |
+| Q-316 | N | **Forma prevista obrigatória?** | **Decidido em 2026-11-22:** Obrigatória na entrega, opcional na retirada | 0059 |
 | Q-317 | N | **Página com os dois comportamentos:** um pedido do site pode ter marmita e hambúrguer? Um `Order` tem um `OrderType` só | Um tipo por pedido: a página mostra as duas seções, e o carrinho aceita um tipo só por vez | 0044, 0058 |
 | Q-318 | N | **Limites do pedido do site da lanchonete e pedido só de bebidas** (no restaurante: pelo menos 1 marmita, até 20) | Pelo menos 1 prato ou combo; até 20 pratos e combos e 30 linhas | 0044 |
 | Q-319 | N | **Bebidas com os dois comportamentos:** a marmita usa `Product` `BEVERAGE` e a comanda usa as bebidas do cardápio fixo. Duas listas de bebidas no mesmo tenant? | Só aparece quando o admin habilitar o segundo comportamento; nessa ocasião, migrar as bebidas do restaurante para a estrutura nova. Até lá, cada comportamento usa a sua | 0056, 0058 |

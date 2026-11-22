@@ -48,5 +48,5 @@ O épico fala em "pagamento integral" (o que implica pagamento parcial), em rece
 ## Complementado por ADR-0058 e ADR-0059 (2026-11-22)
 
 - A taxa de entrega também se aplica a pedidos `A_LA_CARTE` com `DELIVERY` (ADR-0058).
-- No **delivery por telefone** (ADR-0059), a taxa é digitada no pedido. Hoje uma taxa diferente da padrão exige `orders.delivery-fee.edit` (OWNER e MANAGER). Se o atendente passa a digitá-la, isso muda esta regra e precisa de decisão (EP-003 Q-315) antes de virar código.
+- No **delivery por telefone** (ADR-0059), a taxa é digitada no pedido. Hoje uma taxa diferente da padrão exige `orders.delivery-fee.edit` (OWNER e MANAGER). **Decidido em 2026-11-22 (EP-003 Q-315):** no pedido criado no app (telefone ou balcão), o campo da taxa começa com a taxa padrão e quem cria o pedido (`orders.create`) pode alterá-la **só na criação**, com auditoria do valor digitado. Alterar a taxa depois continua exigindo `orders.delivery-fee.edit`.
 - O `Customer` passa a ser vinculado ou criado **pelo telefone** nesse fluxo, só com nome e telefone, sem endereço salvo. Fiado, pagamento parcial e troco não mudam: o pedido entregue e não pago continua com saldo.
