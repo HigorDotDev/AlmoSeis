@@ -1,15 +1,32 @@
 using AlmoSeis.SharedKernel.Application;
 using AlmoSeis.SharedKernel.Domain;
+using AlmoSeis.SharedKernel.Security;
 
 namespace AlmoSeis.Modules.Identity.Contracts;
 
 // ---------- Estabelecimento e configurações (06 §6.4) ----------
 
 public sealed record TenantDto(
-    Guid Id, int Version, string Name, string DocumentType, string DocumentNumber, string City, string State, string TimeZone, DateTimeOffset CreatedAt)
+    Guid Id,
+    int Version,
+    string Name,
+    string DocumentType,
+    string DocumentNumber,
+    string City,
+    string State,
+    string TimeZone,
+    IReadOnlyList<EstablishmentBehavior> Behaviors,
+    IReadOnlyList<EstablishmentLabel> Labels,
+    DateTimeOffset CreatedAt)
     : IVersionedDto;
 
-public sealed record UpdateTenantRequest(Optional<string> Name, Optional<string> City, Optional<string> State, Optional<string> TimeZone);
+/// `labels` troca o conjunto inteiro (ADR-0054 item 11); o comportamento não muda pelo app (item 4).
+public sealed record UpdateTenantRequest(
+    Optional<string> Name,
+    Optional<string> City,
+    Optional<string> State,
+    Optional<string> TimeZone,
+    Optional<IReadOnlyList<EstablishmentLabel>> Labels);
 
 public sealed record UpdateTenantCommand(UpdateTenantRequest Changes);
 

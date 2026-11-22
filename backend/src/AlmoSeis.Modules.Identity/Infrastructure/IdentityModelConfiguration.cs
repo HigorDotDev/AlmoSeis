@@ -2,6 +2,7 @@ using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Persistence.Entities;
 using AlmoSeis.Infrastructure.Tenancy;
 using AlmoSeis.Modules.Identity.Domain;
+using AlmoSeis.SharedKernel.Security;
 using Microsoft.EntityFrameworkCore;
 
 namespace AlmoSeis.Modules.Identity.Infrastructure;
@@ -34,6 +35,30 @@ internal sealed class IdentityModelConfiguration : IModuleModelConfiguration
             b.Property(x => x.TimeZone).HasMaxLength(64);
             b.Property(x => x.TermsVersion).HasMaxLength(20);
             b.HasOne<User>().WithMany().HasForeignKey(x => x.TermsAcceptedByUserId); // ordena o INSERT: usuário antes
+            b.Ignore(x => x.TenantId);
+            b.Ignore(x => x.EffectiveBehaviors);
+            b.Ignore(x => x.EffectiveLabels);
+            b.Ignore(x => x.Modules);
+            b.HasMany(x => x.Behaviors).WithOne().HasForeignKey(x => x.TenantId);
+            b.Navigation(x => x.Behaviors).UsePropertyAccessMode(PropertyAccessMode.Field);
+            b.HasMany(x => x.Labels).WithOne().HasForeignKey(x => x.TenantId);
+            b.Navigation(x => x.Labels).UsePropertyAccessMode(PropertyAccessMode.Field);
+        });
+
+        // 05 §5.17 0008 (ADR-0054). Chaves compostas, sem id próprio, como tenant_employee_roles.
+        modelBuilder.Entity<TenantBehavior>(b =>
+        {
+            b.ToTable("tenant_behaviors");
+            b.HasKey(x => new { x.TenantId, x.Behavior });
+            b.HasOne<User>().WithMany().HasForeignKey(x => x.EnabledByUserId); // ordena o INSERT no autocadastro
+        });
+
+        modelBuilder.Entity<TenantLabel>(b =>
+        {
+            b.ToTable("tenant_labels");
+            b.HasKey(x => new { x.TenantId, x.Label });
+            // fk_tenant_labels_behavior: o rótulo só entra depois do comportamento (o EF ordena pelos relacionamentos que conhece).
+            b.HasOne<TenantBehavior>().WithMany().HasForeignKey(x => new { x.TenantId, x.Behavior }).OnDelete(DeleteBehavior.NoAction);
         });
 
         modelBuilder.Entity<TenantSettings>(b =>
@@ -96,6 +121,18 @@ internal sealed class IdentityModelConfiguration : IModuleModelConfiguration
         });
 
         modelBuilder.Entity<TenantSyncCounter>().HasOne<Tenant>().WithOne().HasForeignKey<TenantSyncCounter>(x => x.TenantId);
+    }
+}
+
+/// Acréscimo de comportamento pelo admin (Q-324) → `TenantModulesChanged` para todos do tenant (06 §6.14). Sem ator: o
+/// administrador da plataforma não é funcionário do estabelecimento.
+internal sealed class TenantModulesChangedMapper : IntegrationEventMapper<TenantModulesChanged>
+{
+    protected override IEnumerable<IntegrationEnvelope> Map(TenantModulesChanged e)
+    {
+        yield return new IntegrationEnvelope(
+            "TenantModulesChanged", "TENANT", e.TenantId, null,
+            new { behaviors = e.Behaviors.Select(ModuleNames.ToApiName).ToList(), modules = e.Modules.Select(ModuleNames.ToApiName).ToList() });
     }
 }
 

@@ -7,6 +7,7 @@ using AlmoSeis.Modules.Identity.Contracts;
 using AlmoSeis.Modules.Menu.Contracts;
 using AlmoSeis.SharedKernel.Application;
 using AlmoSeis.SharedKernel.Errors;
+using AlmoSeis.SharedKernel.Security;
 using Microsoft.EntityFrameworkCore;
 using MenuAggregate = AlmoSeis.Modules.Menu.Domain.Menu;
 using MenuItemSpecs = AlmoSeis.Modules.Menu.Domain.MenuItemSpecs;
@@ -129,13 +130,19 @@ internal sealed class GetMenuQueryHandler(AppDbContext db, MenuDtoBuilder dtos) 
     }
 }
 
-internal sealed class ListMenusQueryHandler(AppDbContext db, IEmployeeDirectory employees)
+/// Sem o módulo `DAILY_MENU`, lista vazia (ADR-0054 item 14).
+internal sealed class ListMenusQueryHandler(AppDbContext db, IEmployeeDirectory employees, ITenantModules modules)
     : IQueryHandler<ListMenusQuery, ItemsDto<MenuSummaryDto>>
 {
     private const int MaxItems = 100;
 
     public async Task<ItemsDto<MenuSummaryDto>> HandleAsync(ListMenusQuery query, CancellationToken cancellationToken)
     {
+        if (!await modules.HasAsync(TenantModule.DailyMenu, cancellationToken))
+        {
+            return new ItemsDto<MenuSummaryDto>([]);
+        }
+
         var menus = db.Set<MenuAggregate>().AsNoTracking();
         if (query.MenuType is { } menuType)
         {
@@ -301,16 +308,23 @@ internal sealed class GetCurrentMenuQueryHandler(AppDbContext db, IOpenBusinessD
 }
 
 /// ADR-0038 §3–4: clona o modelo do dia da semana como DAILY quando a data ainda não tem cardápio.
-/// Auditado com origem SYSTEM e `createdBy` nulo. Produto desativado não entra (RN-002.6).
+/// Auditado com origem SYSTEM e `createdBy` nulo. Produto desativado não entra (RN-002.6). Só com o módulo `DAILY_MENU`
+/// (ADR-0054 item 18): numa lanchonete, abrir o expediente não cria cardápio do dia.
 internal sealed class MenuMaterializer(
     AppDbContext db,
     IIdGenerator ids,
     ICatalogReader catalog,
+    ITenantModules modules,
     IAuditWriter audit,
     TimeProvider time) : IMenuMaterializer
 {
     public async Task<IReadOnlyList<MaterializedMenuDto>> MaterializeForAsync(DateOnly businessDate, CancellationToken cancellationToken)
     {
+        if (!await modules.HasAsync(TenantModule.DailyMenu, cancellationToken))
+        {
+            return [];
+        }
+
         var dayOfWeek = MenuRules.IsoDayOfWeek(businessDate);
         var existingDaily = await db.Set<MenuAggregate>().AsNoTracking()
             .Where(m => m.Kind == MenuKind.Daily && m.Date == businessDate)

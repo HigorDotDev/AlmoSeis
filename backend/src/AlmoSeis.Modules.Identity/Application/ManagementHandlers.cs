@@ -27,15 +27,17 @@ public sealed class InvitationOptions
 internal sealed class GetTenantQueryHandler(AppDbContext db, ITenantContext tenant) : IQueryHandler<GetTenantQuery, TenantDto>
 {
     public async Task<TenantDto> HandleAsync(GetTenantQuery query, CancellationToken cancellationToken) =>
-        ManagementDtos.Tenant(await db.Set<Tenant>().AsNoTracking().SingleAsync(t => t.Id == tenant.TenantId, cancellationToken));
+        ManagementDtos.Tenant(await db.Set<Tenant>().AsNoTracking().Include(t => t.Behaviors).Include(t => t.Labels)
+            .SingleAsync(t => t.Id == tenant.TenantId, cancellationToken));
 }
 
-internal sealed class UpdateTenantHandler(AppDbContext db, ITenantContext tenant, IConcurrencyContext concurrency, IAuditWriter audit)
+/// PATCH /tenant [M]: dados cadastrais e rótulos (ADR-0054 item 11). O comportamento não muda pelo app (item 4).
+internal sealed class UpdateTenantHandler(AppDbContext db, ITenantContext tenant, IConcurrencyContext concurrency, IAuditWriter audit, TimeProvider time)
     : ICommandHandler<UpdateTenantCommand, TenantDto>
 {
     public async Task<TenantDto> HandleAsync(UpdateTenantCommand command, CancellationToken cancellationToken)
     {
-        var t = await db.Set<Tenant>().SingleAsync(x => x.Id == tenant.TenantId, cancellationToken);
+        var t = await db.Set<Tenant>().Include(x => x.Behaviors).Include(x => x.Labels).SingleAsync(x => x.Id == tenant.TenantId, cancellationToken);
         t.EnsureVersion(concurrency.ExpectedVersion);
 
         var c = command.Changes;
@@ -51,8 +53,16 @@ internal sealed class UpdateTenantHandler(AppDbContext db, ITenantContext tenant
             audit.Add("TenantUpdated", "TENANT", t.Id, before: before, after: new { t.Name, t.City, t.State, t.TimeZone });
         }
 
+        var labelsBefore = Labels(t);
+        if (c.Labels.HasValue && t.ReplaceLabels(c.Labels.Value ?? [], time.GetUtcNow()))
+        {
+            audit.Add("TenantLabelsChanged", "TENANT", t.Id, before: new { labels = labelsBefore }, after: new { labels = Labels(t) });
+        }
+
         return ManagementDtos.Tenant(t);
     }
+
+    private static List<string> Labels(Tenant t) => t.EffectiveLabels.Select(EstablishmentLabels.ToApiName).ToList();
 }
 
 internal sealed class GetTenantSettingsQueryHandler(AppDbContext db, ITenantContext tenant) : IQueryHandler<GetTenantSettingsQuery, TenantSettingsDto>
@@ -62,7 +72,7 @@ internal sealed class GetTenantSettingsQueryHandler(AppDbContext db, ITenantCont
 }
 
 internal sealed class UpdateTenantSettingsHandler(
-    AppDbContext db, ITenantContext tenant, IConcurrencyContext concurrency, IAuditWriter audit, TimeProvider time)
+    AppDbContext db, ITenantContext tenant, IConcurrencyContext concurrency, ITenantModules modules, IAuditWriter audit, TimeProvider time)
     : ICommandHandler<UpdateTenantSettingsCommand, TenantSettingsDto>
 {
     public async Task<TenantSettingsDto> HandleAsync(UpdateTenantSettingsCommand command, CancellationToken cancellationToken)
@@ -71,6 +81,12 @@ internal sealed class UpdateTenantSettingsHandler(
         s.EnsureVersion(concurrency.ExpectedVersion);
 
         var c = command.Changes;
+
+        // Preço do quilo é cadastro do módulo KILO (ADR-0054 item 14). Reenviar o valor atual não é edição.
+        if (c.KiloPricePerKg.HasValue && c.KiloPricePerKg.Value != s.KiloPricePerKg)
+        {
+            await modules.EnsureAsync(TenantModule.Kilo, cancellationToken);
+        }
         var before = Audit(s);
         if (s.Update(
                 c.KiloPricePerKg.GetValueOr(s.KiloPricePerKg),
@@ -586,7 +602,7 @@ internal sealed class InvitationWriter(AppDbContext db, ITenantContext tenant, I
 internal sealed class ManagementDtos(AppDbContext db, IEmployeeDirectory employees, IOptions<InvitationOptions> options, TimeProvider time)
 {
     public static TenantDto Tenant(Tenant t) =>
-        new(t.Id, t.Version, t.Name, t.DocumentType, t.DocumentNumber, t.City, t.State, t.TimeZone, t.CreatedAt);
+        new(t.Id, t.Version, t.Name, t.DocumentType, t.DocumentNumber, t.City, t.State, t.TimeZone, t.EffectiveBehaviors, t.EffectiveLabels, t.CreatedAt);
 
     public static TenantSettingsDto Settings(TenantSettings s) =>
         new(s.Version, s.KiloPricePerKg, s.DefaultDeliveryFee, s.EnabledPaymentMethods, s.SharedDeviceIdleSeconds);

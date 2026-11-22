@@ -236,6 +236,15 @@ internal sealed class OrderNumberGenerator(AppDbContext db, ITenantContext tenan
 
 internal static class OrderRules
 {
+    /// Módulo de cada modalidade (ADR-0054 item 12). A pergunta é sempre pelo módulo, nunca pelo comportamento.
+    public static TenantModule ModuleOf(OrderType orderType) => orderType switch
+    {
+        OrderType.Marmita => TenantModule.Marmita,
+        OrderType.Pf => TenantModule.Pf,
+        OrderType.Kilo => TenantModule.Kilo,
+        _ => throw new ArgumentOutOfRangeException(nameof(orderType), orderType, null),
+    };
+
     public static async Task<Order> LoadAsync(AppDbContext db, Guid orderId, CancellationToken cancellationToken) =>
         await db.Set<Order>()
             .Include(o => o.Items).ThenInclude(i => i.Components)

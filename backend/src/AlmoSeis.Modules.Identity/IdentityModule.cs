@@ -4,6 +4,7 @@ using AlmoSeis.Modules.Identity.Contracts;
 using AlmoSeis.Modules.Identity.Domain;
 using AlmoSeis.Modules.Identity.Infrastructure;
 using AlmoSeis.SharedKernel.Application;
+using AlmoSeis.SharedKernel.Security;
 using FluentValidation;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,6 +23,7 @@ public static class IdentityModule
         services.AddScoped<ITenantCalendar, TenantCalendar>();
         services.AddScoped<IPlatformAdminCheck, PlatformAdminCheck>();
         services.AddScoped<ITenantSettingsReader, TenantSettingsReader>();
+        services.AddScoped<ITenantModules, TenantModules>();
         services.AddOptions<InvitationOptions>().BindConfiguration(InvitationOptions.Section);
         services.AddScoped<InvitationLookup>();
         services.AddScoped<InvitationWriter>();

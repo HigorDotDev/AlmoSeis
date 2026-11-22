@@ -55,6 +55,16 @@ internal sealed class SignUpCommandValidator : AbstractValidator<SignUpCommand>
         RuleFor(x => x.Tenant.TimeZone)
             .Must(tz => tz is null || TimeZoneInfo.TryFindSystemTimeZoneById(tz, out _))
             .WithMessage("Fuso horário IANA inválido.");
+
+        // ADR-0054 itens 3 e 9: exatamente um comportamento, sem padrão, e pelo menos um rótulo dele.
+        RuleFor(x => x.Tenant.Behavior).NotNull()
+            .WithMessage("Escolha o tipo do estabelecimento: restaurante ou lanchonete.");
+        RuleFor(x => x.Tenant.Labels).NotEmpty()
+            .WithMessage("Marque pelo menos um rótulo do estabelecimento.");
+        RuleFor(x => x.Tenant.Labels)
+            .Must((cmd, labels) => labels!.All(l => EstablishmentLabels.BehaviorOf(l) == cmd.Tenant.Behavior))
+            .When(x => x.Tenant.Behavior is not null && x.Tenant.Labels is { Count: > 0 })
+            .WithMessage("Marque só rótulos do tipo de estabelecimento escolhido.");
         RuleFor(x => x.AcceptedTermsVersion).NotEmpty().MaximumLength(20);
         RuleFor(x => x.InstallationId).InstallationId();
     }

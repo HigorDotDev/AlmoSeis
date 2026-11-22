@@ -25,6 +25,7 @@ internal sealed class CreateOrderHandler(
     IBusinessDayReader businessDays,
     ITenantSettingsReader settings,
     IPermissionChecker permissions,
+    ITenantModules modules,
     OrderItemResolver items,
     CustomerResolver customers,
     OrderNumberGenerator numbers,
@@ -34,6 +35,8 @@ internal sealed class CreateOrderHandler(
 {
     public async Task<OrderDto> HandleAsync(CreateOrderCommand command, CancellationToken cancellationToken)
     {
+        // Modalidade de um módulo ausente → 403 ModuleNotEnabled, antes do expediente (ADR-0054 item 14).
+        await modules.EnsureAsync(OrderRules.ModuleOf(command.OrderType), cancellationToken);
         var day = await businessDays.GetOpenAsync(cancellationToken) ?? throw new BusinessException(ErrorCodes.BusinessDayRequired);
         var config = await settings.GetAsync(cancellationToken);
 

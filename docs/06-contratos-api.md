@@ -147,6 +147,7 @@ Conflito de versão (`409`) traz o estado atual em `current` (ADR-0034):
 | 429 | `TooManyPendingOrders` | o telefone já tem 2 pedidos aguardando aceite no restaurante, ou o IP já tem 3 (ADR-0045 item 13) |
 | 410 | `TrackingExpired` | acompanhamento com mais de 7 dias (ADR-0047 item 4) |
 | 409 | `PushTokenInUse` | `PUT /devices/push-token` com um token já registrado por **outra instalação** em outro estabelecimento (05 §5.17 0007, ADR-0049 item 4). O registro do outro aparelho não é tocado. O app não mostra erro: tenta de novo na próxima abertura (o registro antigo some no logout dele ou em 30 dias sem uso) |
+| 403 | `ModuleNotEnabled` | operação de um módulo que o estabelecimento não tem (ADR-0054 item 14; mapa em §6.3 "Comportamentos, rótulos e módulos"). Extensão `module` (`MARMITA`, `PF`, `KILO`, `DAILY_MENU`…). Vem depois do `401`/`403 PermissionDenied` e **antes** de qualquer outro erro da rota (validação do corpo, `If-Match`, `Idempotency-Key`, assinatura, expediente). Leitura de cadastro de módulo ausente não dá erro: devolve lista vazia |
 
 ---
 
@@ -175,6 +176,8 @@ Cada endpoint indica a permissão exigida. Matriz em código (`Permissions.cs` /
 | `subscription.view` | ✓ | | | | |
 
 Leitura de produtos, tamanhos, cardápios e clientes exige só `orders.view`.
+
+As permissões dizem **quem** pode; os **módulos** do estabelecimento (ADR-0054, §6.3) dizem **o que** existe nele. Uma rota de módulo ausente responde `403 ModuleNotEnabled` mesmo para o `OWNER`. Não há permissão nova na fatia 1 do EP-003: os rótulos são editados com `settings.manage` (`PATCH /tenant`), e o acréscimo de comportamento é rota de plataforma (§6.15).
 
 `GET /roles` (autenticado, qualquer perfil) → `200`:
 
@@ -212,7 +215,14 @@ Com `X-App-Platform: WEB`, `refreshToken` vem `null` e o refresh vai no cookie `
 ```json
 {
   "user": { "id": "0192d6a0-0000-7000-8000-000000000011", "fullName": "Ana Souza", "email": "ana@example.com", "phoneNumber": "+5534999990001" },
-  "tenant": { "id": "0192d6a0-0000-7000-8000-000000000001", "name": "Marmitaria da Ana", "timeZone": "America/Sao_Paulo" },
+  "tenant": {
+    "id": "0192d6a0-0000-7000-8000-000000000001",
+    "name": "Marmitaria da Ana",
+    "timeZone": "America/Sao_Paulo",
+    "behaviors": ["RESTAURANT"],
+    "labels": ["MARMITARIA"],
+    "modules": ["MARMITA", "PF", "KILO", "DAILY_MENU"]
+  },
   "employee": { "id": "0192d6a0-0000-7000-8000-000000000301", "displayName": "Ana", "roles": ["OWNER"], "hasPin": true },
   "permissions": ["orders.view", "orders.create", "orders.edit", "orders.cancel", "orders.delivery-fee.edit", "orders.accept", "orders.fulfillment.update", "production.view", "production.update", "payments.register", "payments.reverse", "cash.open", "cash.movement", "closing.view", "closing.finalize", "closing.adjust", "menu.manage", "catalog.manage", "customers.manage", "employees.manage", "devices.manage", "settings.manage", "audit.view", "subscription.view"],
   "memberships": [
@@ -225,6 +235,63 @@ Com `X-App-Platform: WEB`, `refreshToken` vem `null` e o refresh vai no cookie `
 ```
 
 Para quem não tem `subscription.view`, os campos de `subscription` vêm `null`, exceto `canWrite`, que todos recebem para saber se o app está em modo somente leitura: `{ "status": null, "trialEndsAt": null, "daysLeft": null, "canWrite": true }`.
+
+#### Comportamentos, rótulos e módulos (EP-003, ADR-0054, ADR-0055)
+
+`tenant.behaviors`, `tenant.labels` e `tenant.modules` vêm em todo `Me` (autocadastro, login, login por PIN, troca de tenant, aceite de convite e `GET /auth/me`), para qualquer perfil. As três listas vêm sempre na ordem das tabelas abaixo.
+
+- **`behaviors`**: o conjunto de comportamentos habilitados (`RESTAURANT`, `SNACK_BAR`). Pelo menos um. Escolhido no cadastro (exatamente um) e fixo depois; só o administrador da plataforma acrescenta (§6.15). O app nunca oferece troca nem contratação, nem mostra preço (ADR-0017).
+- **`modules`**: o que o estabelecimento pode fazer, derivado dos comportamentos pelo mapa fixo abaixo (união dos módulos de cada comportamento). **O app monta as abas e o menu lateral só por `modules` e pelas permissões** (ADR-0055), nunca por `behaviors` ou `labels`. O servidor impõe os mesmos módulos (`403 ModuleNotEnabled`).
+- **`labels`**: rótulos só informativos (perfil, app e, no futuro, marketplace). Não mudam nenhuma aba nem regra.
+
+| Módulo | O que libera | `RESTAURANT` | `SNACK_BAR` |
+|---|---|:-:|:-:|
+| `MARMITA` | pedidos `MARMITA`, tamanhos de marmita (`/marmita-sizes`), entrega da aba Marmitas | ✓ | |
+| `PF` | pedidos `PF`, cardápio de PF | ✓ | |
+| `KILO` | pedidos `KILO`, preço do quilo (`kiloPricePerKg` de `/tenant/settings`) | ✓ | |
+| `DAILY_MENU` | cardápio do dia e modelo semanal (`/menus`), clonagem na abertura do expediente | ✓ | |
+| `A_LA_CARTE` | comandas à la carte no salão (fatia 3) | | ✓ |
+| `DELIVERY` | aba Delivery (fatia 4) | | ✓ |
+| `FIXED_MENU` | cardápio fixo (fatia 2) | | ✓ |
+
+Rótulos (lista fixa, sem texto livre; o texto em pt-BR fica no app, **não há rota de leitura da lista**, ADR-0054 item 8):
+
+| Comportamento | Código | Texto |
+|---|---|---|
+| `RESTAURANT` | `RESTAURANT` | Restaurante |
+| `RESTAURANT` | `MARMITARIA` | Marmitaria |
+| `RESTAURANT` | `SELF_SERVICE` | Self-service/quilo |
+| `SNACK_BAR` | `BURGER_JOINT` | Hamburgueria |
+| `SNACK_BAR` | `PASTEL_SHOP` | Pastelaria |
+| `SNACK_BAR` | `ACAI_SHOP` | Açaiteria |
+| `SNACK_BAR` | `PIZZERIA` | Pizzaria |
+| `SNACK_BAR` | `SNACK_BAR` | Lanchonete |
+| `SNACK_BAR` | `ICE_CREAM_SHOP` | Sorveteria |
+| `SNACK_BAR` | `CAFE` | Cafeteria |
+| `SNACK_BAR` | `BAKERY` | Padaria |
+| `SNACK_BAR` | `SKEWER_BAR` | Espetaria |
+| `SNACK_BAR` | `SUSHI` | Sushi/temaki |
+| `SNACK_BAR` | `SWEETS_SHOP` | Doceria |
+| `SNACK_BAR` | `OTHER` | Outro |
+
+Uma lanchonete (hamburgueria e açaiteria):
+
+```json
+"tenant": {
+  "id": "0192d6a0-0000-7000-8000-000000000777",
+  "name": "Lanches do Beto",
+  "timeZone": "America/Sao_Paulo",
+  "behaviors": ["SNACK_BAR"],
+  "labels": ["BURGER_JOINT", "ACAI_SHOP"],
+  "modules": ["A_LA_CARTE", "DELIVERY", "FIXED_MENU"]
+}
+```
+
+Com os dois comportamentos (só depois do acréscimo pelo admin): `"behaviors": ["RESTAURANT", "SNACK_BAR"]`, `"modules": ["MARMITA", "PF", "KILO", "DAILY_MENU", "A_LA_CARTE", "DELIVERY", "FIXED_MENU"]`.
+
+Quando os módulos mudam (acréscimo pelo admin), o app recebe `TenantModulesChanged` (§6.14) e a entrada `TENANT` no feed (§6.12), recarrega o `GET /auth/me` e remonta as abas. Até recarregar, o servidor já impõe os módulos novos.
+
+Tenants que existiam antes do EP-003 são `RESTAURANT` com o rótulo `RESTAURANT` (migração 0008, Q-303). Um tenant sem nenhum comportamento gravado (criado pela API anterior durante o deploy) é tratado e respondido como esse mesmo caso.
 
 ### `POST /auth/signup` — público
 
@@ -245,7 +312,9 @@ Cria o usuário (ou usa um existente), o estabelecimento, a assinatura `TRIALING
     "documentNumber": "11222333000181",
     "city": "Uberlândia",
     "state": "MG",
-    "timeZone": "America/Sao_Paulo"
+    "timeZone": "America/Sao_Paulo",
+    "behavior": "RESTAURANT",
+    "labels": ["MARMITARIA"]
   },
   "acceptedTermsVersion": "2026-10",
   "installationId": "inst_8f3a2c1e9b7d4f60"
@@ -258,7 +327,24 @@ Exatamente um entre `newAccount` e `existingAccount` (`{ "login": "ana@example.c
 { "tokens": { "...": "Tokens" }, "me": { "...": "Me" } }
 ```
 
-Erros: `409 EmailAlreadyRegistered`, `409 PhoneAlreadyRegistered`, `409 TrialAlreadyClaimed`, `401 InvalidCredentials` (existingAccount), `422 ValidationFailed`.
+- `tenant.behavior` (ADR-0054 item 3): **um** comportamento, `RESTAURANT` ou `SNACK_BAR`, obrigatório e sem padrão. A tela de cadastro não pré-marca nenhum.
+- `tenant.labels` (itens 8 e 9): um ou mais rótulos da lista fixa (§6.3 "Comportamentos, rótulos e módulos"), **todos do comportamento escolhido**, inclusive no restaurante (Q-302). Repetidos contam uma vez.
+- O `me` da resposta já traz `behaviors`, `labels` e `modules`.
+
+Erros: `409 EmailAlreadyRegistered`, `409 PhoneAlreadyRegistered`, `409 TrialAlreadyClaimed`, `401 InvalidCredentials` (existingAccount), `422 ValidationFailed` (inclusive `errors["tenant.behavior"]` ausente e `errors["tenant.labels"]` vazio ou com rótulo de outro comportamento), `400 MalformedRequest` (código de comportamento ou de rótulo fora da lista).
+
+```json
+{
+  "type": "urn:almoseis:error:validation-failed",
+  "title": "Dados inválidos.",
+  "status": 422,
+  "errorCode": "ValidationFailed",
+  "traceId": "00-2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e-2b3c4d5e6f7a8b9c-01",
+  "errors": { "tenant.labels": ["Marque só rótulos do tipo de estabelecimento escolhido."] }
+}
+```
+
+O app anterior ao EP-003 não envia `behavior` e recebe `422`: a versão mínima do app sobe antes do primeiro cadastro de lanchonete (Q-323, ADR-0035).
 
 ### `POST /auth/login` — público
 
@@ -658,17 +744,25 @@ A página pública do EP-002 (`/public/*`) tem **outra** política, sem credenci
   "city": "Uberlândia",
   "state": "MG",
   "timeZone": "America/Sao_Paulo",
+  "behaviors": ["RESTAURANT"],
+  "labels": ["MARMITARIA"],
   "createdAt": "2026-10-27T09:30:00Z"
 }
 ```
 
+`behaviors` e `labels` como no `Me` (§6.3). Os `modules` ficam só no `Me`.
+
 ### `PATCH /tenant` — `settings.manage` [M]
 
 ```json
-{ "name": "Marmitaria e Restaurante da Ana", "city": "Uberlândia", "state": "MG", "timeZone": "America/Sao_Paulo" }
+{ "name": "Marmitaria e Restaurante da Ana", "city": "Uberlândia", "state": "MG", "timeZone": "America/Sao_Paulo", "labels": ["MARMITARIA", "SELF_SERVICE"] }
 ```
 
-→ `200` com o tenant. `documentType`/`documentNumber` não são alteráveis pelo app.
+→ `200` com o tenant. `documentType`/`documentNumber` não são alteráveis pelo app. Campos ausentes não mudam.
+
+- `labels` ("Dados do estabelecimento", ADR-0054 item 11) **troca o conjunto inteiro**: pelo menos um, todos de comportamentos habilitados (`behaviors`). Vazio, `null` ou rótulo de comportamento não habilitado → `422` em `errors.labels`; código fora da lista → `400 MalformedRequest`. O mesmo conjunto não muda a versão.
+- O comportamento **não** é alterável pelo app (não existe `behaviors` no corpo; o campo é ignorado).
+- Os rótulos são parte do estabelecimento: o `If-Match` é a `version` do tenant, e a troca sobe essa versão, grava a auditoria `TenantLabelsChanged` e a entrada `TENANT` no feed (§6.12). Rótulo não muda módulo nem aba.
 
 ### `GET /tenant/settings` — `orders.view`
 
@@ -688,7 +782,7 @@ A página pública do EP-002 (`/public/*`) tem **outra** política, sem credenci
 { "kiloPricePerKg": "62.90", "defaultDeliveryFee": "6.00", "enabledPaymentMethods": ["CASH", "PIX"], "sharedDeviceIdleSeconds": 180 }
 ```
 
-Campos ausentes não mudam. → `200` com as configurações. Mudar o preço do quilo não afeta pesagens já registradas (RN-006.3).
+Campos ausentes não mudam. → `200` com as configurações. Mudar o preço do quilo não afeta pesagens já registradas (RN-006.3). Mudar `kiloPricePerKg` exige o módulo `KILO` (`403 ModuleNotEnabled`); reenviar o valor atual não conta como mudança.
 
 ### `GET /subscription` — `subscription.view`
 
@@ -882,6 +976,8 @@ Tipos aceitos: `image/jpeg`, `image/png`, `image/webp`, até 2 MB. Depois do `PU
 | `POST /marmita-sizes` | `catalog.manage` | `{ "name": "G", "price": "25.00", "sortOrder": 3 }` → `201 MarmitaSize` |
 | `PATCH /marmita-sizes/{id}` [M] | `catalog.manage` | `{ "price": "26.00", "isActive": true }` → `200 MarmitaSize` |
 
+Módulo `MARMITA` (ADR-0054): sem ele, `POST` e `PATCH` → `403 ModuleNotEnabled` (`"module": "MARMITA"`), e o `GET` → `200 { "items": [] }`.
+
 ---
 
 ## 6.6 Expediente (ADR-0019, ADR-0038, ADR-0039)
@@ -924,6 +1020,8 @@ Tipos aceitos: `image/jpeg`, `image/png`, `image/webp`, até 2 MB. Depois do `PU
   ]
 }
 ```
+
+`materializedMenus` só existe com o módulo `DAILY_MENU` (ADR-0054 item 18). Numa lanchonete, a abertura não cria cardápio do dia e a lista vem vazia (`[]`). O expediente em si (saldo inicial, caixa único, numeração) é igual para todos os comportamentos.
 
 Erros:
 - `409 BusinessDayAlreadyOpen`, com o expediente aberto em `current`;
@@ -1021,6 +1119,8 @@ Erros:
 ```
 
 Para gerar um modelo semanal a partir de um dia: `{ "kind": "WEEKLY_TEMPLATE", "date": null, "dayOfWeek": 3 }`.
+
+Módulo `DAILY_MENU` (ADR-0054): sem ele, `POST /menus`, `PUT /menus/{id}/items`, `PATCH /menus/{id}/items/{itemId}` e `POST /menus/{id}/clone` → `403 ModuleNotEnabled` (`"module": "DAILY_MENU"`), e `GET /menus` → `200 { "items": [] }`.
 
 ---
 
@@ -1477,7 +1577,19 @@ Quilo:
 
 → `201`, `Location: /api/v1/orders/{id}`, `ETag: "1"`, corpo `Order`.
 
-Erros: `409 BusinessDayRequired`, `404 MenuNotFound`, `422 ProductUnavailable`, `422 KiloPriceNotConfigured`, `422 ValidationFailed` (pedido vazio, `itemKind` incompatível com `orderType`, endereço faltando em entrega).
+Erros: `403 ModuleNotEnabled` (`orderType` de um módulo que o estabelecimento não tem: `MARMITA` → `MARMITA`, `PF` → `PF`, `KILO` → `KILO`; vem antes do expediente), `409 BusinessDayRequired`, `404 MenuNotFound`, `422 ProductUnavailable`, `422 KiloPriceNotConfigured`, `422 ValidationFailed` (pedido vazio, `itemKind` incompatível com `orderType`, endereço faltando em entrega).
+
+```json
+{
+  "type": "urn:almoseis:error:module-not-enabled",
+  "title": "Este recurso não está habilitado no estabelecimento.",
+  "status": 403,
+  "instance": "/api/v1/orders",
+  "errorCode": "ModuleNotEnabled",
+  "traceId": "00-3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f-3c4d5e6f7a8b9c0d-01",
+  "module": "PF"
+}
+```
 
 O pedido criado no app nasce `acceptanceStatus: "ACCEPTED"`, com número, `acceptedAt = createdAt` e, em entrega ou retirada, `fulfillmentStatus: "PENDING"` (ADR-0046 item 1).
 
@@ -2044,6 +2156,7 @@ O fechamento original **não muda** (ADR-0014). O ajuste aparece em `adjustments
 
 | `entityType` | Como o app atualiza |
 |---|---|
+| `TENANT` | `GET /auth/me` (nome, comportamentos, rótulos e módulos; ADR-0054 item 15) e, na tela "Dados do estabelecimento", `GET /tenant`. Todos os perfis recebem |
 | `TENANT_SETTINGS` | `GET /tenant/settings` |
 | `EMPLOYEE` | `GET /auth/me` (se for o próprio) / `GET /employees/{id}` |
 | `PRODUCT` | `GET /products/{id}` |
@@ -2156,6 +2269,7 @@ Uma repetição de `POST /orders` com a mesma chave e o mesmo corpo devolve **a 
 | `ClosingFinalized` | todos do tenant | `businessDate`, `dailyClosingId` |
 | `AccessRevoked` | `employee:{id}` | `reason` (`DEACTIVATED`/`ROLES_CHANGED`/`DEVICE_REVOKED`): o app renova o token ou sai |
 | `SubscriptionStatusChanged` | todos do tenant | `status`, `canWrite` |
+| `TenantModulesChanged` | todos do tenant | `behaviors`, `modules` (o admin acrescentou um comportamento, ADR-0054 item 15). `entityType: "TENANT"`, `actorEmployeeId: null`. O app recarrega o `GET /auth/me` e remonta as abas (ADR-0055) |
 
 O evento **não** é estado. O app busca o recurso pela API (§6.12). Quando `actorEmployeeId` é o próprio usuário, o app ignora o alerta (RN-008.6). Um salto de `seq` dispara `GET /sync/changes`.
 
@@ -2174,6 +2288,7 @@ O pedido do site também grava no outbox a mensagem interna `WebOrderPushRequest
 | `POST /admin/tenants/{id}/extend-trial` | `{ "days": 7, "reason": "Instalação atrasada no piloto" }` → `200 Subscription` |
 | `POST /admin/tenants/{id}/suspend` | `{ "reason": "Fraude confirmada" }` → `200 Subscription` |
 | `POST /admin/tenants/{id}/reactivate` | `{ "reason": "Pagamento confirmado manualmente" }` → `200 Subscription` |
+| `POST /admin/tenants/{id}/behaviors` | `{ "behavior": "SNACK_BAR", "reason": "Contratou a lanchonete à noite" }` → `200 TenantBehaviors` |
 | `POST /admin/billing-webhooks/{id}/reprocess` | → `202` |
 
 Toda ação gera auditoria com `origin = PLATFORM_ADMIN`.
@@ -2185,6 +2300,18 @@ Toda ação gera auditoria com `origin = PLATFORM_ADMIN`.
 - `reactivate`: `ACTIVE` até agora + 1 mês (pagamento confirmado fora do gateway); assinatura `CANCELED` → `422`.
 - `reason` com pelo menos 5 caracteres. Tenant inexistente → `404`.
 - `reprocess`: volta o evento para a fila (`processed_at = null`); o processador o aplica de novo, de forma idempotente.
+- `behaviors` (ADR-0054 item 5, EP-003 F-305): acrescenta um comportamento ao tenant, mediante aumento na assinatura combinado fora do app (Q-301). Remover não existe nesta fase. Os rótulos não mudam (o proprietário marca os do comportamento novo em "Dados do estabelecimento"). Comportamento já habilitado → `200` com o estado atual, sem auditoria nem evento. `behavior` ausente ou `reason` com menos de 5 caracteres → `422`; código fora da lista → `400`. Grava `tenant_behaviors` com `origin = PLATFORM_ADMIN` e o administrador em `enabled_by_user_id`, sobe a `version` do tenant, gera a auditoria `TenantBehaviorAdded` (`PLATFORM_ADMIN`, ator = o administrador), a entrada `TENANT` no feed e o evento `TenantModulesChanged` (§6.14), na mesma transação.
+
+`TenantBehaviors`:
+
+```json
+{
+  "tenantId": "0192d6a0-0000-7000-8000-000000000001",
+  "behaviors": ["RESTAURANT", "SNACK_BAR"],
+  "labels": ["MARMITARIA"],
+  "modules": ["MARMITA", "PF", "KILO", "DAILY_MENU", "A_LA_CARTE", "DELIVERY", "FIXED_MENU"]
+}
+```
 
 ### `POST /webhooks/asaas` — público + header `asaas-access-token`
 

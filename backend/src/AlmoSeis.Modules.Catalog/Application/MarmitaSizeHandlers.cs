@@ -6,6 +6,7 @@ using AlmoSeis.Modules.Catalog.Contracts;
 using AlmoSeis.Modules.Catalog.Domain;
 using AlmoSeis.SharedKernel.Application;
 using AlmoSeis.SharedKernel.Errors;
+using AlmoSeis.SharedKernel.Security;
 using Microsoft.EntityFrameworkCore;
 
 namespace AlmoSeis.Modules.Catalog.Application;
@@ -61,10 +62,16 @@ internal sealed class UpdateMarmitaSizeHandler(
     }
 }
 
-internal sealed class ListMarmitaSizesQueryHandler(AppDbContext db) : IQueryHandler<ListMarmitaSizesQuery, ItemsDto<MarmitaSizeDto>>
+/// Sem o módulo `MARMITA`, lista vazia (ADR-0054 item 14).
+internal sealed class ListMarmitaSizesQueryHandler(AppDbContext db, ITenantModules modules) : IQueryHandler<ListMarmitaSizesQuery, ItemsDto<MarmitaSizeDto>>
 {
     public async Task<ItemsDto<MarmitaSizeDto>> HandleAsync(ListMarmitaSizesQuery query, CancellationToken cancellationToken)
     {
+        if (!await modules.HasAsync(TenantModule.Marmita, cancellationToken))
+        {
+            return new ItemsDto<MarmitaSizeDto>([]);
+        }
+
         var sizes = db.Set<MarmitaSize>().AsNoTracking();
         if (!query.IncludeInactive)
         {

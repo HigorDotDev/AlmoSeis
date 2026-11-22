@@ -95,7 +95,9 @@ public static class ApiScenarios
 {
     private static int _sequence;
 
-    public static object SignUpBody(string? email = null, string? document = null, string? phone = null)
+    /// `behavior`/`labels` (ADR-0054): por padrão, um restaurante com o rótulo "Restaurante".
+    public static object SignUpBody(
+        string? email = null, string? document = null, string? phone = null, string behavior = "RESTAURANT", string[]? labels = null)
     {
         var n = Interlocked.Increment(ref _sequence);
         var unique = Guid.NewGuid().ToString("N")[..8];
@@ -117,6 +119,8 @@ public static class ApiScenarios
                 city = "Uberlândia",
                 state = "MG",
                 timeZone = "America/Sao_Paulo",
+                behavior,
+                labels = labels ?? [behavior == "SNACK_BAR" ? "BURGER_JOINT" : "RESTAURANT"],
             },
             acceptedTermsVersion = "2026-10",
             installationId = $"inst_{unique}",

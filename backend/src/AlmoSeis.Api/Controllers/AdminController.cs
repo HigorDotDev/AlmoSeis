@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using AlmoSeis.Api.Infrastructure;
 using AlmoSeis.Modules.Billing.Contracts;
+using AlmoSeis.Modules.Identity.Contracts;
 using AlmoSeis.SharedKernel.Application;
 using Microsoft.AspNetCore.Mvc;
 
@@ -35,6 +36,15 @@ public sealed class AdminController(IPlatformAdminService admin) : ControllerBas
     [HttpPost("tenants/{id:guid}/reactivate")]
     public async Task<ActionResult<SubscriptionDto>> Reactivate(Guid id, [FromBody] AdminReasonRequest request, CancellationToken cancellationToken) =>
         Ok(await admin.ReactivateAsync(AdminUserId, id, request, cancellationToken));
+
+    /// Acrescenta um comportamento (ADR-0054 item 5). Grava no tenant da rota com a RLS dele (o handler assume a sessão).
+    [HttpPost("tenants/{id:guid}/behaviors")]
+    public async Task<ActionResult<TenantBehaviorsDto>> AddBehavior(
+        Guid id,
+        [FromBody] AddTenantBehaviorRequest request,
+        [FromServices] ICommandHandler<AddTenantBehaviorCommand, TenantBehaviorsDto> handler,
+        CancellationToken cancellationToken) =>
+        Ok(await handler.HandleAsync(new AddTenantBehaviorCommand(AdminUserId, id, request), cancellationToken));
 
     [HttpPost("billing-webhooks/{id:guid}/reprocess")]
     public async Task<IActionResult> Reprocess(Guid id, CancellationToken cancellationToken)

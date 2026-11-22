@@ -30,6 +30,8 @@ internal sealed class GetSyncChangesQueryHandler(AppDbContext db, ITenantContext
     /// Mapa de leitura por `entityType` (06 §6.12): o tipo some do feed para quem não pode fazer o GET correspondente.
     private static readonly IReadOnlyDictionary<string, string> RequiredPermission = new Dictionary<string, string>
     {
+        // Estabelecimento (nome, rótulos, comportamentos): todos recarregam o `/auth/me` (ADR-0054 item 15).
+        ["TENANT"] = Permissions.Orders.View,
         ["TENANT_SETTINGS"] = Permissions.Orders.View,
         ["PRODUCT"] = Permissions.Orders.View,
         ["MARMITA_SIZE"] = Permissions.Orders.View,

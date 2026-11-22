@@ -1,3 +1,4 @@
+using AlmoSeis.Modules.Identity.Contracts;
 using AlmoSeis.SharedKernel.Errors;
 using AlmoSeis.SharedKernel.Domain;
 using AlmoSeis.SharedKernel.Security;
@@ -68,12 +69,21 @@ internal sealed class User : Entity
     }
 }
 
-internal sealed class Tenant : AggregateRoot
+/// Agregado do estabelecimento. Comportamentos e rótulos são filhos: o `If-Match` do PATCH /tenant e o acréscimo de
+/// comportamento pelo admin usam `tenants.version` (05 §5.17 0008). Entra no feed como `TENANT` (o app recarrega o
+/// `/auth/me`, 06 §6.12).
+internal sealed class Tenant : AggregateRoot, ITenantOwned, ISyncTracked
 {
+    private readonly List<TenantBehavior> _behaviors = [];
+    private readonly List<TenantLabel> _labels = [];
+
     private Tenant()
     {
     }
 
+    /// A chave é o próprio tenant (como em tenant_settings): sem coluna, sem filtro do EF, só a RLS.
+    public Guid TenantId => Id;
+    public string SyncEntityType => "TENANT";
     public string Name { get; private set; } = null!;
     public string DocumentType { get; private set; } = null!;
     public string DocumentNumber { get; private set; } = null!;
@@ -84,23 +94,50 @@ internal sealed class Tenant : AggregateRoot
     public DateTimeOffset TermsAcceptedAt { get; private set; }
     public Guid TermsAcceptedByUserId { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
+    public IReadOnlyList<TenantBehavior> Behaviors => _behaviors;
+    public IReadOnlyList<TenantLabel> Labels => _labels;
 
+    /// Comportamentos efetivos, em ordem do enum. Sem linha (tenant criado pela API anterior na janela do deploy da
+    /// 0008): `RESTAURANT` (decisão do usuário em 2026-11-22, 07 §7.13).
+    public IReadOnlyList<EstablishmentBehavior> EffectiveBehaviors => TenantModuleMap.EffectiveBehaviors(_behaviors.Select(b => b.Behavior));
+
+    /// Rótulos em ordem da lista fixa. Sem linha de comportamento nem de rótulo, o rótulo inicial da migração
+    /// (`RESTAURANT`, Q-303).
+    public IReadOnlyList<EstablishmentLabel> EffectiveLabels =>
+        _behaviors.Count == 0 && _labels.Count == 0 ? [EstablishmentLabel.Restaurant] : EstablishmentLabels.Ordered(_labels.Select(l => l.Label));
+
+    public IReadOnlyList<TenantModule> Modules => TenantModuleMap.For(_behaviors.Select(b => b.Behavior));
+
+    /// Autocadastro (ADR-0018, ADR-0054 itens 3 e 9): exatamente um comportamento, escolhido pelo proprietário, e pelo
+    /// menos um rótulo dele.
     public static Tenant Create(
         Guid id, string name, string documentType, string documentNumber, string city, string state, string timeZone,
-        string termsVersion, Guid acceptedBy, DateTimeOffset now) => new()
+        string termsVersion, Guid acceptedBy, EstablishmentBehavior behavior, IReadOnlyCollection<EstablishmentLabel> labels,
+        DateTimeOffset now)
     {
-        Id = id,
-        Name = name.Trim(),
-        DocumentType = documentType,
-        DocumentNumber = documentNumber,
-        City = city.Trim(),
-        State = state.ToUpperInvariant(),
-        TimeZone = timeZone,
-        TermsVersion = termsVersion,
-        TermsAcceptedAt = now,
-        TermsAcceptedByUserId = acceptedBy,
-        CreatedAt = now,
-    };
+        EnsureLabels(labels, [behavior], "tenant.labels");
+        var tenant = new Tenant
+        {
+            Id = id,
+            Name = name.Trim(),
+            DocumentType = documentType,
+            DocumentNumber = documentNumber,
+            City = city.Trim(),
+            State = state.ToUpperInvariant(),
+            TimeZone = timeZone,
+            TermsVersion = termsVersion,
+            TermsAcceptedAt = now,
+            TermsAcceptedByUserId = acceptedBy,
+            CreatedAt = now,
+        };
+        tenant._behaviors.Add(TenantBehavior.Create(id, behavior, BehaviorOrigin.Signup, acceptedBy, now));
+        foreach (var label in EstablishmentLabels.Ordered(labels))
+        {
+            tenant._labels.Add(TenantLabel.Create(id, label, now));
+        }
+
+        return tenant;
+    }
 
     /// PATCH /tenant: documento não muda pelo app (06 §6.4).
     public bool Update(string name, string city, string state, string timeZone)
@@ -114,6 +151,88 @@ internal sealed class Tenant : AggregateRoot
         (Name, City, State, TimeZone) = next;
         Touch();
         return true;
+    }
+
+    /// PATCH /tenant `labels` (ADR-0054 itens 10 e 11): troca o conjunto. Pelo menos um, todos de comportamentos
+    /// habilitados. Rótulo não muda funcionamento: nenhuma regra é reavaliada.
+    public bool ReplaceLabels(IReadOnlyCollection<EstablishmentLabel> labels, DateTimeOffset now)
+    {
+        EnsureLabels(labels, EffectiveBehaviors, "labels");
+        var next = labels.ToHashSet();
+        var changed = BackfillDeployWindow(now);
+        if (!next.SetEquals(_labels.Select(l => l.Label)))
+        {
+            _labels.RemoveAll(l => !next.Contains(l.Label));
+            foreach (var label in EstablishmentLabels.Ordered(next).Where(n => _labels.All(l => l.Label != n)))
+            {
+                _labels.Add(TenantLabel.Create(Id, label, now));
+            }
+
+            changed = true;
+        }
+
+        if (changed)
+        {
+            Touch();
+        }
+
+        return changed;
+    }
+
+    /// Acréscimo pelo administrador da plataforma (ADR-0054 item 5). Devolve se o comportamento foi acrescentado; já
+    /// habilitado → nada muda. Os rótulos não mudam: o proprietário marca os do comportamento novo depois, em "Dados do
+    /// estabelecimento".
+    public bool AddBehavior(EstablishmentBehavior behavior, Guid adminUserId, DateTimeOffset now)
+    {
+        // Tenant sem linha (janela do deploy) já funciona como restaurante: o acréscimo não pode tirar isso dele.
+        var backfilled = BackfillDeployWindow(now);
+        if (_behaviors.Any(b => b.Behavior == behavior))
+        {
+            if (backfilled)
+            {
+                Touch();
+            }
+
+            return false;
+        }
+
+        _behaviors.Add(TenantBehavior.Create(Id, behavior, BehaviorOrigin.PlatformAdmin, adminUserId, now));
+        Touch(new TenantModulesChanged(Id, EffectiveBehaviors, Modules, now));
+        return true;
+    }
+
+    /// Grava o que o tenant da janela do deploy já tinha por regra (`RESTAURANT` + rótulo `RESTAURANT`, `SYSTEM`), como
+    /// a correção da 0008 faria. Só nas escritas: a FK de `tenant_labels` exige a linha do comportamento.
+    private bool BackfillDeployWindow(DateTimeOffset now)
+    {
+        if (_behaviors.Count > 0)
+        {
+            return false;
+        }
+
+        _behaviors.Add(TenantBehavior.Create(Id, EstablishmentBehavior.Restaurant, BehaviorOrigin.System, null, now));
+        if (_labels.Count == 0)
+        {
+            _labels.Add(TenantLabel.Create(Id, EstablishmentLabel.Restaurant, now));
+        }
+
+        return true;
+    }
+
+    private static void EnsureLabels(IReadOnlyCollection<EstablishmentLabel> labels, IReadOnlyCollection<EstablishmentBehavior> enabled, string field)
+    {
+        if (labels.Count == 0)
+        {
+            throw BusinessException.Validation(field, "Marque pelo menos um rótulo do estabelecimento.");
+        }
+
+        var foreign = EstablishmentLabels.Ordered(labels).Where(l => !enabled.Contains(EstablishmentLabels.BehaviorOf(l))).ToList();
+        if (foreign.Count > 0)
+        {
+            throw BusinessException.Validation(
+                field,
+                $"{string.Join(", ", foreign.Select(EstablishmentLabels.TextOf))}: rótulo de outro tipo de estabelecimento.");
+        }
     }
 }
 

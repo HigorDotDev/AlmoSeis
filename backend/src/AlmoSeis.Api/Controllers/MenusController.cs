@@ -40,6 +40,7 @@ public sealed class MenusController : ControllerBase
 
     [HttpPost]
     [HasPermission(Permissions.MenuManage)]
+    [RequiresModule(TenantModule.DailyMenu)]
     public async Task<ActionResult<MenuDto>> Create(
         [FromBody] CreateMenuCommand command,
         [FromServices] ICommandHandler<CreateMenuCommand, MenuDto> handler,
@@ -51,6 +52,7 @@ public sealed class MenusController : ControllerBase
 
     [HttpPut("{id:guid}/items")]
     [HasPermission(Permissions.MenuManage)]
+    [RequiresModule(TenantModule.DailyMenu)]
     [RequiresIfMatch]
     public async Task<ActionResult<MenuDto>> ReplaceItems(
         Guid id,
@@ -61,6 +63,7 @@ public sealed class MenusController : ControllerBase
 
     [HttpPatch("{id:guid}/items/{itemId:guid}")]
     [HasPermission(Permissions.MenuManage)]
+    [RequiresModule(TenantModule.DailyMenu)]
     [RequiresIfMatch]
     public async Task<ActionResult<MenuDto>> UpdateItem(
         Guid id,
@@ -72,6 +75,7 @@ public sealed class MenusController : ControllerBase
 
     [HttpPost("{id:guid}/clone")]
     [HasPermission(Permissions.MenuManage)]
+    [RequiresModule(TenantModule.DailyMenu)]
     public async Task<ActionResult<MenuDto>> Clone(
         Guid id,
         [FromBody] CloneMenuRequest request,

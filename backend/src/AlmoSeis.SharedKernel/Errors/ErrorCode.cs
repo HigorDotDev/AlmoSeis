@@ -90,6 +90,9 @@ public static class ErrorCodes
     // ---------- Push (EP-002 fatia 5, ADR-0049) ----------
     public static readonly ErrorCode PushTokenInUse = new("PushTokenInUse", 409, "Este aparelho ainda está registrado em outro estabelecimento.");
 
+    // ---------- Comportamentos e módulos (EP-003 fatia 1, ADR-0054) ----------
+    public static readonly ErrorCode ModuleNotEnabled = new("ModuleNotEnabled", 403, "Este recurso não está habilitado no estabelecimento.");
+
     public static IReadOnlyList<ErrorCode> All { get; } =
     [
         MalformedRequest, Unauthenticated, InvalidCredentials, InvalidRefreshToken, InvalidDeviceSecret,
@@ -103,6 +106,6 @@ public static class ErrorCodes
         PaymentMethodDisabled, ProductUnavailable, KiloPriceNotConfigured, JustificationRequired, PinLocked,
         AppVersionUnsupported, IdempotencyKeyRequired, IfMatchRequired, TooManyRequests,
         StoreNotFound, StoreUnavailable, CartChanged, DeliveryUnavailable, CaptchaFailed, TooManyPendingOrders, TrackingExpired,
-        OutOfDeliveryArea, DeliveryQuoteChanged, PushTokenInUse,
+        OutOfDeliveryArea, DeliveryQuoteChanged, PushTokenInUse, ModuleNotEnabled,
     ];
 }

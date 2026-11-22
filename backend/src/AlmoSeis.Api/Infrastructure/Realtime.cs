@@ -83,7 +83,7 @@ public static class RealtimeGroups
         "OrderPaymentRegistered" => [Orders(tenantId), Closing(tenantId)],
         "OrderPaymentConfirmed" or "OrderPaymentReversed" => [Orders(tenantId), Production(tenantId), Closing(tenantId)],
         "MenuUpdated" or "CatalogUpdated" => [Catalog(tenantId)],
-        "BusinessDayOpened" or "ClosingFinalized" or "SubscriptionStatusChanged" => [Tenant(tenantId)],
+        "BusinessDayOpened" or "ClosingFinalized" or "SubscriptionStatusChanged" or "TenantModulesChanged" => [Tenant(tenantId)],
         "ClosingUpdated" => [Closing(tenantId)],
         // Ciência: o próprio funcionário que agiu. Acesso revogado: o funcionário afetado (a entidade do evento).
         "OrderAlertAcknowledged" when envelope["actorEmployeeId"]?.GetValue<Guid>() is { } actor => [Employee(actor)],

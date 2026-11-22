@@ -19,6 +19,10 @@ public enum TenantSource
 
     /// Jobs do sistema (expiração, retenção).
     System,
+
+    /// Ação do administrador da plataforma que grava **dentro** de um tenant com a RLS dele (acréscimo de comportamento,
+    /// ADR-0054 item 5): o tenant vem da rota de `/admin`, e o usuário é o administrador (auditoria `PLATFORM_ADMIN`).
+    PlatformAdmin,
 }
 
 /// Quem está chamando, por requisição (scoped). Nas rotas autenticadas vem só das claims do JWT (ADR-0026); nas rotas
@@ -60,6 +64,10 @@ public interface ITenantContext
 
     /// Rotas `/api/v1/public/*` (ADR-0045): o tenant resolvido pelo slug ou pelo token de acompanhamento.
     void InitializeForPublic(Guid tenantId, TenantSource source);
+
+    /// Rotas `/api/v1/admin/*` que gravam no tenant com o papel da aplicação (feed, outbox e RLS normais): o tenant da
+    /// rota e o administrador do token de admin, sem funcionário (ADR-0043, ADR-0054 item 5).
+    void InitializeForPlatformAdmin(Guid tenantId, Guid adminUserId);
 
     /// Única mutação permitida depois de inicializado: POST /auth/switch-tenant.
     void SwitchTenant(Guid tenantId, Guid employeeId);
@@ -122,6 +130,12 @@ public sealed class TenantContext : ITenantContext
         }
 
         (TenantId, IsInitialized, Source) = (tenantId, true, source);
+    }
+
+    public void InitializeForPlatformAdmin(Guid tenantId, Guid adminUserId)
+    {
+        EnsureNotInitialized();
+        (TenantId, UserId, IsInitialized, Source) = (tenantId, adminUserId, true, TenantSource.PlatformAdmin);
     }
 
     public void SwitchTenant(Guid tenantId, Guid employeeId)

@@ -47,7 +47,8 @@ internal sealed class AuthSessionIssuer(
 
     public async Task<MeDto> BuildMeAsync(User user, TenantEmployee employee, Guid? sharedDeviceId, CancellationToken cancellationToken)
     {
-        var tenantRow = await db.Set<Tenant>().AsNoTracking().SingleAsync(t => t.Id == employee.TenantId, cancellationToken);
+        var tenantRow = await db.Set<Tenant>().AsNoTracking().Include(t => t.Behaviors).Include(t => t.Labels)
+            .SingleAsync(t => t.Id == employee.TenantId, cancellationToken);
         var roles = employee.Roles.Select(r => r.Role).Order().ToList();
         var permissions = RolePermissions.For(employee.RoleValues);
 
@@ -65,7 +66,7 @@ internal sealed class AuthSessionIssuer(
 
         return new MeDto(
             new MeUserDto(user.Id, user.FullName, user.Email, user.PhoneNumber),
-            new MeTenantDto(tenantRow.Id, tenantRow.Name, tenantRow.TimeZone),
+            new MeTenantDto(tenantRow.Id, tenantRow.Name, tenantRow.TimeZone, tenantRow.EffectiveBehaviors, tenantRow.EffectiveLabels, tenantRow.Modules),
             new MeEmployeeDto(employee.Id, employee.DisplayName, roles, employee.PinHash is not null),
             Permissions.All.Where(permissions.Contains).ToList(),
             memberships,

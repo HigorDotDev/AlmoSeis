@@ -74,6 +74,7 @@ public sealed class MarmitaSizesController : ControllerBase
 
     [HttpPost]
     [HasPermission(Permissions.CatalogManage)]
+    [RequiresModule(TenantModule.Marmita)]
     public async Task<ActionResult<MarmitaSizeDto>> Create(
         [FromBody] CreateMarmitaSizeCommand command,
         [FromServices] ICommandHandler<CreateMarmitaSizeCommand, MarmitaSizeDto> handler,
@@ -85,6 +86,7 @@ public sealed class MarmitaSizesController : ControllerBase
 
     [HttpPatch("{id:guid}")]
     [HasPermission(Permissions.CatalogManage)]
+    [RequiresModule(TenantModule.Marmita)]
     [RequiresIfMatch]
     public async Task<ActionResult<MarmitaSizeDto>> Update(
         Guid id,

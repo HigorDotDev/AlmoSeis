@@ -1,4 +1,5 @@
 using AlmoSeis.SharedKernel.Domain;
+using AlmoSeis.SharedKernel.Security;
 
 namespace AlmoSeis.Modules.Identity.Contracts;
 
@@ -8,7 +9,16 @@ public sealed record NewAccountInput(string FullName, string? Email, string? Pho
 
 public sealed record ExistingAccountInput(string Login, string Password);
 
-public sealed record TenantInput(string Name, string DocumentType, string DocumentNumber, string City, string State, string? TimeZone);
+/// `Behavior` e `Labels` (ADR-0054 itens 3 e 9): obrigatórios, sem padrão; nulos só para o validator responder `422`.
+public sealed record TenantInput(
+    string Name,
+    string DocumentType,
+    string DocumentNumber,
+    string City,
+    string State,
+    string? TimeZone,
+    EstablishmentBehavior? Behavior,
+    IReadOnlyList<EstablishmentLabel>? Labels);
 
 public sealed record SignUpCommand(
     NewAccountInput? NewAccount,
@@ -42,7 +52,14 @@ public sealed record TokensDto(
 
 public sealed record MeUserDto(Guid Id, string FullName, string? Email, string? PhoneNumber);
 
-public sealed record MeTenantDto(Guid Id, string Name, string TimeZone);
+/// `modules` monta as abas e o menu do app (ADR-0055); `labels` é só informativo (ADR-0054 item 7).
+public sealed record MeTenantDto(
+    Guid Id,
+    string Name,
+    string TimeZone,
+    IReadOnlyList<EstablishmentBehavior> Behaviors,
+    IReadOnlyList<EstablishmentLabel> Labels,
+    IReadOnlyList<TenantModule> Modules);
 
 public sealed record MeEmployeeDto(Guid Id, string DisplayName, IReadOnlyList<string> Roles, bool HasPin);
 

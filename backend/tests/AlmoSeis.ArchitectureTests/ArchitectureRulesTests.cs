@@ -198,6 +198,30 @@ public sealed class ArchitectureRulesTests
         orphan.ShouldBeEmpty("Handler público fora dos controllers públicos.");
     }
 
+    /// ADR-0054 itens 7 e 13: o que muda o funcionamento é o **módulo** (`ITenantModules`), nunca o comportamento nem o
+    /// rótulo. Fora do Identity (dono das tabelas e do `/auth/me`) nenhum tipo depende de `EstablishmentBehavior` nem de
+    /// `EstablishmentLabel`; dentro dele, rótulo só no agregado do tenant, no cadastro, no `PATCH /tenant` e nas respostas.
+    [Fact]
+    public void Rule10_business_rules_ask_for_modules_never_for_behavior_or_label()
+    {
+        const string behavior = "AlmoSeis.SharedKernel.Security.EstablishmentBehavior";
+        const string label = "AlmoSeis.Modules.Identity.Contracts.EstablishmentLabel";
+
+        var outside = Types.InAssemblies([.. ModuleAssemblies.Where(a => a.GetName().Name != "AlmoSeis.Modules.Identity"), typeof(Program).Assembly])
+            .ShouldNot().HaveDependencyOnAny(behavior, label)
+            .GetResult();
+        outside.IsSuccessful.ShouldBeTrue(Failing(outside));
+
+        var identity = ModuleAssemblies.Single(a => a.GetName().Name == "AlmoSeis.Modules.Identity");
+        var readers = Types.InAssembly(identity)
+            .That().DoNotResideInNamespace("AlmoSeis.Modules.Identity.Contracts")
+            .And().DoNotHaveNameMatching(@"^(Tenant|TenantLabel|TenantModulesChanged|SignUpHandler|SignUpCommandValidator|UpdateTenantHandler|AddTenantBehaviorHandler|AuthSessionIssuer|ManagementDtos|IdentityModelConfiguration)$")
+            .And().DoNotHaveNameMatching("^<") // closures e tipos gerados dos métodos acima
+            .ShouldNot().HaveDependencyOn(label)
+            .GetResult();
+        readers.IsSuccessful.ShouldBeTrue(Failing(readers));
+    }
+
     private static string Failing(NetArchTest.Rules.TestResult result) =>
         result.IsSuccessful ? string.Empty : "Violações: " + string.Join(", ", result.FailingTypeNames ?? []);
 

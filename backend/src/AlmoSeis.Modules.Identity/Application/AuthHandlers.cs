@@ -40,10 +40,12 @@ internal sealed class SignUpHandler(
         tenant.InitializeForTenant(tenantId, user.Id);
         await session.ApplyAsync(cancellationToken);
 
+        // Comportamento e rótulos (ADR-0054 itens 3 e 9) entram com o tenant: o `Me` da resposta já os lê do banco.
         var input = command.Tenant;
         var newTenant = Tenant.Create(
             tenantId, input.Name, input.DocumentType, input.DocumentNumber, input.City, input.State,
-            input.TimeZone ?? "America/Sao_Paulo", command.AcceptedTermsVersion, user.Id, now);
+            input.TimeZone ?? "America/Sao_Paulo", command.AcceptedTermsVersion, user.Id,
+            input.Behavior!.Value, input.Labels!, now);
         db.Add(newTenant);
         await db.SaveChangesAsync(cancellationToken); // usuário e tenant antes das tabelas que os referenciam
 
@@ -58,7 +60,14 @@ internal sealed class SignUpHandler(
             await listener.OnTenantCreatedAsync(new NewTenantInfo(tenantId, newTenant.Name, newTenant.City, now), cancellationToken);
         }
 
-        audit.Add("TenantSignedUp", "TENANT", tenantId, after: new { tenantId, input.Name, termsVersion = command.AcceptedTermsVersion });
+        audit.Add("TenantSignedUp", "TENANT", tenantId, after: new
+        {
+            tenantId,
+            input.Name,
+            termsVersion = command.AcceptedTermsVersion,
+            behaviors = newTenant.EffectiveBehaviors.Select(ModuleNames.ToApiName).ToList(),
+            labels = newTenant.EffectiveLabels.Select(EstablishmentLabels.ToApiName).ToList(),
+        });
         return await sessions.IssueAsync(user, owner, command.InstallationId, null, null, cancellationToken);
     }
 

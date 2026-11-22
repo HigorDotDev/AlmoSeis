@@ -121,3 +121,26 @@ internal sealed class TenantSettingsReader(AppDbContext db, ITenantContext tenan
         return new TenantOperationalSettings(settings.KiloPricePerKg, settings.DefaultDeliveryFee, settings.EnabledPaymentMethods);
     }
 }
+
+/// `ITenantModules` (ADR-0054 itens 12 e 13): módulos do tenant da sessão pelo mapa fixo, lidos uma vez por requisição.
+/// Sem linha em `tenant_behaviors` (janela do deploy da 0008) vale `RESTAURANT`. Para habilitar módulo por tenant no
+/// futuro, basta trocar a fonte daqui.
+internal sealed class TenantModules(AppDbContext db, ITenantContext tenant) : ITenantModules
+{
+    private IReadOnlyList<TenantModule>? _modules;
+
+    public async Task<IReadOnlyList<TenantModule>> GetAsync(CancellationToken cancellationToken)
+    {
+        if (_modules is null)
+        {
+            _ = tenant.TenantId ?? throw new InvalidOperationException("Módulos sem tenant.");
+            var behaviors = await db.Set<TenantBehavior>().AsNoTracking().Select(b => b.Behavior).ToListAsync(cancellationToken);
+            _modules = TenantModuleMap.For(behaviors);
+        }
+
+        return _modules;
+    }
+
+    public async Task<bool> HasAsync(TenantModule module, CancellationToken cancellationToken) =>
+        (await GetAsync(cancellationToken)).Contains(module);
+}
