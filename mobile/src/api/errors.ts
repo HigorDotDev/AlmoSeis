@@ -1,6 +1,6 @@
 /** ProblemDetails da API (06 §6.1) e erros de rede (08 §8.3/8.5). */
 import { formatBRL } from '@/lib/money';
-import { errorMessages, GENERIC_ERROR, NETWORK_ERROR } from '@/lib/strings';
+import { errorMessages, GENERIC_ERROR, moduleNames, NETWORK_ERROR } from '@/lib/strings';
 
 export interface ProblemDetails {
   type?: string;
@@ -88,6 +88,12 @@ export function errorMessage(e: unknown): string {
       if (status === 'WITHDRAWN') return 'O cliente desistiu deste pedido.';
       if (status === 'EXPIRED') return errorMessages.WebOrderExpired!;
       return errorMessages.OrderNotAwaitingAcceptance!;
+    }
+    case 'ModuleNotEnabled': {
+      // Extensão `module` (06 §6.1): o app também recarrega o `me` (`onModuleNotEnabled` no cliente).
+      const module = e.extensions.module;
+      const name = typeof module === 'string' ? (moduleNames as Record<string, string>)[module] : undefined;
+      return name ? `${name} não está habilitado neste estabelecimento.` : errorMessages.ModuleNotEnabled!;
     }
     case 'ProductUnavailable':
       return e.detail ?? 'Um produto não está disponível hoje.';

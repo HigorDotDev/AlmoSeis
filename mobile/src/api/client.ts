@@ -39,6 +39,8 @@ export interface ApiClientHooks {
   onUpgradeRequired(info: { minVersion?: string; storeUrl?: string }): void;
   onSubscriptionInactive(): void;
   onNetworkFailure?(): void;
+  /** `403 ModuleNotEnabled` (ADR-0054 item 14): os módulos do aparelho podem estar velhos; recarrega o `me`. */
+  onModuleNotEnabled?(): void;
 }
 
 let hooks: ApiClientHooks = {
@@ -167,6 +169,8 @@ async function handle<T>(response: Response, options: RequestOptions): Promise<A
     hooks.onSubscriptionInactive();
   } else if (response.status === 401 && !options.anonymous) {
     hooks.onSessionExpired();
+  } else if (response.status === 403 && problem.errorCode === 'ModuleNotEnabled') {
+    hooks.onModuleNotEnabled?.();
   }
   const retryAfter = response.headers.get('Retry-After');
   throw new ApiError(response.status, problem, retryAfter ? Number(retryAfter) : null);

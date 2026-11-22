@@ -50,6 +50,8 @@ configureApiClient({
   onUpgradeRequired: (info) => handleUpgradeRequired(info, (i) => useSession.getState().setUpgradeRequired(i)),
   onSubscriptionInactive: () => useSession.getState().markReadOnly(),
   onNetworkFailure: () => useConnectivity.getState().markDegraded(),
+  // O servidor já impõe os módulos novos; o `me` traz os mesmos e as abas se ajustam (06 §6.3).
+  onModuleNotEnabled: () => void queryClient.invalidateQueries({ queryKey: ['me'] }),
 });
 
 // Sair ou trocar de estabelecimento limpa o cache (RN-014.2: escopado por tenant).

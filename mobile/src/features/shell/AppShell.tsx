@@ -5,7 +5,7 @@ import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, View } from 'react-native';
 
-import type { Permission } from '@/api/types';
+import type { Permission, TenantModule } from '@/api/types';
 import { Banner, BottomSheet, IconButton, Row, Text, TOUCH, radius, space, useColorMode, useColors, type IconName } from '@/components/ui';
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { useSettings } from '@/features/session/hooks';
@@ -13,6 +13,7 @@ import { draftsRepo } from '@/db/draftsRepo';
 import { pendingOpsRepo } from '@/db/pendingOpsRepo';
 import { unregisterPush } from '@/features/push/registration';
 import { confirmAction } from '@/lib/confirm';
+import { hasAnyModule } from '@/features/tenant/establishment';
 import { formatBusinessDate } from '@/lib/dates';
 import { usePendingOps } from '@/stores/pendingOps';
 import { usePreferences } from '@/stores/preferences';
@@ -95,34 +96,43 @@ interface MenuEntry {
   icon: IconName;
   href: string;
   permission?: Permission;
+  /** Aparece se o estabelecimento tiver **algum** destes módulos (ADR-0055 item 6). Sem a chave, sempre. */
+  modules?: TenantModule[];
 }
+
+/** O catálogo de `Product` (pratos, acompanhamentos, bebidas, adicionais) é o da marmita, do PF e do quilo (ADR-0056 item 4). */
+const RESTAURANT_CATALOG: TenantModule[] = ['MARMITA', 'PF', 'KILO', 'DAILY_MENU'];
 
 /** Itens do épico §2.1 agrupados por frequência de uso (docs/10-ux.md D10). */
 const GROUPS: { title: string; entries: MenuEntry[] }[] = [
   {
     title: 'Operação',
     entries: [
-      { label: 'Cardápio do dia', icon: 'today-outline', href: '/menu/menus/today', permission: 'menu.manage' },
+      { label: 'Cardápio do dia', icon: 'today-outline', href: '/menu/menus/today', permission: 'menu.manage', modules: ['DAILY_MENU'] },
       { label: 'Clientes', icon: 'person-circle-outline', href: '/menu/customers', permission: 'orders.view' },
-      // EP-002 F-210: ver e compartilhar com `orders.view`; alterar com `storefront.manage`.
-      { label: 'Página de pedidos', icon: 'globe-outline', href: '/menu/storefront', permission: 'orders.view' },
+      // EP-002 F-210: ver e compartilhar com `orders.view`; alterar com `storefront.manage`. Hoje a página vende
+      // marmita; a página da lanchonete é a fatia 5 do EP-003.
+      { label: 'Página de pedidos', icon: 'globe-outline', href: '/menu/storefront', permission: 'orders.view', modules: ['MARMITA'] },
       { label: 'Rascunhos e pendências', icon: 'document-text-outline', href: '/menu/drafts' },
     ],
   },
   {
     title: 'Cardápio',
     entries: [
-      { label: 'Pratos e bebidas', icon: 'restaurant-outline', href: '/menu/products', permission: 'orders.view' },
-      { label: 'Tamanhos de marmita', icon: 'resize-outline', href: '/menu/sizes', permission: 'orders.view' },
-      { label: 'Cardápio semanal', icon: 'calendar-outline', href: '/menu/menus/weekly', permission: 'menu.manage' },
-      { label: 'Histórico de cardápios', icon: 'albums-outline', href: '/menu/menus/history', permission: 'menu.manage' },
+      // Cardápio fixo da lanchonete (ADR-0056); o cadastro chega na fatia 2 do EP-003.
+      { label: 'Cardápio', icon: 'book-outline', href: '/menu/fixed-menu', permission: 'orders.view', modules: ['FIXED_MENU'] },
+      { label: 'Pratos e bebidas', icon: 'restaurant-outline', href: '/menu/products', permission: 'orders.view', modules: RESTAURANT_CATALOG },
+      { label: 'Tamanhos de marmita', icon: 'resize-outline', href: '/menu/sizes', permission: 'orders.view', modules: ['MARMITA'] },
+      { label: 'Cardápio semanal', icon: 'calendar-outline', href: '/menu/menus/weekly', permission: 'menu.manage', modules: ['DAILY_MENU'] },
+      { label: 'Histórico de cardápios', icon: 'albums-outline', href: '/menu/menus/history', permission: 'menu.manage', modules: ['DAILY_MENU'] },
     ],
   },
   {
     title: 'Financeiro',
     entries: [
       { label: 'Histórico de fechamentos', icon: 'archive-outline', href: '/closing/history', permission: 'closing.view' },
-      { label: 'Configuração de preços', icon: 'pricetag-outline', href: '/menu/pricing', permission: 'settings.manage' },
+      // Preço do quilo e taxa de entrega da marmita (a taxa do delivery da lanchonete é da fatia 4).
+      { label: 'Configuração de preços', icon: 'pricetag-outline', href: '/menu/pricing', permission: 'settings.manage', modules: ['KILO', 'MARMITA'] },
       { label: 'Formas de pagamento', icon: 'card-outline', href: '/menu/payment-methods', permission: 'settings.manage' },
       { label: 'Histórico de operações', icon: 'list-outline', href: '/menu/audit', permission: 'audit.view' },
     ],
@@ -146,6 +156,14 @@ const GROUPS: { title: string; entries: MenuEntry[] }[] = [
   },
 ];
 
+/** Grupos do menu com o que este funcionário pode e este estabelecimento tem (permissão + módulos). */
+export function menuGroups(me: Parameters<typeof hasPermission>[0]) {
+  return GROUPS.map((g) => ({
+    ...g,
+    entries: g.entries.filter((e) => (!e.permission || hasPermission(me, e.permission)) && (!e.modules || hasAnyModule(me, e.modules))),
+  })).filter((g) => g.entries.length > 0);
+}
+
 export function MenuSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const c = useColors();
   const me = useSession((s) => s.me);
@@ -154,7 +172,7 @@ export function MenuSheet({ visible, onClose }: { visible: boolean; onClose: () 
     onClose();
     router.push(href as never);
   };
-  const groups = GROUPS.map((g) => ({ ...g, entries: g.entries.filter((e) => !e.permission || hasPermission(me, e.permission)) })).filter((g) => g.entries.length > 0);
+  const groups = menuGroups(me);
   return (
     <BottomSheet visible={visible} title="Menu" onClose={onClose}>
       {pending > 0 ? (

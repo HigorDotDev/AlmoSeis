@@ -37,8 +37,8 @@ mobile/
     (app)/
       _layout.tsx                      # guarda de sessão + AppHeader (menu) + ConnectivityBar + SubscriptionBanner
       (tabs)/
-        _layout.tsx                    # 4 abas superiores filtradas por permissão
-        marmitas.tsx  salao.tsx  pedidos.tsx  fechamento.tsx
+        _layout.tsx                    # abas superiores pelos módulos do tenant + permissão (ADR-0055)
+        marmitas.tsx  salao.tsx  delivery.tsx  pedidos.tsx  fechamento.tsx
       business-day/open.tsx
       orders/
         new/marmita.tsx  new/pf.tsx  new/kilo.tsx
@@ -52,9 +52,11 @@ mobile/
         customers/index.tsx  customers/[id].tsx
         pricing.tsx  payment-methods.tsx  audit.tsx  settings.tsx  subscription.tsx  drafts.tsx  devices.tsx
         storefront.tsx                 # página de pedidos (EP-002 F-210)
+        fixed-menu.tsx                 # cardápio fixo da lanchonete (EP-003; "em breve" até a fatia 2)
   src/
     api/          client.ts  errors.ts  headers.ts  endpoints/*.ts (um arquivo por recurso do 06)
     features/     auth/ orders/ production/ payments/ closing/ menu/ catalog/ customers/ employees/ sync/ realtime/ drafts/ storefront/ push/
+                  tenant/ (comportamentos, rótulos e módulos, EP-003)  delivery/ (aba Delivery, EP-003)
                   (cada uma com hooks/, components/, schemas.ts)
     components/ui/   design system (§8.10)
     db/           schema.ts  migrations.ts  draftsRepo.ts  pendingOpsRepo.ts  metaRepo.ts
@@ -249,6 +251,7 @@ Os conflitos (RN-014.9/14.10) aparecem no envio, via `409 VersionConflict` (§8.
   4. `actorEmployeeId === me.employee.id` → **não** toca som nem mostra toast (RN-008.6).
 - `AccessRevoked` → tenta renovar o token. Falhou → sai, com o motivo.
 - `SubscriptionStatusChanged` → invalida `['me']`.
+- **Módulos (EP-003, ADR-0054 item 15):** `TenantModulesChanged` e a entrada `TENANT` do feed (`keysForEntity('TENANT')` = `['me']`, `['tenant']`) invalidam o `me`; o `useMeSync` grava o `me` novo na sessão, e as abas e o menu se remontam. Um `403 ModuleNotEnabled` em qualquer chamada também invalida o `['me']` (`onModuleNotEnabled` do cliente), porque o aparelho pode estar com módulos velhos. Um `me` guardado por um app anterior, sem `modules`, é tratado como restaurante até a recarga (06 §6.3).
 - Só fica conectado com o app em primeiro plano. Em segundo plano desconecta, e ao voltar sincroniza (ADR-0036).
 
 ### Avisos na cozinha (ADR-0036)
@@ -295,7 +298,7 @@ O `installationId` é gerado uma vez (`randomUUID`) e guardado no SecureStore.
 | Rota | Conteúdo | API | Observações |
 |---|---|---|---|
 | `(auth)/login` | Telefone ou e-mail + senha; "Esqueci a senha"; "Criar conta"; "Tenho um código de convite" | `POST /auth/login` | Envia `preferredTenantId` (último usado). `401` com `lockedUntil` → "Tente novamente às HH:mm" |
-| `(auth)/signup` | 3 passos: **Você** (nome, telefone, e-mail, senha), **Estabelecimento** (nome, CPF/CNPJ, cidade/UF), **Termos** (aceite) | `POST /auth/signup` | Máscaras de CPF/CNPJ/telefone. `409 EmailAlreadyRegistered` → oferece "Entrar com essa conta" (`existingAccount`). `TrialAlreadyClaimed` → explica e mostra o contato do suporte. **Nenhum preço** (ADR-0017) |
+| `(auth)/signup` | 3 passos: **Você** (nome, telefone, e-mail, senha), **Estabelecimento** (nome, CPF/CNPJ, cidade/UF, **tipo** Restaurante/Lanchonete e **rótulos**), **Termos** (aceite) | `POST /auth/signup` | Tipo obrigatório e sem padrão (`tenant.behavior`, ADR-0054 item 3), com o aviso "Não dá para trocar depois". Os rótulos (`tenant.labels`, lista fixa em `features/tenant/establishment.ts`) aparecem só depois do tipo e só os dele; multisseleção, pelo menos um; trocar o tipo limpa os marcados. `422` em `tenant.behavior`/`tenant.labels` aparece no campo. Máscaras de CPF/CNPJ/telefone. `409 EmailAlreadyRegistered` → oferece "Entrar com essa conta" (`existingAccount`). `TrialAlreadyClaimed` → explica e mostra o contato do suporte. **Nenhum preço** (ADR-0017) |
 | `(auth)/invitation/[code]` | Deep link `almoseis://convite/K7P3QZ` ou `https://almoseis.app/convite/…`; também acessível por "Tenho um código" | `GET /invitations/{code}` → `POST …/accept` | Mostra o estabelecimento e os perfis. Abas "Sou novo" / "Já tenho conta" |
 | `(auth)/forgot-password`, `reset-password` | E-mail → "Se existir uma conta, enviamos um link". Código do proprietário + nova senha | `/auth/password/*` | O link do e-mail abre `reset-password?emailToken=` |
 | `update-required` | Bloqueante: "Atualize o AlmoSeis para continuar" + botão da loja (`extensions.storeUrl`) | — | ADR-0035 |
@@ -327,32 +330,43 @@ Em modo compartilhado:
   - `TRIALING` com até 2 dias ou `PAST_DUE` → aviso **sem preço nem link** (ADR-0017);
   - `canWrite = false` → "Modo somente leitura", e todas as ações de escrita desabilitadas, com explicação.
 
-### Abas superiores (`(tabs)/_layout.tsx`), filtradas por permissão (RF-001)
+### Abas superiores (`(tabs)/_layout.tsx`), pelos módulos e pelas permissões (RF-001, ADR-0055)
+
+As abas saem de `visibleTabs(me)` (`features/tenant/establishment.ts`): **só** `me.tenant.modules` e as permissões, nunca o comportamento nem o rótulo. Cada aba é um `TopTabs.Protected`; quando o `me` muda (ver "Módulos" em §8.6), as abas se remontam sozinhas.
 
 | Aba | Aparece com | Sem expediente aberto |
 |---|---|---|
-| Marmitas | `orders.view` | Card "Abrir expediente" (`cash.open`) ou "Peça para o caixa abrir o expediente" |
-| Salão | `orders.view` | idem |
-| Pedidos | `production.view` | "Nenhum expediente aberto" |
+| Marmitas | `MARMITA` + `orders.view` | Card "Abrir expediente" (`cash.open`) ou "Peça para o caixa abrir o expediente" |
+| Salão | (`PF`, `KILO` ou `A_LA_CARTE`) + `orders.view` | idem (PF e Quilo) |
+| Delivery | `DELIVERY` + `orders.view` | — (fatia 4; hoje só o estado "Disponível em breve") |
+| Pedidos / Cozinha | `production.view` | "Nenhum expediente aberto" |
 | Fechamento | `closing.view` | Histórico de fechamentos + "Abrir expediente" |
 
-A aba inicial é a primeira visível. O app lembra a última aba usada por aparelho, o que permite a cozinha abrir direto em Pedidos.
+- Restaurante (`MARMITA`, `PF`, `KILO`, `DAILY_MENU`): Marmitas · Salão · Pedidos · Fechamento, como antes.
+- Lanchonete (`A_LA_CARTE`, `DELIVERY`, `FIXED_MENU`): Salão · Delivery · Cozinha · Fechamento.
+- Os dois (só pelo admin): Marmitas · Salão · Delivery · Cozinha · Fechamento (sugestão do ADR-0055 item 4; Q-304 a confirmar).
+- A rota de produção é sempre `pedidos`; o título é "Pedidos" quando o tenant não tem nenhum módulo da lanchonete e "Cozinha" nos outros casos (`productionTabTitle`, ADR-0055 item 5). O texto do "Som de pedidos" em Configurações usa o mesmo nome.
+- Sub-abas do Salão (`salaoKinds`): PF e Quilo no restaurante; na lanchonete, **sem sub-abas**, só as comandas; com os dois, PF · Quilo · Comandas. Enquanto a fatia 3 não chega, "Comandas" mostra "Comandas · Disponível em breve" com o texto do que vai existir, **sem botão** (nem "Nova comanda").
+
+A aba inicial é a última usada no aparelho (o que permite a cozinha abrir direto na produção), **se ela ainda existe** para este tenant e este funcionário; senão, a primeira visível (`initialTab`, em `app/index.tsx`). O valor lembrado não é apagado: volta a valer se a aba voltar.
 
 ### Menu expansível (épico §2.1)
 
 | Item | Rota | Permissão |
 |---|---|---|
 | Perfil do usuário | `menu/profile` (nome, PIN, trocar senha com `PUT /auth/me/password`, trocar de estabelecimento) | — |
-| Dados do estabelecimento | `menu/tenant` | ver: `orders.view`; editar: `settings.manage` |
+| Dados do estabelecimento | `menu/tenant` (tipo só leitura, rótulos) | ver: `orders.view`; editar: `settings.manage` |
 | Funcionários | `menu/employees` | `employees.manage` |
 | Perfis e permissões | `menu/roles` (somente leitura, ADR-0028) | — |
-| Pratos e bebidas | `menu/products`, `menu/sizes` | ver: `orders.view`; editar: `catalog.manage` |
-| Cardápio do dia | `menu/menus/today` | `menu.manage` |
-| Cardápio semanal | `menu/menus/weekly` | `menu.manage` |
-| Histórico e reutilização de cardápios | `menu/menus/history` | `menu.manage` |
+| Cardápio (fixo, lanchonete) | `menu/fixed-menu` ("Cardápio fixo · Disponível em breve" até a fatia 2, sem botões) | `orders.view` + módulo `FIXED_MENU` |
+| Pratos e bebidas | `menu/products` | ver: `orders.view`; editar: `catalog.manage`. Módulo `MARMITA`, `PF`, `KILO` ou `DAILY_MENU` (o `Product` é o catálogo do restaurante, ADR-0056 item 4) |
+| Tamanhos de marmita | `menu/sizes` | ver: `orders.view`; editar: `catalog.manage`. Módulo `MARMITA` |
+| Cardápio do dia | `menu/menus/today` | `menu.manage` + `DAILY_MENU` |
+| Cardápio semanal | `menu/menus/weekly` | `menu.manage` + `DAILY_MENU` |
+| Histórico e reutilização de cardápios | `menu/menus/history` | `menu.manage` + `DAILY_MENU` |
 | Clientes | `menu/customers` | `orders.view` |
-| Página de pedidos | `menu/storefront` (EP-002 F-210) | ver e compartilhar: `orders.view`; alterar: `storefront.manage` |
-| Configuração de preços | `menu/pricing` (preço do quilo, taxa de entrega) | `settings.manage` |
+| Página de pedidos | `menu/storefront` (EP-002 F-210) | ver e compartilhar: `orders.view`; alterar: `storefront.manage`. Módulo `MARMITA` (a página da lanchonete é a fatia 5 do EP-003) |
+| Configuração de preços | `menu/pricing` (preço do quilo só com `KILO`, taxa de entrega) | `settings.manage` + `KILO` ou `MARMITA` |
 | Formas de pagamento | `menu/payment-methods` | `settings.manage` |
 | Histórico de operações | `menu/audit` | `audit.view` |
 | Histórico de fechamentos | `closing/history` | `closing.view` |
@@ -544,7 +558,7 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 | `menu/employees/invite` | Perfis → `POST /employees/invitations` → tela com código grande, link e botão "Enviar pelo WhatsApp" (`Share.share` com texto pronto); lista de convites pendentes com revogar | `/employees/invitations*` |
 | `menu/roles` | O que cada perfil pode fazer, em linguagem simples | `GET /roles` |
 | `menu/pricing`, `menu/payment-methods` | Preço do quilo, taxa padrão, formas habilitadas | `PATCH /tenant/settings` [M] |
-| `menu/tenant` | Dados do estabelecimento | `GET/PATCH /tenant` |
+| `menu/tenant` | Dados do estabelecimento: nome, documento, cidade/UF, fuso; **Tipo de estabelecimento** (`behaviors`, só leitura: "O tipo é escolhido no cadastro…", sem botão de troca nem de contratação, ADR-0054 itens 4 e 5 e ADR-0017); **Rótulos** (chips dos comportamentos habilitados, pelo menos um; sem `settings.manage`, a lista em texto). Um "Salvar" para tudo; `labels` só vai no corpo quando mudou (troca o conjunto inteiro). A mutação fica fora do formulário; `409` → "Outra pessoa alterou os dados do estabelecimento…", o formulário volta com o servidor e nada é reenviado | `GET/PATCH /tenant` (If-Match) |
 | `menu/audit` | Filtros (tipo, funcionário, período); linhas "Ana estornou R$ 35,00 do pedido #12 — 28/10 10:05" | `GET /audit-logs` |
 | `menu/subscription` | Situação, dias restantes e texto de orientação. **Sem preço, plano ou link** (ADR-0017) | `GET /subscription` |
 | `menu/drafts` | Rascunhos (continuar / descartar) e pendências (verificar / reenviar / descartar com confirmação) | SQLite + `GET /operations/{key}` |
@@ -607,6 +621,7 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 | `OrderAlreadyDispatched` | "Este pedido já saiu (ou foi retirado). Para incluir itens, crie outro pedido." |
 | `ProductionNotCompleted` | "A cozinha ainda não concluiu este pedido. Use "Concluir e marcar" ou espere a conclusão." |
 | `TooManyRequests` | "Muitas tentativas. Aguarde {Retry-After} s." |
+| `ModuleNotEnabled` | Pela extensão `module`: "{nome do módulo} não está habilitado neste estabelecimento." (Marmita, PF, Quilo, Cardápio do dia, Comandas à la carte, Delivery, Cardápio fixo); sem extensão, "Este recurso não está habilitado no estabelecimento." Também recarrega o `me` |
 | outros / 5xx | "Algo deu errado. Código: {traceId curto}." (o `traceId` vai para o suporte) |
 
 ---
@@ -632,6 +647,7 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 | Componentes (RNTL) | `ConfirmDialog` (cancelar não chama a API), `MoneyInput`, `PermissionGate`, `OrderCard` com os dois badges |
 | Pedidos do site (ADR-0046) | `webOrders.test.ts`: botões de atendimento por tipo/status/permissão, "Concluir e marcar", `isDispatched`, contagem regressiva, texto do conflito pelo `current`, validação da recusa, título da aba, avisos do fechamento, mensagens dos `errorCode`s novos. `webOrderFlow.test.tsx` (fetch simulado, exemplos literais do 06): faixa com prazo, itens, endereço e "telefone não verificado"; cozinha sem botões; aceite com `If-Match` + `Idempotency-Key` + tempo estimado; `409` "Já aceito por Bruno"; `WebOrderExpired`; rede caindo → pendência `UNKNOWN` e nenhum reenvio; recusa com motivo, "Outro" obrigatório e sem `Idempotency-Key`; "Concluir e marcar saída" com `completeProduction`; `ProductionNotCompleted`; selos "Site"/atendimento no `OrderCard`; "Pronto para retirar"; fechamento com os pedidos do site |
 | Página de pedidos (EP-002 F-210) | `storefront.test.tsx` (fetch simulado, exemplo do 06 §6.18): slug normalizado e formato; chave rápida com o objeto inteiro e só a chave trocada; corpo do formulário (E.164, UF, vazios → `null`, taxa intocada); textos do estado; QR com os padrões de posição; ativar sem endereço → `PUT` com `If-Match` e o motivo do `422` na tela; pausar → `isAcceptingOrders: false` e "Pausada"; `409` → aviso, formulário recarregado, sem reenvio; chaves travadas com edição pendente; modo leitura com compartilhar; `share.web.ts` (copiar sem `navigator.share`, fechar a folha não copia); `isVisibleOnPage` no `PATCH` da bebida; "Vai pagar…" e o aviso de `riskFlag`. Fatia 4: texto do `pageDelivery.missing` (e `MAPS_PROVIDER` à parte); raio e coordenadas digitados; link do Google Maps; texto de "Página ativa" depois de ativar (defeito corrigido); "Ver no mapa" e "Confirmar este ponto" (`location` confirmado no objeto inteiro, `If-Match`); correção à mão; salvar a regra da taxa sem `location` no corpo; taxa fixa sem o ponto; "Entrega · 4,5 km · taxa R$ 3,60" |
+| Comportamento e módulos (EP-003 fatia 1) | `establishment.test.tsx`: abas do restaurante, da lanchonete, dos dois e de quem só tem `production.view` ("Cozinha"/"Pedidos"); `me` antigo sem `modules`; sub-abas do Salão e o Salão da lanchonete "em breve", sem botão; última aba que deixou de existir; menu sem os cadastros do restaurante e com "Cardápio" na lanchonete; lista fixa de rótulos e a validação; cadastro sem tipo, sem rótulo, só os rótulos do tipo, troca de tipo limpa, corpo com `behavior` e `labels`; "Dados do estabelecimento" com o tipo só leitura, troca de rótulos com `If-Match`, sem rótulo não salva, leitura sem `settings.manage`, `409` sem reenvio; `TenantModulesChanged` → `GET /auth/me` → abas novas; entrada `TENANT` no feed; mensagem do `ModuleNotEnabled` e o aviso do cliente |
 | Push dos pedidos do site (EP-002 F-209) | `push.test.tsx` (`expo-notifications` e `expo-constants` simulados, exemplo literal do 06 §6.3): leitura do `data` (só `kind` conhecido e `orderId` UUID); decisão do toque (sem sessão espera, outro tenant descarta, toque velho descarta); corpo do `PUT` e resposta sem token; sem repetir com os mesmos dados e de novo com outro funcionário (PIN) ou token novo; sem permissão não registra e apaga o registro anterior; sem `projectId` não pede token, avisa uma vez e a tela diz o motivo; chave "Avisar pedidos do site" no `PUT`; `receivesWebOrders = false`; registro ao entrar e na troca de token; `DELETE` no "Encerrar sessão"; explicação antes do pedido do sistema, "Agora não", negada com atalho para as configurações, sem `orders.accept` não aparece; primeiro plano suprimido e canal `web-orders` com o som; toque abre o pedido, outro tenant ignorado, app fechado sem sessão abre depois do login, a mesma notificação uma vez só; `notifications.web.ts` no-op. **O push de verdade não foi testado** (exige `eas init`, credenciais FCM/APNs e o build novo) |
 | E2E (Maestro, emulador Android de entrada) | 1) cadastro → abrir expediente → marmita com bebida → receber em dinheiro com troco → fechar com diferença e justificativa; 2) desligar a rede no meio do "Receber" → religar → app resolve sem duplicar; 3) PIN no aparelho compartilhado + inatividade |
 
@@ -664,6 +680,7 @@ Critério de pronto do mobile (`docs/02-padroes.md` §2.6): fluxos E2E 1 e 2 pas
 | Inatividade compartilhada | `sharedDeviceIdleSeconds` é editado em "Formas de pagamento" (mesmo `PATCH /tenant/settings`) | `menu/settings` é só local (8.10) |
 | Som | `assets/sounds/new-order.wav` (bipe curto gerado) via `expo-audio`; `assets/sounds/web_order.wav` (dois toques sintetizados, 1,5 s) para o pedido do site, no app e no canal de push | ADR-0036, ADR-0049 item 7 |
 | Push e build | `expo-notifications` entrou na fatia 5 do EP-002: muda o fingerprint (`runtimeVersion: fingerprint`), então **nenhum EAS Update chega aos builds antigos** e é preciso gerar e instalar um Dev Client/APK novo. O token só sai com `extra.eas.projectId` (`eas init`) e as credenciais FCM (Android) e APNs (iOS) no EAS | Sem isso o app funciona, só não registra o push (Configurações diz o motivo) |
+| Abrir expediente sem `DAILY_MENU` | A tela "Expediente aberto" não fala de cardápio (06: `materializedMenus` vem `[]` na lanchonete) | Evita "Nenhum modelo semanal para hoje" numa lanchonete |
 | E2E | Fluxos Maestro em `mobile/e2e/` escritos a partir de 8.13; **ainda não rodados** em emulador | Exigem homolog e Dev Client instalado |
 
 ---

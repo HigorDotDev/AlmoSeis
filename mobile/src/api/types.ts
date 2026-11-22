@@ -76,9 +76,40 @@ export interface Tokens {
 
 export type SubscriptionStatus = 'TRIALING' | 'ACTIVE' | 'PAST_DUE' | 'SUSPENDED' | 'CANCELED';
 
+/** Comportamento do estabelecimento (ADR-0054 item 1, 06 §6.3 "Comportamentos, rótulos e módulos"). */
+export type EstablishmentBehavior = 'RESTAURANT' | 'SNACK_BAR';
+
+/** Módulos derivados dos comportamentos (ADR-0054 item 12). O app monta abas e menu só por eles (ADR-0055). */
+export type TenantModule = 'MARMITA' | 'PF' | 'KILO' | 'DAILY_MENU' | 'A_LA_CARTE' | 'DELIVERY' | 'FIXED_MENU';
+
+/** Rótulos informativos, lista fixa (ADR-0054 item 8). O texto pt-BR fica em `features/tenant/establishment.ts`. */
+export type TenantLabel =
+  | 'RESTAURANT'
+  | 'MARMITARIA'
+  | 'SELF_SERVICE'
+  | 'BURGER_JOINT'
+  | 'PASTEL_SHOP'
+  | 'ACAI_SHOP'
+  | 'PIZZERIA'
+  | 'SNACK_BAR'
+  | 'ICE_CREAM_SHOP'
+  | 'CAFE'
+  | 'BAKERY'
+  | 'SKEWER_BAR'
+  | 'SUSHI'
+  | 'SWEETS_SHOP'
+  | 'OTHER';
+
 export interface Me {
   user: { id: Uuid; fullName: string; email: string | null; phoneNumber: string | null };
-  tenant: { id: Uuid; name: string; timeZone: string };
+  tenant: {
+    id: Uuid;
+    name: string;
+    timeZone: string;
+    behaviors: EstablishmentBehavior[];
+    labels: TenantLabel[];
+    modules: TenantModule[];
+  };
   employee: { id: Uuid; displayName: string; roles: Role[]; hasPin: boolean };
   permissions: Permission[];
   memberships: { tenantId: Uuid; tenantName: string; employeeId: Uuid; roles: Role[] }[];
@@ -109,7 +140,18 @@ export type DocumentType = 'CPF' | 'CNPJ';
 export interface SignupBody {
   newAccount: NewAccount | null;
   existingAccount: ExistingAccount | null;
-  tenant: { name: string; documentType: DocumentType; documentNumber: string; city: string; state: string; timeZone: string };
+  tenant: {
+    name: string;
+    documentType: DocumentType;
+    documentNumber: string;
+    city: string;
+    state: string;
+    timeZone: string;
+    /** Exatamente um, sem padrão (ADR-0054 item 3). */
+    behavior: EstablishmentBehavior;
+    /** Um ou mais, todos do comportamento escolhido (ADR-0054 item 9). */
+    labels: TenantLabel[];
+  };
   acceptedTermsVersion: string;
   installationId: string;
 }
@@ -190,8 +232,13 @@ export interface Tenant {
   city: string;
   state: string;
   timeZone: string;
+  behaviors: EstablishmentBehavior[];
+  labels: TenantLabel[];
   createdAt: Instant;
 }
+
+/** Corpo do `PATCH /tenant` (06 §6.4): campos ausentes não mudam. */
+export type TenantPatch = Partial<Pick<Tenant, 'name' | 'city' | 'state' | 'timeZone' | 'labels'>>;
 
 export type PaymentMethod = 'CASH' | 'PIX' | 'CARD';
 
@@ -881,6 +928,7 @@ export interface MonthlyClosing {
 // ---------------------------------------------------------------- 6.12 Sync e operações
 
 export type EntityType =
+  | 'TENANT'
   | 'TENANT_SETTINGS'
   | 'EMPLOYEE'
   | 'PRODUCT'

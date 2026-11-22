@@ -8,16 +8,49 @@ import type { OrderSummary } from '@/api/types';
 import { EmptyState, ErrorState, Fab, SegmentedControl, Skeleton, space, useColors, WEB_CONTENT_MAX } from '@/components/ui';
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { useCurrentMenu } from '@/features/menu/hooks';
-import { useCanWrite } from '@/stores/session';
+import { ALaCarteComingSoon } from '@/features/tenant/ComingSoon';
+import { salaoKinds, type SalaoKind } from '@/features/tenant/establishment';
+import { useCanWrite, useSession } from '@/stores/session';
 
 import { MenuMissingCard, NoBusinessDayCard, OrderCard } from '../components';
 import { useOrders } from '../hooks';
 
-/** 08 §8.9 Aba Salão: comandas abertas do expediente, as não pagas primeiro. */
+const kindLabels: Record<SalaoKind, string> = { PF: 'PF', KILO: 'Quilo', A_LA_CARTE: 'Comandas' };
+
+/**
+ * 08 §8.9 Aba Salão: as sub-abas seguem os módulos (ADR-0055 itens 2 a 4). Restaurante: PF e Quilo. Lanchonete:
+ * só as comandas, sem sub-abas. Os dois: PF, Quilo e Comandas. As comandas à la carte chegam na fatia 3.
+ */
 export default function SalaoTab() {
+  const me = useSession((s) => s.me);
+  const kinds = salaoKinds(me);
+  const [picked, setPicked] = useState<SalaoKind | null>(null);
+  const type = picked && kinds.includes(picked) ? picked : (kinds[0] ?? 'PF');
+  const segments = kinds.length > 1 ? kinds.map((k) => ({ value: k, label: kindLabels[k] })) : null;
+  if (type === 'A_LA_CARTE') return <ALaCarteView segments={segments} onChange={setPicked} />;
+  return <SalaoOrders type={type} segments={segments} onChange={setPicked} />;
+}
+
+type Segments = { value: SalaoKind; label: string }[] | null;
+
+function ALaCarteView({ segments, onChange }: { segments: Segments; onChange: (k: SalaoKind) => void }) {
+  const c = useColors();
+  return (
+    <View style={{ flex: 1, backgroundColor: c.bg }}>
+      {segments ? (
+        <View style={[{ padding: space.lg, paddingBottom: 0 }, WEB_CONTENT_MAX]}>
+          <SegmentedControl value="A_LA_CARTE" onChange={onChange} options={segments} />
+        </View>
+      ) : null}
+      <ALaCarteComingSoon />
+    </View>
+  );
+}
+
+/** Comandas de PF e de quilo do expediente, as não pagas primeiro. */
+function SalaoOrders({ type, segments, onChange }: { type: 'PF' | 'KILO'; segments: Segments; onChange: (k: SalaoKind) => void }) {
   const c = useColors();
   const day = useCurrentBusinessDay();
-  const [type, setType] = useState<'PF' | 'KILO'>('PF');
   const open = !!day.data;
   const menu = useCurrentMenu('PF', open && type === 'PF');
   const orders = useOrders({ orderType: type, cancellationStatus: 'ACTIVE' }, open);
@@ -49,14 +82,7 @@ export default function SalaoTab() {
           onEndReached={() => orders.hasNextPage && !orders.isFetchingNextPage && void orders.fetchNextPage()}
           ListHeaderComponent={
             <View style={{ gap: space.md, marginBottom: space.md }}>
-              <SegmentedControl
-                value={type}
-                onChange={setType}
-                options={[
-                  { value: 'PF', label: 'PF' },
-                  { value: 'KILO', label: 'Quilo' },
-                ]}
-              />
+              {segments ? <SegmentedControl value={type} onChange={onChange} options={segments} /> : null}
               {type === 'PF' && menu.data?.missing ? <MenuMissingCard menuType="PF" sources={menu.data.missing.sources} businessDate={menu.data.missing.businessDate} /> : null}
             </View>
           }

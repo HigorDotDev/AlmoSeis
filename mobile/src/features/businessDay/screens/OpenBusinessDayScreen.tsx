@@ -6,7 +6,8 @@ import { Banner, Button, ConfirmDialog, MoneyInput, Screen, Text } from '@/compo
 import { useClosing, useClosingHistory } from '@/features/closing/hooks';
 import { formatBRL } from '@/lib/money';
 import { useIsOnline } from '@/stores/connectivity';
-import { useCanWrite } from '@/stores/session';
+import { hasModule } from '@/features/tenant/establishment';
+import { useCanWrite, useSession } from '@/stores/session';
 
 import { useCurrentBusinessDay, useOpenBusinessDay } from '../hooks';
 
@@ -18,6 +19,8 @@ export default function OpenBusinessDayScreen() {
   const lastClosing = useClosingHistory({});
   const canOpen = useCanWrite('cash.open');
   const online = useIsOnline();
+  // Sem `DAILY_MENU` (lanchonete), a abertura não cria cardápio do dia (ADR-0054 item 18): nada a dizer sobre ele.
+  const withDailyMenu = useSession((s) => hasModule(s.me, 'DAILY_MENU'));
   const [typed, setBalance] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { confirmSameDate: boolean }>(null);
   const [opened, setOpened] = useState<OpenBusinessDayResult | null>(null);
@@ -39,7 +42,7 @@ export default function OpenBusinessDayScreen() {
       <Screen>
         <Stack.Screen options={{ title: 'Expediente aberto' }} />
         <Banner tone="success" text={`Expediente aberto com ${formatBRL(opened.businessDay.openingBalance)} em caixa.`} />
-        {opened.materializedMenus.length > 0 ? (
+        {!withDailyMenu ? null : opened.materializedMenus.length > 0 ? (
           opened.materializedMenus.map((m) => <Text key={m.id}>Cardápio de {menuTypeNames[m.menuType]} criado a partir do modelo semanal.</Text>)
         ) : (
           <Text muted>Nenhum modelo semanal para hoje. Monte o cardápio ou reaproveite um anterior nas abas.</Text>

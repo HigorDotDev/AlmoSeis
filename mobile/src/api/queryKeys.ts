@@ -45,6 +45,9 @@ export const qk = {
 /** Prefixos a invalidar por entityType (08 §8.3). `entityId` refina o que for por id. */
 export function keysForEntity(entityType: EntityType, entityId?: string | null, ownEmployeeId?: string | null): QueryKey[] {
   switch (entityType) {
+    case 'TENANT':
+      // Nome, comportamentos, rótulos e módulos (06 §6.12): o `me` remonta as abas e o menu (ADR-0055).
+      return [['me'], ['tenant']];
     case 'ORDER':
       return [...(entityId ? [['orders', entityId]] : []), ['orders', 'list'], ['production'], ['customers']];
     case 'PAYMENT':

@@ -56,7 +56,7 @@ describe('MoneyInput', () => {
 const me = (permissions: Me['permissions']): Me =>
   ({
     user: { id: 'u', fullName: 'Ana', email: null, phoneNumber: null },
-    tenant: { id: 't', name: 'Marmitaria', timeZone: 'America/Sao_Paulo' },
+    tenant: { id: 't', name: 'Marmitaria', timeZone: 'America/Sao_Paulo', behaviors: ['RESTAURANT'], labels: ['MARMITARIA'], modules: ['MARMITA', 'PF', 'KILO', 'DAILY_MENU'] },
     employee: { id: 'e', displayName: 'Ana', roles: ['OWNER'], hasPin: false },
     permissions,
     memberships: [],

@@ -4,8 +4,9 @@ import { router, Stack } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Switch, View } from 'react-native';
 
-import { errorMessage } from '@/api/errors';
-import type { PaymentMethod, Tenant, TenantSettings } from '@/api/types';
+import { errorMessage, isApiError } from '@/api/errors';
+import type { PaymentMethod, Tenant, TenantLabel, TenantSettings } from '@/api/types';
+import { serverFieldError } from '@/components/form';
 import {
   Banner,
   Button,
@@ -22,6 +23,7 @@ import {
   SyncStatePill,
   Text,
   TextField,
+  useColors,
 } from '@/components/ui';
 import { draftsRepo } from '@/db/draftsRepo';
 import type { Draft, PendingOperation } from '@/db/schema';
@@ -30,6 +32,7 @@ import { useSetPin, useSettings, useSubscription, useSwitchTenant, useTenant, us
 import { confirmSignOut } from '@/features/shell/AppShell';
 import { WebOrderPushSettings } from '@/features/push/components';
 import { ChangePasswordSection } from '@/features/settings/ChangePasswordSection';
+import { behaviorNames, hasModule, labelsError, labelsFor, labelText, productionTabTitle, toggleLabel } from '@/features/tenant/establishment';
 import { discardPending, isExpired, resendPending, resolveUnknown } from '@/features/sync/operations';
 import { confirmAction } from '@/lib/confirm';
 import { formatDateTime } from '@/lib/dates';
@@ -96,18 +99,35 @@ export function ProfileScreen() {
   );
 }
 
+/**
+ * 08 §8.10 `menu/tenant` — Dados do estabelecimento. O tipo (comportamento) é só leitura: o app não troca nem
+ * acrescenta (ADR-0054 itens 4 e 5). Os rótulos são editáveis com `settings.manage` (`PATCH /tenant`, If-Match).
+ * A mutação fica fora do formulário (que remonta a cada versão) para o aviso de conflito sobreviver à recarga.
+ */
 export function TenantScreen() {
   const tenant = useTenant();
+  const update = useUpdateTenant();
   if (!tenant.data) return <Skeleton lines={4} />;
-  return <TenantForm key={tenant.data.version} tenant={tenant.data} />;
+  return <TenantForm key={tenant.data.version} tenant={tenant.data} update={update} />;
 }
 
-function TenantForm({ tenant: t }: { tenant: Tenant }) {
+function TenantForm({ tenant: t, update }: { tenant: Tenant; update: ReturnType<typeof useUpdateTenant> }) {
+  const c = useColors();
   const canEdit = useCanWrite('settings.manage');
-  const update = useUpdateTenant();
   const [name, setName] = useState(t.name);
   const [city, setCity] = useState(t.city);
   const [state, setState] = useState(t.state);
+  const [labels, setLabels] = useState<TenantLabel[]>(t.labels);
+  const behaviors = t.behaviors;
+  const options = labelsFor(behaviors);
+  const labelsInvalid = labelsError(labels, behaviors);
+  const labelsChanged = labels.length !== t.labels.length || labels.some((l) => !t.labels.includes(l));
+  const conflict = isApiError(update.error, 'VersionConflict');
+  const save = () =>
+    update.mutate(
+      { version: t.version, body: { name: name.trim(), city: city.trim(), state, ...(labelsChanged ? { labels } : {}) } },
+      { onSuccess: () => toast('Dados salvos') },
+    );
   return (
     <Screen>
       <Stack.Screen options={{ title: 'Estabelecimento' }} />
@@ -116,10 +136,35 @@ function TenantForm({ tenant: t }: { tenant: Tenant }) {
       <TextField label="Cidade" value={city} onChangeText={setCity} editable={canEdit} />
       <TextField label="UF" value={state} onChangeText={(s) => setState(s.toUpperCase().slice(0, 2))} editable={canEdit} />
       <KeyValue label="Fuso horário" value={t.timeZone} />
-      {update.error ? <Banner tone="danger" text={errorMessage(update.error)} /> : null}
-      {canEdit ? (
-        <Button title="Salvar" loading={update.isPending} onPress={() => update.mutate({ version: t.version, body: { name: name.trim(), city: city.trim(), state } }, { onSuccess: () => toast('Dados salvos') })} />
+      <Section title="Tipo de estabelecimento">
+        <Text accessibilityLabel={`Tipo de estabelecimento: ${behaviors.map((b) => behaviorNames[b]).join(' e ')}`}>{behaviors.map((b) => behaviorNames[b]).join(' e ')}</Text>
+        <Text variant="small" muted>
+          O tipo é escolhido no cadastro e define as abas e os cadastros do app.
+        </Text>
+      </Section>
+      <Section title="Rótulos">
+        <Text variant="small" muted>
+          Só informativos: aparecem no perfil do estabelecimento e não mudam o funcionamento do app.
+        </Text>
+        {canEdit ? (
+          <Row style={{ flexWrap: 'wrap' }}>
+            {options.map((l) => (
+              <Chip key={l.code} label={l.text} selected={labels.includes(l.code)} onPress={() => setLabels(toggleLabel(labels, l.code))} />
+            ))}
+          </Row>
+        ) : (
+          <Text>{t.labels.map(labelText).join(', ')}</Text>
+        )}
+        {canEdit && labelsInvalid ? <Text variant="small" style={{ color: c.danger }}>
+            {labelsInvalid}
+          </Text> : null}
+      </Section>
+      {conflict ? (
+        <Banner tone="warning" text="Outra pessoa alterou os dados do estabelecimento enquanto você editava. Nada foi gravado: confira os dados abaixo e salve de novo." />
+      ) : update.error ? (
+        <Banner tone="danger" text={serverFieldError(update.error, 'labels') ?? errorMessage(update.error)} />
       ) : null}
+      {canEdit ? <Button title="Salvar" loading={update.isPending} disabled={!!labelsInvalid} onPress={save} /> : null}
     </Screen>
   );
 }
@@ -132,22 +177,33 @@ export function PricingScreen() {
 
 function PricingForm({ settings: st }: { settings: TenantSettings }) {
   const update = useUpdateSettings();
+  // Preço do quilo só com o módulo `KILO` (06 §6.4: mudar sem o módulo → 403 ModuleNotEnabled).
+  const withKilo = useSession((s) => hasModule(s.me, 'KILO'));
   const [kilo, setKilo] = useState<string>(st.kiloPricePerKg ?? '0.00');
   const [fee, setFee] = useState<string>(st.defaultDeliveryFee);
   return (
     <Screen>
       <Stack.Screen options={{ title: 'Preços' }} />
-      <MoneyInput label="Preço do quilo" value={kilo} onChange={setKilo} />
-      <Text variant="small" muted>
-        Mudar o preço não altera pesagens já registradas (RN-006.3).
-      </Text>
+      {withKilo ? (
+        <>
+          <MoneyInput label="Preço do quilo" value={kilo} onChange={setKilo} />
+          <Text variant="small" muted>
+            Mudar o preço não altera pesagens já registradas (RN-006.3).
+          </Text>
+        </>
+      ) : null}
       <MoneyInput label="Taxa de entrega padrão" value={fee} onChange={setFee} />
       {update.error ? <Banner tone="danger" text={errorMessage(update.error)} /> : null}
       <Button
         title="Salvar preços"
         loading={update.isPending}
-        disabled={toCents(kilo) === 0}
-        onPress={() => update.mutate({ version: st.version, body: { kiloPricePerKg: kilo, defaultDeliveryFee: fee } }, { onSuccess: () => toast('Preços salvos') })}
+        disabled={withKilo && toCents(kilo) === 0}
+        onPress={() =>
+          update.mutate(
+            { version: st.version, body: withKilo ? { kiloPricePerKg: kilo, defaultDeliveryFee: fee } : { defaultDeliveryFee: fee } },
+            { onSuccess: () => toast('Preços salvos') },
+          )
+        }
       />
     </Screen>
   );
@@ -247,11 +303,12 @@ export function AuditScreen() {
 export function GeneralSettingsScreen() {
   const prefs = usePreferences();
   const sharedDevice = useSession((s) => s.sharedDevice);
+  const productionTab = useSession((s) => productionTabTitle(s.me));
   return (
     <Screen>
       <Stack.Screen options={{ title: 'Configurações' }} />
       <Row style={{ justifyContent: 'space-between' }}>
-        <Text style={{ flex: 1 }}>Som de pedidos (aba Pedidos e pedidos do site com o app aberto)</Text>
+        <Text style={{ flex: 1 }}>Som de pedidos (aba {productionTab} e pedidos do site com o app aberto)</Text>
         <Switch value={prefs.orderSound} onValueChange={prefs.setOrderSound} accessibilityLabel="Som de pedidos" />
       </Row>
       <Row style={{ justifyContent: 'space-between' }}>

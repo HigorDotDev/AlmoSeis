@@ -87,6 +87,11 @@ export function useAppRuntime(): void {
           void queryClient.invalidateQueries({ queryKey: ['marmitaSizes'] });
           void queryClient.invalidateQueries({ queryKey: qk.settings });
           break;
+        case 'TenantModulesChanged':
+          // O admin acrescentou um comportamento (06 §6.14): recarrega o `me`, e as abas se ajustam aos módulos.
+          void queryClient.invalidateQueries({ queryKey: qk.me });
+          void queryClient.invalidateQueries({ queryKey: qk.tenant });
+          break;
         case 'SubscriptionStatusChanged':
           void queryClient.invalidateQueries({ queryKey: qk.me });
           void queryClient.invalidateQueries({ queryKey: qk.subscription });

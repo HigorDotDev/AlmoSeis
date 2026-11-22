@@ -9,6 +9,7 @@ import type {
   ProductionStatus,
   RejectionReasonCode,
   Role,
+  TenantModule,
 } from '@/api/types';
 
 export const roleNames: Record<Role, string> = {
@@ -17,6 +18,17 @@ export const roleNames: Record<Role, string> = {
   ATTENDANT: 'Atendente',
   KITCHEN: 'Cozinha',
   CASHIER: 'Caixa',
+};
+
+/** Módulos do estabelecimento (ADR-0054 item 12), para a mensagem do `403 ModuleNotEnabled`. */
+export const moduleNames: Record<TenantModule, string> = {
+  MARMITA: 'Marmita',
+  PF: 'PF',
+  KILO: 'Quilo',
+  DAILY_MENU: 'Cardápio do dia',
+  A_LA_CARTE: 'Comandas à la carte',
+  DELIVERY: 'Delivery',
+  FIXED_MENU: 'Cardápio fixo',
 };
 
 export const orderTypeNames: Record<OrderType, string> = { MARMITA: 'Marmita', PF: 'PF', KILO: 'Quilo' };
@@ -115,6 +127,7 @@ export const errorMessages: Record<string, string> = {
   OrderNotAwaitingAcceptance: 'Este pedido do site não aguarda mais aceite.',
   WebOrderExpired: 'O prazo acabou, o pedido expirou.',
   OrderAlreadyDispatched: 'Este pedido já saiu (ou foi retirado). Para incluir itens, crie outro pedido.',
+  ModuleNotEnabled: 'Este recurso não está habilitado no estabelecimento.',
   ProductionNotCompleted: 'A cozinha ainda não concluiu este pedido. Use "Concluir e marcar" ou espere a conclusão.',
 };
 

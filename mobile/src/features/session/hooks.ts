@@ -5,7 +5,7 @@ import { useEffect } from 'react';
 import { authApi } from '@/api/endpoints/auth';
 import { tenantApi } from '@/api/endpoints/tenant';
 import { qk } from '@/api/queryKeys';
-import type { Session, Tenant, TenantSettings } from '@/api/types';
+import type { Session, TenantPatch, TenantSettings } from '@/api/types';
 import { useSession } from '@/stores/session';
 
 const MIN = 60_000;
@@ -49,7 +49,7 @@ export function useUpdateSettings() {
 export function useUpdateTenant() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: async ({ body, version }: { body: Partial<Pick<Tenant, 'name' | 'city' | 'state' | 'timeZone'>>; version: number }) =>
+    mutationFn: async ({ body, version }: { body: TenantPatch; version: number }) =>
       (await tenantApi.update(body, version)).data,
     onSuccess: (data) => {
       client.setQueryData(qk.tenant, data);

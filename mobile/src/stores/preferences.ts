@@ -4,7 +4,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 
 import { preferencesStorage } from '@/db/kvStorage';
 
-export type TabName = 'marmitas' | 'salao' | 'pedidos' | 'fechamento';
+export type TabName = 'marmitas' | 'salao' | 'delivery' | 'pedidos' | 'fechamento';
 /** `system` segue o claro/escuro do aparelho (ou do navegador). */
 export type ThemeMode = 'system' | 'light' | 'dark';
 

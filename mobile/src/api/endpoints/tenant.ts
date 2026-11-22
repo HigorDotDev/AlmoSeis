@@ -16,6 +16,7 @@ import type {
   SharedDeviceSummary,
   Subscription,
   Tenant,
+  TenantPatch,
   TenantSettings,
   Uuid,
 } from '../types';
@@ -23,7 +24,8 @@ import type {
 /** 06 §6.2 e §6.4. */
 export const tenantApi = {
   get: () => apiRequest<Tenant>('GET', '/tenant'),
-  update: (body: Partial<Pick<Tenant, 'name' | 'city' | 'state' | 'timeZone'>>, version: number) =>
+  /** `labels` troca o conjunto inteiro (06 §6.4); o comportamento não é alterável pelo app. */
+  update: (body: TenantPatch, version: number) =>
     apiRequest<Tenant>('PATCH', '/tenant', { body, ifMatch: version }),
   settings: () => apiRequest<TenantSettings>('GET', '/tenant/settings'),
   updateSettings: (body: Partial<Omit<TenantSettings, 'version'>>, version: number) =>
