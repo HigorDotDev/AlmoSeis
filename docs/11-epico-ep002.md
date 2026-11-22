@@ -585,7 +585,7 @@ Precisam de decisão do usuário antes do código que depende delas ir para prod
 | Q-18 | N | **Janela de horário obrigatória** para ligar o pagamento online | Sim | 0044, 0050 |
 | Q-19 | N | **Validade do Pix** na página | 15 min | 0050 |
 | Q-20 | T | **Comissão exibida no app** e as diretrizes das lojas | Exibir como informação contratual; confirmar | 0050 |
-| Q-21 | T | **Chargeback com split** no Asaas | Confirmar antes de liberar cartão | 0050 |
+| Q-21 | T | **Chargeback com split** no Asaas | Confirmar antes de liberar cartão *(2026-11-21: a documentação só lista os eventos; perguntar ao Asaas)* | 0050 |
 | Q-22 | T | **Hospedagem do app web do restaurante**: Azure Static Web Apps (Free ou Standard) ou Container App com nginx | Static Web Apps. Free em homologação; em produção, Free no piloto (sem SLA) e Standard se precisar de SLA | 0053 |
 | Q-23 | T | **Endereço do app web**: `app.{dominio}` e `app-homolog.{dominio}` (depende da Q-07) | `app.almoseis.app` e `app-homolog.almoseis.app`, seguindo o `api-homolog.` do `09-devops.md` | 0053 |
 | Q-24 | N | **Aparelho compartilhado com PIN no navegador** já no MVP web? | Sim. O computador do balcão é o caso típico de aparelho compartilhado; sem PIN, a equipe usa uma conta só | 0027, 0053 |
@@ -599,3 +599,7 @@ Precisam de decisão do usuário antes do código que depende delas ir para prod
 | Q-32 | T | **Ícone da notificação no Android** (pequeno, monocromático) e cor do canal `web-orders`. Não foram definidos na fatia 5 | Ícone próprio monocromático, definido pelo `ux-agent`, antes do build do piloto | 0049 |
 | Q-33 | N | **Logo e foto de capa no perfil público.** Ficaram fora desta fase (o contrato não tem os campos), e o `og:image` usa a foto do primeiro prato do dia. Entram na Fase 1? | Logo antes do piloto (prévia do WhatsApp e acompanhamento); capa depois | 0044, 0047, 0051 |
 | Q-34 | N | **Formas de pagamento habilitadas no perfil público.** O perfil não mostra `enabledPaymentMethods`, e a página só descobre que uma forma está desabilitada no envio (`422 PaymentMethodDisabled`). Mostrar no perfil? | Sim: a página oferece só as formas habilitadas | 0044 |
+| Q-35 | T | **Asaas: estorno com a subconta sem saldo** (o restaurante já sacou). O estorno falha, fica pendente ou deixa saldo negativo? E a comissão do split volta da conta-mãe na hora? | Perguntar ao Asaas; o ADR-0050 item 22 já trata a falha como `FAILED` com alerta | 0050 |
+| Q-36 | T | **Asaas: cancelar ou vencer uma cobrança Pix sem apagar o split.** Excluir a cobrança apaga o split; qual operação usar no Pix expirado e no fechamento, e o Pix aceita validade de 15 min? | Perguntar ao Asaas e testar no sandbox | 0050 |
+| Q-37 | T | **Asaas: webhook de validação de saque com split.** Os repasses de split passam pela validação? Saque pelo painel também? Confirmar antes de ligar, porque recusar cancela a comissão sem aviso | Testar no sandbox | 0050 |
+| Q-38 | N | **Valor mínimo do pedido para "Pagar agora"** e comissão fixa ou percentual por método (ADR-0050 itens 17 e 26) | Percentual no cartão; valor mínimo a definir com as taxas confirmadas | 0050 |
