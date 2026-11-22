@@ -51,7 +51,7 @@ public sealed class SchemaTests(PostgresFixture db)
 
         await transaction.RollbackAsync(Ct); // não deixa dados para os outros testes
 
-        notices.Count(n => n.StartsWith("ok:", StringComparison.Ordinal)).ShouldBe(74, string.Join(" | ", notices));
+        notices.Count(n => n.StartsWith("ok:", StringComparison.Ordinal)).ShouldBe(84, string.Join(" | ", notices));
     }
 
     /// 0003 (ADR-0046) num banco com pedidos: o backfill roda com a RLS `FORCE` de `orders` (o banco vazio dos outros
@@ -331,6 +331,95 @@ public sealed class SchemaTests(PostgresFixture db)
             reader.GetString(2).ShouldBe("APP:COUNTER,WEB:SITE");
             reader.GetBoolean(3).ShouldBeTrue("o FORCE da RLS volta depois do preenchimento");
             reader.GetBoolean(4).ShouldBeTrue("as tabelas novas nascem com RLS FORCE");
+        }
+
+        NpgsqlConnection.ClearAllPools();
+        await db.ExecuteAsSuperuserAsync($"DROP DATABASE {database} WITH (FORCE)");
+    }
+
+    /// 0010 (ADR-0058) num banco com pedidos: o adicional existente recebe o tipo do pai (`parent_item_kind`) com a RLS
+    /// `FORCE` de `order_items`, as restrições novas entram sobre os dados antigos, o fechamento existente fica com o
+    /// "Vendido pelo site" 0 e o `FORCE` volta.
+    [Fact]
+    public async Task Migration_0010_backfills_parent_item_kind()
+    {
+        var database = "almoseis_alacarte_" + Guid.NewGuid().ToString("N")[..8];
+        await db.ExecuteAsSuperuserAsync($"CREATE DATABASE {database} OWNER almoseis_migrator");
+        var superuser = new NpgsqlConnectionStringBuilder(db.SuperuserConnectionString) { Database = database }.ConnectionString;
+        var migrator = new NpgsqlConnectionStringBuilder(db.ConnectionStringFor("almoseis_migrator_login", PostgresFixture.MigratorPassword))
+        {
+            Database = database,
+        }.ConnectionString;
+
+        var options = new DbContextOptionsBuilder<AppDbContext>();
+        options.UseAlmoSeisNpgsql(migrator);
+        await using (var context = new AppDbContext(options.Options, new TenantContext(), Array.Empty<IModuleModelConfiguration>()))
+        {
+            await context.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>().MigrateAsync("20261126000000_FixedMenuSitePrice", Ct);
+        }
+
+        await using (var connection = new NpgsqlConnection(superuser))
+        {
+            await connection.OpenAsync(Ct);
+            await using var seed = new NpgsqlCommand(
+                """
+                INSERT INTO users (id, full_name, email, normalized_email, password_hash, security_stamp, concurrency_stamp, created_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000a1', 'Dona A', 'a@x.com', 'A@X.COM', 'h', 's', 'c', now());
+                INSERT INTO tenants (id, name, document_type, document_number, city, state, terms_version, terms_accepted_at, terms_accepted_by_user_id, created_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'Marmitaria A', 'CNPJ', '11222333000181', 'Uberlandia', 'MG', '2026-10', now(), 'aaaaaaaa-0000-0000-0000-0000000000a1', now());
+                INSERT INTO tenant_employees (id, tenant_id, user_id, display_name, status, security_stamp, joined_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000e1', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000a1', 'Dona A', 'ACTIVE', gen_random_uuid(), now());
+                INSERT INTO marmita_sizes (id, tenant_id, name, price)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000f1', 'aaaaaaaa-0000-0000-0000-000000000001', 'M', 20.00);
+                INSERT INTO products (id, tenant_id, kind, name, default_price, requires_preparation, created_at, updated_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000b1', 'aaaaaaaa-0000-0000-0000-000000000001', 'ADDON', 'Ovo', 2.00, true, now(), now()),
+                       ('aaaaaaaa-0000-0000-0000-0000000000b2', 'aaaaaaaa-0000-0000-0000-000000000001', 'BEVERAGE', 'Coca', 5.00, false, now(), now());
+                INSERT INTO business_days (id, tenant_id, business_date, status, opening_balance, opened_by_employee_id, opened_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000d1', 'aaaaaaaa-0000-0000-0000-000000000001', '2026-11-22', 'OPEN', 0, 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+                INSERT INTO orders (id, tenant_id, business_day_id, business_date, order_number, order_type, origin, fulfillment_type,
+                                    customer_name, items_total, weighings_total, total_amount, production_status, accepted_at,
+                                    fulfillment_status, fulfillment_status_changed_at, created_by_employee_id, created_at, updated_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-000000000c01', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-11-22', 1,
+                        'MARMITA', 'APP', 'PICKUP', 'Joao', 27.00, 0, 27.00, 'OPEN', now(), 'PENDING', now(), 'aaaaaaaa-0000-0000-0000-0000000000e1', now(), now());
+                INSERT INTO order_items (id, tenant_id, order_id, parent_order_item_id, item_kind, marmita_size_id, product_id, quantity, unit_price,
+                                         line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-000000000101', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c01', NULL,
+                        'MARMITA', 'aaaaaaaa-0000-0000-0000-0000000000f1', NULL, 1, 20.00, 20.00, 'Marmita M', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now()),
+                       ('aaaaaaaa-0000-0000-0000-000000000103', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c01', NULL,
+                        'BEVERAGE', NULL, 'aaaaaaaa-0000-0000-0000-0000000000b2', 1, 5.00, 5.00, 'Coca', false, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+                INSERT INTO order_items (id, tenant_id, order_id, parent_order_item_id, item_kind, marmita_size_id, product_id, quantity, unit_price,
+                                         line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-000000000102', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c01',
+                        'aaaaaaaa-0000-0000-0000-000000000101', 'ADDON', NULL, 'aaaaaaaa-0000-0000-0000-0000000000b1', 1, 2.00, 2.00, 'Ovo', true, 'ACTIVE',
+                        'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+                INSERT INTO daily_closings (id, tenant_id, business_day_id, business_date, order_count, total_sold, delivery_fees_total, total_received,
+                  received_from_previous_days, total_pending, canceled_count, canceled_total, reversed_count, reversed_total, opening_balance,
+                  cash_received, cash_reversed, supplies, withdrawals, expected_cash, counted_cash, cash_difference, closed_by_employee_id, closed_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000c9', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-11-22',
+                  1, 27.00, 0, 0, 0, 27.00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+                """, connection);
+            await seed.ExecuteNonQueryAsync(Ct);
+        }
+
+        await using (var context = new AppDbContext(options.Options, new TenantContext(), Array.Empty<IModuleModelConfiguration>()))
+        {
+            await context.Database.MigrateAsync(Ct);
+        }
+
+        await using (var connection = new NpgsqlConnection(superuser))
+        {
+            await connection.OpenAsync(Ct);
+            await using var check = new NpgsqlCommand(
+                """
+                SELECT (SELECT string_agg(item_kind || ':' || coalesce(parent_item_kind, '-'), ',' ORDER BY id) FROM order_items),
+                       (SELECT site_sold_total::text FROM daily_closings),
+                       (SELECT relforcerowsecurity FROM pg_class WHERE relname = 'order_items')
+                """, connection);
+            await using var reader = await check.ExecuteReaderAsync(Ct);
+            await reader.ReadAsync(Ct);
+            reader.GetString(0).ShouldBe("MARMITA:-,ADDON:MARMITA,BEVERAGE:-", "só o adicional filho recebe o tipo do pai");
+            reader.GetString(1).ShouldBe("0.00", "fechamento anterior à migração sem vendido pelo site");
+            reader.GetBoolean(2).ShouldBeTrue("o FORCE da RLS de order_items volta depois do preenchimento");
         }
 
         NpgsqlConnection.ClearAllPools();

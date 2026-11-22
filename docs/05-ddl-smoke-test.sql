@@ -589,6 +589,300 @@ DO $$ BEGIN
   RAISE NOTICE 'ok: componente de combo e vinculo de grupo trocados na edicao';
 END $$;
 
+-- ===== Pedido à la carte, combo em três níveis e fechamento (ADR-0058, migration 0010) =====
+INSERT INTO products (id, tenant_id, kind, name, default_price, requires_preparation, created_at, updated_at)
+VALUES ('aaaaaaaa-0000-0000-0000-0000000000b5', 'aaaaaaaa-0000-0000-0000-000000000001', 'ADDON', 'Ovo', 2.00, true, now(), now());
+INSERT INTO beverage_sizes (id, tenant_id, beverage_type_id, name, price)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009034', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000009031', '2 L', 14.00);
+
+-- Comanda 47: 2 combos com bacon e Coca Zero (R$ 73,00, ADR-0058 item 9) + X-Burguer com bacon + lata Coca Zero = R$ 105,50
+INSERT INTO orders (id, tenant_id, business_day_id, business_date, order_number, order_type, origin, fulfillment_type,
+                    tab_number, items_total, weighings_total, total_amount, production_status, accepted_at,
+                    created_by_employee_id, created_at, updated_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000c10', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-10-27', 10,
+        'A_LA_CARTE', 'APP', 'DINE_IN', '47', 105.50, 0, 105.50, 'OPEN', now(), 'aaaaaaaa-0000-0000-0000-0000000000e1', now(), now());
+-- Primeiro nível
+INSERT INTO order_items (id, tenant_id, order_id, item_kind, combo_id, dish_id, beverage_size_id, beverage_flavor_id,
+                         quantity, unit_price, line_total, name_snapshot, size_name_snapshot, flavor_name_snapshot,
+                         requires_preparation, status, created_by_employee_id, created_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009101', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10', 'COMBO',
+        'aaaaaaaa-0000-0000-0000-000000009041', NULL, NULL, NULL, 2, 32.00, 64.00, 'X-Burguer + batata + refri', NULL, NULL,
+        false, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now()),
+       ('aaaaaaaa-0000-0000-0000-000000009106', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10', 'FIXED_DISH',
+        NULL, 'aaaaaaaa-0000-0000-0000-000000009011', NULL, NULL, 1, 22.00, 22.00, 'X-Burguer', NULL, NULL,
+        true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now()),
+       ('aaaaaaaa-0000-0000-0000-000000009108', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10', 'FIXED_BEVERAGE',
+        NULL, NULL, 'aaaaaaaa-0000-0000-0000-000000009032', 'aaaaaaaa-0000-0000-0000-000000009033', 1, 6.50, 6.50,
+        'Refrigerante', 'Lata 350 ml', 'Coca-Cola Zero', false, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+-- Partes do combo (segundo nível)
+INSERT INTO order_items (id, tenant_id, order_id, parent_order_item_id, parent_item_kind, item_kind, dish_id, dish_size_id,
+                         beverage_size_id, beverage_flavor_id, quantity, unit_price, line_total, name_snapshot, size_name_snapshot,
+                         flavor_name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009102', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10',
+        'aaaaaaaa-0000-0000-0000-000000009101', 'COMBO', 'COMBO_PART', 'aaaaaaaa-0000-0000-0000-000000009011', NULL, NULL, NULL,
+        1, 0, 0, 'X-Burguer', NULL, NULL, true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now()),
+       ('aaaaaaaa-0000-0000-0000-000000009104', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10',
+        'aaaaaaaa-0000-0000-0000-000000009101', 'COMBO', 'COMBO_PART', 'aaaaaaaa-0000-0000-0000-000000009012',
+        'aaaaaaaa-0000-0000-0000-000000009021', NULL, NULL, 1, 0, 0, 'Batata frita', 'P', NULL, true, 'ACTIVE',
+        'aaaaaaaa-0000-0000-0000-0000000000e1', now()),
+       ('aaaaaaaa-0000-0000-0000-000000009105', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10',
+        'aaaaaaaa-0000-0000-0000-000000009101', 'COMBO', 'COMBO_PART', NULL, NULL, 'aaaaaaaa-0000-0000-0000-000000009032',
+        'aaaaaaaa-0000-0000-0000-000000009033', 1, 0.50, 1.00, 'Refrigerante', 'Lata 350 ml', 'Coca-Cola Zero', false, 'ACTIVE',
+        'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+-- Adicionais de grupo: sob a parte de prato do combo (terceiro nível) e sob o prato avulso
+INSERT INTO order_items (id, tenant_id, order_id, parent_order_item_id, parent_item_kind, parent_dish_id, item_kind, addon_option_id,
+                         quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000009103', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10',
+        'aaaaaaaa-0000-0000-0000-000000009102', 'COMBO_PART', 'aaaaaaaa-0000-0000-0000-000000009011', 'GROUP_ADDON',
+        'aaaaaaaa-0000-0000-0000-000000009062', 1, 4.00, 8.00, 'Bacon', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now()),
+       ('aaaaaaaa-0000-0000-0000-000000009107', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10',
+        'aaaaaaaa-0000-0000-0000-000000009106', 'FIXED_DISH', 'aaaaaaaa-0000-0000-0000-000000009011', 'GROUP_ADDON',
+        'aaaaaaaa-0000-0000-0000-000000009062', 1, 4.00, 4.00, 'Bacon', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+
+DO $$ BEGIN
+  INSERT INTO orders (id, tenant_id, business_day_id, business_date, order_number, order_type, origin, fulfillment_type,
+                      customer_name, customer_phone, delivery_address, items_total, weighings_total, total_amount, production_status,
+                      accepted_at, fulfillment_status, fulfillment_status_changed_at, created_by_employee_id, created_at, updated_at)
+  VALUES ('aaaaaaaa-0000-0000-0000-000000000c11', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-10-27', 11,
+          'A_LA_CARTE', 'APP', 'PICKUP', 'Ana', '+5534999991111', NULL, 0, 0, 0, 'OPEN', now(), 'PENDING', now(),
+          'aaaaaaaa-0000-0000-0000-0000000000e1', now(), now()),
+         ('aaaaaaaa-0000-0000-0000-000000000c12', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-10-27', 12,
+          'A_LA_CARTE', 'APP', 'DELIVERY', 'Bia', '+5534999992222', '{"street": "Rua A", "number": "10"}', 0, 0, 0, 'OPEN', now(),
+          'PENDING', now(), 'aaaaaaaa-0000-0000-0000-0000000000e1', now(), now());
+  IF (SELECT string_agg(fulfillment_type, ',' ORDER BY fulfillment_type) FROM orders WHERE order_type = 'A_LA_CARTE')
+     <> 'DELIVERY,DINE_IN,PICKUP' THEN
+    RAISE EXCEPTION 'FALHOU: a la carte sem os tres atendimentos';
+  END IF;
+  BEGIN
+    UPDATE orders SET fulfillment_type = 'DINE_IN', fulfillment_status = NULL, fulfillment_status_changed_at = NULL,
+                      order_type = 'MARMITA', customer_name = 'Ana'
+     WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c11';
+    RAISE EXCEPTION 'FALHOU: marmita no salao';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  RAISE NOTICE 'ok: a la carte no salao, na entrega e na retirada; as outras modalidades como antes';
+END $$;
+
+DO $$ BEGIN
+  IF (WITH RECURSIVE tree AS (
+        SELECT id, line_total FROM order_items WHERE id = 'aaaaaaaa-0000-0000-0000-000000009101'
+        UNION ALL
+        SELECT i.id, i.line_total FROM order_items i JOIN tree t ON i.parent_order_item_id = t.id)
+      SELECT sum(line_total) FROM tree) <> 73.00 THEN
+    RAISE EXCEPTION 'FALHOU: combo em tres niveis nao soma 73.00';
+  END IF;
+  IF (SELECT sum(line_total) FROM order_items WHERE order_id = 'aaaaaaaa-0000-0000-0000-000000000c10' AND status = 'ACTIVE')
+     <> (SELECT items_total FROM orders WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c10') THEN
+    RAISE EXCEPTION 'FALHOU: total da comanda';
+  END IF;
+  -- Cozinha: linhas com preparo, sem os adicionais (que aparecem dentro do pai)
+  IF (SELECT string_agg(name_snapshot, ',' ORDER BY name_snapshot) FROM order_items
+       WHERE order_id = 'aaaaaaaa-0000-0000-0000-000000000c10' AND requires_preparation AND item_kind <> 'GROUP_ADDON')
+     <> 'Batata frita,X-Burguer,X-Burguer' THEN
+    RAISE EXCEPTION 'FALHOU: cozinha nao ve as partes e o prato avulso';
+  END IF;
+  RAISE NOTICE 'ok: combo em tres niveis soma 73.00; a cozinha ve 3 itens, sem o combo e sem bebidas';
+END $$;
+
+DO $$ BEGIN
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, parent_order_item_id, parent_item_kind, item_kind, dish_id,
+                             quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10',
+            'aaaaaaaa-0000-0000-0000-000000009106', 'FIXED_DISH', 'COMBO_PART', 'aaaaaaaa-0000-0000-0000-000000009011',
+            1, 0, 0, 'X', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: parte de combo sob prato avulso';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, parent_order_item_id, parent_item_kind, item_kind, dish_id,
+                             quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10',
+            'aaaaaaaa-0000-0000-0000-000000009106', 'COMBO', 'COMBO_PART', 'aaaaaaaa-0000-0000-0000-000000009011',
+            1, 0, 0, 'X', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: parte de combo com tipo do pai falso';
+  EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, item_kind, dish_id,
+                             quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10', 'COMBO_PART',
+            'aaaaaaaa-0000-0000-0000-000000009011', 1, 0, 0, 'X', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: parte de combo sem pai';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  RAISE NOTICE 'ok: parte de combo so sob o combo';
+END $$;
+
+DO $$ BEGIN
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, parent_order_item_id, parent_item_kind, parent_dish_id, item_kind, addon_option_id,
+                             quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10',
+            'aaaaaaaa-0000-0000-0000-000000009101', 'COMBO', 'aaaaaaaa-0000-0000-0000-000000009011', 'GROUP_ADDON',
+            'aaaaaaaa-0000-0000-0000-000000009062', 1, 4.00, 8.00, 'Bacon', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: adicional de grupo sob o combo';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, parent_order_item_id, parent_item_kind, parent_dish_id, item_kind, addon_option_id,
+                             quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10',
+            'aaaaaaaa-0000-0000-0000-000000009105', 'COMBO_PART', 'aaaaaaaa-0000-0000-0000-000000009011', 'GROUP_ADDON',
+            'aaaaaaaa-0000-0000-0000-000000009062', 1, 4.00, 8.00, 'Bacon', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: adicional de grupo sob a parte de bebida';
+  EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, parent_order_item_id, parent_item_kind, item_kind, addon_option_id,
+                             quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10',
+            'aaaaaaaa-0000-0000-0000-000000009106', 'FIXED_DISH', 'GROUP_ADDON',
+            'aaaaaaaa-0000-0000-0000-000000009062', 1, 4.00, 4.00, 'Bacon', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: adicional de grupo sem o prato do pai';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, item_kind, addon_option_id,
+                             quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10', 'GROUP_ADDON',
+            'aaaaaaaa-0000-0000-0000-000000009062', 1, 4.00, 4.00, 'Bacon', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: adicional de grupo sem pai';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  RAISE NOTICE 'ok: adicional de grupo so sob prato avulso ou parte de prato do combo';
+END $$;
+
+DO $$ BEGIN
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, parent_order_item_id, parent_item_kind, item_kind, product_id,
+                             quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10',
+            'aaaaaaaa-0000-0000-0000-000000009106', 'FIXED_DISH', 'ADDON', 'aaaaaaaa-0000-0000-0000-0000000000b5',
+            1, 2.00, 2.00, 'Ovo', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: adicional do restaurante sob prato do cardapio fixo';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  -- API anterior (janela do deploy): adicional sem o tipo do pai; API nova: com o tipo
+  INSERT INTO order_items (id, tenant_id, order_id, parent_order_item_id, item_kind, product_id,
+                           quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+  VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c01',
+          'aaaaaaaa-0000-0000-0000-000000000101', 'ADDON', 'aaaaaaaa-0000-0000-0000-0000000000b5',
+          1, 2.00, 2.00, 'Ovo', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+  INSERT INTO order_items (id, tenant_id, order_id, parent_order_item_id, parent_item_kind, item_kind, product_id,
+                           quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+  VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c01',
+          'aaaaaaaa-0000-0000-0000-000000000101', 'MARMITA', 'ADDON', 'aaaaaaaa-0000-0000-0000-0000000000b5',
+          1, 2.00, 2.00, 'Ovo', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+  RAISE NOTICE 'ok: adicional do restaurante so sob marmita ou PF, com ou sem o tipo do pai';
+END $$;
+
+DO $$ BEGIN
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, item_kind,
+                             quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10', 'FIXED_DISH',
+            1, 22.00, 22.00, 'X', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: prato avulso sem prato';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, item_kind, dish_id, product_id,
+                             quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10', 'FIXED_DISH',
+            'aaaaaaaa-0000-0000-0000-000000009011', 'aaaaaaaa-0000-0000-0000-0000000000b1',
+            1, 22.00, 22.00, 'X', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: prato avulso com produto do restaurante';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, parent_order_item_id, parent_item_kind, item_kind, dish_id, beverage_size_id,
+                             quantity, unit_price, line_total, name_snapshot, size_name_snapshot, requires_preparation, status,
+                             created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10',
+            'aaaaaaaa-0000-0000-0000-000000009101', 'COMBO', 'COMBO_PART', 'aaaaaaaa-0000-0000-0000-000000009011',
+            'aaaaaaaa-0000-0000-0000-000000009032', 1, 0, 0, 'X', 'Lata 350 ml', false, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: parte de combo prato e bebida ao mesmo tempo';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, item_kind, beverage_size_id, beverage_flavor_id,
+                             quantity, unit_price, line_total, name_snapshot, size_name_snapshot, flavor_name_snapshot,
+                             requires_preparation, status, created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10', 'FIXED_BEVERAGE',
+            'aaaaaaaa-0000-0000-0000-000000009034', 'aaaaaaaa-0000-0000-0000-000000009033',
+            1, 14.50, 14.50, 'Refrigerante', '2 L', 'Coca-Cola Zero', false, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: sabor de outro tamanho';
+  EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, item_kind, dish_id, dish_size_id,
+                             quantity, unit_price, line_total, name_snapshot, size_name_snapshot,
+                             requires_preparation, status, created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10', 'FIXED_DISH',
+            'aaaaaaaa-0000-0000-0000-000000009011', 'aaaaaaaa-0000-0000-0000-000000009021',
+            1, 22.00, 22.00, 'X-Burguer', 'P', true, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: tamanho de outro prato';
+  EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+  RAISE NOTICE 'ok: item do cardapio fixo com as referencias do tipo, tamanho do prato e sabor do tamanho';
+END $$;
+
+DO $$ BEGIN
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, item_kind, beverage_size_id,
+                             quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10', 'FIXED_BEVERAGE',
+            'aaaaaaaa-0000-0000-0000-000000009034', 1, 14.00, 14.00, 'Refrigerante', false, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: bebida sem o tamanho no snapshot';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, item_kind, beverage_size_id, beverage_flavor_id,
+                             quantity, unit_price, line_total, name_snapshot, size_name_snapshot, requires_preparation, status,
+                             created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000c10', 'FIXED_BEVERAGE',
+            'aaaaaaaa-0000-0000-0000-000000009032', 'aaaaaaaa-0000-0000-0000-000000009033',
+            1, 6.50, 6.50, 'Refrigerante', 'Lata 350 ml', false, 'ACTIVE', 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: bebida sem o sabor no snapshot';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    UPDATE order_items SET size_name_snapshot = 'Grande' WHERE id = 'aaaaaaaa-0000-0000-0000-000000009106';
+    RAISE EXCEPTION 'FALHOU: tamanho no snapshot de prato sem tamanho';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  RAISE NOTICE 'ok: snapshot do tamanho e do sabor exatamente quando ha tamanho e sabor';
+END $$;
+
+DO $$ BEGIN
+  BEGIN
+    UPDATE order_items SET requires_preparation = true WHERE id = 'aaaaaaaa-0000-0000-0000-000000009101';
+    RAISE EXCEPTION 'FALHOU: combo na cozinha';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    UPDATE order_items SET requires_preparation = true WHERE id = 'aaaaaaaa-0000-0000-0000-000000009108';
+    RAISE EXCEPTION 'FALHOU: bebida avulsa na cozinha';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    UPDATE order_items SET requires_preparation = true WHERE id = 'aaaaaaaa-0000-0000-0000-000000009105';
+    RAISE EXCEPTION 'FALHOU: parte de bebida na cozinha';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    UPDATE order_items SET unit_price = 1.00, line_total = 2.00 WHERE id = 'aaaaaaaa-0000-0000-0000-000000009102';
+    RAISE EXCEPTION 'FALHOU: parte de prato do combo com preco';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  RAISE NOTICE 'ok: combo e bebidas fora da cozinha; parte do combo a 0.00, salvo o acrescimo do sabor';
+END $$;
+
+DO $$ BEGIN
+  INSERT INTO daily_closing_lines (id, tenant_id, daily_closing_id, dimension, key, sold, received, pending, reversed, count)
+  VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000c9',
+          'ORDER_TYPE', 'A_LA_CARTE', 0, 0, 0, 0, 0);
+  IF (SELECT site_sold_total FROM daily_closings WHERE id = 'aaaaaaaa-0000-0000-0000-0000000000c9') <> 0 THEN
+    RAISE EXCEPTION 'FALHOU: vendido pelo site sem o padrao 0';
+  END IF;
+  BEGIN
+    INSERT INTO daily_closing_lines (id, tenant_id, daily_closing_id, dimension, key, sold, received, pending, reversed, count)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000c9',
+            'ORDER_TYPE', 'COMBO', 0, 0, 0, 0, 0);
+    RAISE EXCEPTION 'FALHOU: linha de fechamento com modalidade desconhecida';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO daily_closings (id, tenant_id, business_day_id, business_date, order_count, total_sold, delivery_fees_total, total_received,
+      received_from_previous_days, total_pending, canceled_count, canceled_total, reversed_count, reversed_total, opening_balance,
+      cash_received, cash_reversed, supplies, withdrawals, expected_cash, counted_cash, cash_difference, site_sold_total,
+      closed_by_employee_id, closed_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-10-27', 1, 20.00, 0, 0,
+      0, 20.00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25.00, 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: vendido pelo site maior que o vendido';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  RAISE NOTICE 'ok: fechamento com a linha A_LA_CARTE e o vendido pelo site dentro do vendido';
+END $$;
+
 -- ===== Tenant B =====
 SELECT set_config('app.tenant_id', 'bbbbbbbb-0000-0000-0000-000000000002', false),
        set_config('app.user_id',   'bbbbbbbb-0000-0000-0000-0000000000b2', false);
@@ -727,6 +1021,47 @@ DO $$ BEGIN
           'DISH', 'aaaaaaaa-0000-0000-0000-000000009011', 1);
   RAISE EXCEPTION 'FALHOU: combo de B usa prato de A';
 EXCEPTION WHEN foreign_key_violation THEN RAISE NOTICE 'ok: combo de B nao usa prato de A'; END $$;
+
+-- Comanda à la carte: B não vê os itens de A nem usa o cardápio fixo ou os itens de A
+INSERT INTO business_days (id, tenant_id, business_date, status, opening_balance, opened_by_employee_id, opened_at)
+VALUES ('bbbbbbbb-0000-0000-0000-0000000000d2', 'bbbbbbbb-0000-0000-0000-000000000002', '2026-10-27', 'OPEN', 0, 'bbbbbbbb-0000-0000-0000-0000000000e2', now());
+INSERT INTO orders (id, tenant_id, business_day_id, business_date, order_number, order_type, origin, fulfillment_type,
+                    tab_number, items_total, weighings_total, total_amount, production_status, accepted_at,
+                    created_by_employee_id, created_at, updated_at)
+VALUES ('bbbbbbbb-0000-0000-0000-000000000c10', 'bbbbbbbb-0000-0000-0000-000000000002', 'bbbbbbbb-0000-0000-0000-0000000000d2', '2026-10-27', 1,
+        'A_LA_CARTE', 'APP', 'DINE_IN', '5', 30.00, 0, 30.00, 'OPEN', now(), 'bbbbbbbb-0000-0000-0000-0000000000e2', now(), now());
+DO $$ BEGIN
+  IF (SELECT count(*) FROM order_items) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve itens de A'; END IF;
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, item_kind, dish_id,
+                             quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'bbbbbbbb-0000-0000-0000-000000000002', 'bbbbbbbb-0000-0000-0000-000000000c10', 'FIXED_DISH',
+            'aaaaaaaa-0000-0000-0000-000000009011', 1, 22.00, 22.00, 'X-Burguer', true, 'ACTIVE', 'bbbbbbbb-0000-0000-0000-0000000000e2', now());
+    RAISE EXCEPTION 'FALHOU: item de B com prato de A';
+  EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+  INSERT INTO order_items (id, tenant_id, order_id, item_kind, combo_id,
+                           quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+  VALUES ('bbbbbbbb-0000-0000-0000-000000009101', 'bbbbbbbb-0000-0000-0000-000000000002', 'bbbbbbbb-0000-0000-0000-000000000c10', 'COMBO',
+          'bbbbbbbb-0000-0000-0000-000000009041', 1, 30.00, 30.00, 'Combo B', false, 'ACTIVE', 'bbbbbbbb-0000-0000-0000-0000000000e2', now());
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, parent_order_item_id, parent_item_kind, item_kind, beverage_size_id,
+                             quantity, unit_price, line_total, name_snapshot, size_name_snapshot, requires_preparation, status,
+                             created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'bbbbbbbb-0000-0000-0000-000000000002', 'bbbbbbbb-0000-0000-0000-000000000c10',
+            'bbbbbbbb-0000-0000-0000-000000009101', 'COMBO', 'COMBO_PART', 'aaaaaaaa-0000-0000-0000-000000009032',
+            1, 0, 0, 'Refrigerante', 'Lata 350 ml', false, 'ACTIVE', 'bbbbbbbb-0000-0000-0000-0000000000e2', now());
+    RAISE EXCEPTION 'FALHOU: parte do combo de B com bebida de A';
+  EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO order_items (id, tenant_id, order_id, parent_order_item_id, parent_item_kind, parent_dish_id, item_kind, addon_option_id,
+                             quantity, unit_price, line_total, name_snapshot, requires_preparation, status, created_by_employee_id, created_at)
+    VALUES (gen_random_uuid(), 'bbbbbbbb-0000-0000-0000-000000000002', 'bbbbbbbb-0000-0000-0000-000000000c10',
+            'aaaaaaaa-0000-0000-0000-000000009106', 'FIXED_DISH', 'aaaaaaaa-0000-0000-0000-000000009011', 'GROUP_ADDON',
+            'aaaaaaaa-0000-0000-0000-000000009062', 1, 4.00, 4.00, 'Bacon', true, 'ACTIVE', 'bbbbbbbb-0000-0000-0000-0000000000e2', now());
+    RAISE EXCEPTION 'FALHOU: adicional de B sob item de A';
+  EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+  RAISE NOTICE 'ok: comanda a la carte isolada; B nao usa cardapio fixo nem itens de A';
+END $$;
 
 -- ===== Login: sem tenant ativo, o usuário A enxerga só os próprios vínculos =====
 SELECT set_config('app.tenant_id', '', false), set_config('app.user_id', 'aaaaaaaa-0000-0000-0000-0000000000a1', false);

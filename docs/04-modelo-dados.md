@@ -389,15 +389,15 @@ Sem valor histórico (o pedido grava o snapshot): a edição do combo troca os c
 | BusinessDayId | Guid | expediente aberto na criação (ADR-0019); imutável |
 | BusinessDate | DateOnly | cópia de `BusinessDay.BusinessDate` = data da venda (ADR-0015) |
 | OrderNumber | int? | sequencial por **data operacional** (ADR-0023, ADR-0039), atribuído **no aceite**: nulo enquanto `AcceptanceStatus ≠ ACCEPTED`; recusados, expirados e desistências nunca recebem (ADR-0046) |
-| OrderType | enum `MARMITA`, `PF`, `KILO` | imutável |
+| OrderType | enum `MARMITA`, `PF`, `KILO`, `A_LA_CARTE` | imutável. `A_LA_CARTE` (EP-003, ADR-0058) = comanda, entrega ou retirada do cardápio fixo; um tipo por pedido (Q-317) |
 | PriceList | enum `COUNTER`, `SITE` | tabela de preço usada (ADR-0057 item 7): `Origin = APP` → `COUNTER`, `WEB` → `SITE`; imutável. Item acrescentado no app a pedido `SITE` usa o preço de site do item quando ele vende no site, senão o de balcão (Q-309), sempre gravado no snapshot da linha. Migração 0009: pedidos existentes `COUNTER`, os `WEB` `SITE` |
 | Origin | enum `APP`, `WEB` (futuro: `WHATSAPP`) | `WEB` = página de pedidos (EP-002, ADR-0044) |
-| FulfillmentType | enum `DELIVERY`, `PICKUP`, `DINE_IN` | `MARMITA` → `DELIVERY`/`PICKUP`; `PF`/`KILO` → `DINE_IN` |
+| FulfillmentType | enum `DELIVERY`, `PICKUP`, `DINE_IN` | `MARMITA` → `DELIVERY`/`PICKUP`; `PF`/`KILO` → `DINE_IN`; `A_LA_CARTE` → os três (o balcão "para viagem" da lanchonete é comanda `DINE_IN`, Q-320) |
 | CustomerId | Guid? | → Customer. Pedido `WEB`: vinculado só no aceite, pelo telefone (ADR-0044 item 20) |
 | CustomerName | string(80)? | snapshot; obrigatório em `MARMITA` |
 | CustomerPhone | string(16)? | snapshot |
 | DeliveryAddress | json? | snapshot do endereço; obrigatório se `DELIVERY` |
-| TableLabel | string(10)? | mesa (PF/KILO) |
+| TableLabel | string(10)? | mesa (PF/KILO/A_LA_CARTE no salão) |
 | TabNumber | string(10)? | número da comanda física (ADR-0023) |
 | Notes | string(300)? | |
 | ExpectedPaymentMethod | enum `CASH`, `PIX`, `CARD`? | só `WEB`: forma que o cliente pretende usar (ADR-0044 item 19). Não cria `Payment` |
@@ -438,7 +438,7 @@ Sem valor histórico (o pedido grava o snapshot): a edição do combo troca os c
 3. `PaidAmount ≤ TotalAmount` sempre. Uma edição que deixaria `TotalAmount < PaidAmount` é rejeitada (`422 TotalBelowPaidAmount`).
 4. `CANCELED` → somente leitura. Só pode ser cancelado com `PaidAmount == 0` (ADR-0022).
 5. Incluir item com `RequiresPreparation` em pedido `COMPLETED` → `ProductionStatus = IN_PROGRESS` (RN-007.10).
-6. `WeighingEntry` só em `KILO`. Itens `MARMITA` só em pedido `MARMITA`, itens `PF` só em pedido `PF`. Bebidas e adicionais avulsos em qualquer modalidade (RN-002.5).
+6. `WeighingEntry` só em `KILO`. Itens `MARMITA` só em pedido `MARMITA`, itens `PF` só em pedido `PF`. Bebidas e adicionais do restaurante (`Product`) avulsos em `MARMITA`, `PF` e `KILO` (RN-002.5). Pedido `A_LA_CARTE` só com itens do cardápio fixo (`FIXED_DISH`, `FIXED_BEVERAGE`, `COMBO` e filhos), e esses itens só em `A_LA_CARTE`: a comanda nunca mistura PF ou quilo com cardápio fixo (ADR-0058 item 3).
 7. Taxa de entrega diferente da padrão exige `orders.delivery-fee.edit`.
 8. **Pedido não aceito** (`AcceptanceStatus ≠ ACCEPTED`, ADR-0046 item 4): sem número, sem produção, sem cliente vinculado, sem pagamento; não pode ser editado nem cancelado (`409 OrderNotAccepted`) e não gera `OrderChangeEvent`. **Não entra no fechamento** (vendido, pendente, quantidade), na cozinha nem nas pendências do cliente: toda consulta desses filtra `AcceptanceStatus = ACCEPTED`. Pertence ao expediente aberto no envio.
 9. **Aceite** (`orders.accept`): na mesma transação, `OrderNumber` do `BusinessDateCounter`, `ProductionStatus = OPEN`, `FulfillmentStatus = PENDING`, vínculo com `Customer`. Depois do prazo → `409 WebOrderExpired`; aceite e expiração disputam pela `Version`. Ao **finalizar o fechamento**, os `AWAITING_ACCEPTANCE` do expediente viram `REJECTED` (`BUSINESS_DAY_CLOSED`) na mesma transação.
@@ -449,24 +449,34 @@ Sem valor histórico (o pedido grava o snapshot): a edição do combo troca os c
 | Campo | Tipo | Regra |
 |---|---|---|
 | OrderId | Guid | |
-| ParentOrderItemId | Guid? | adicional vinculado a uma marmita ou PF; nulo = item de primeiro nível |
-| ItemKind | enum `MARMITA`, `PF`, `BEVERAGE`, `ADDON` | |
-| ProductId | Guid? | `PF` → prato; `BEVERAGE`/`ADDON` → produto; nulo em `MARMITA` |
-| MarmitaSizeId | Guid? | obrigatório em `MARMITA` |
-| Quantity | int | ≥ 1. Em adicional filho, é a quantidade **por unidade do pai** |
-| UnitPrice | Money | snapshot: tamanho (MARMITA), `MenuItem.PfPrice` (PF) ou `Product.DefaultPrice` |
-| LineTotal | Money | `UnitPrice × Quantity × (Parent?.Quantity ?? 1)` |
-| NameSnapshot | string(80) | ex.: "Marmita M", "PF Frango grelhado", "Coca 350ml" |
+| ParentOrderItemId | Guid? | pai no mesmo pedido; nulo = item de primeiro nível. Até três níveis: `COMBO` → `COMBO_PART` → `GROUP_ADDON` (ADR-0058 item 9) |
+| ParentItemKind | enum `ItemKind`? | cópia do `ItemKind` do pai, garantida pelo banco (FK com o tipo do pai). Nulo sem pai. Migração 0010: preenchido nos adicionais existentes; nulo tolerado só no `ADDON` gravado pela API anterior (contração pendente) |
+| ParentDishId | Guid? | só em `GROUP_ADDON`: o `DishId` do pai (prato avulso ou parte de prato), garantido pelo banco; impede o adicional sob a parte de bebida |
+| ItemKind | enum `MARMITA`, `PF`, `BEVERAGE`, `ADDON`, `FIXED_DISH`, `FIXED_BEVERAGE`, `COMBO`, `COMBO_PART`, `GROUP_ADDON` | os cinco últimos são do cardápio fixo (ADR-0058 item 8), só em pedido `A_LA_CARTE` |
+| ProductId | Guid? | `PF` → prato; `BEVERAGE`/`ADDON` → produto; nulo nos demais |
+| MarmitaSizeId | Guid? | obrigatório em `MARMITA`; nulo nos demais |
+| DishId, DishSizeId | Guid?, Guid? | `FIXED_DISH` e parte de prato do combo: o prato e, se o prato tem tamanho, o tamanho **daquele** prato (obrigatório na aplicação) |
+| BeverageSizeId, BeverageFlavorId | Guid?, Guid? | `FIXED_BEVERAGE` e parte de bebida do combo: o tamanho e, se o tamanho tem sabores, o sabor **daquele** tamanho (obrigatório na aplicação) |
+| ComboId | Guid? | só em `COMBO` |
+| AddonOptionId | Guid? | só em `GROUP_ADDON`; a opção é de um grupo ligado ao prato do pai ou à categoria dele (aplicação) |
+| Quantity | int | ≥ 1. Em filho, é a quantidade **por unidade do pai** (na parte do combo, a quantidade do componente) |
+| UnitPrice | Money | snapshot: tamanho (MARMITA), `MenuItem.PfPrice` (PF), `Product.DefaultPrice`; no cardápio fixo, o preço do prato ou do tamanho, tamanho de bebida + acréscimo do sabor, preço do combo, preço da opção, na tabela do pedido (`PriceList`, ADR-0057). `COMBO_PART`: `0.00`, salvo o acréscimo do sabor |
+| LineTotal | Money | `UnitPrice × Quantity × (Parent?.Quantity ?? 1) × (Parent?.Parent?.Quantity ?? 1)` |
+| NameSnapshot | string(80) | ex.: "Marmita M", "PF Frango grelhado", "Coca 350ml". No cardápio fixo, o nome **base**: prato, tipo de bebida, combo ou opção ("Refrigerante") |
+| SizeNameSnapshot | string(30)? | nome do tamanho do prato ou da bebida ("Lata 350 ml"); preenchido exatamente quando há `DishSizeId` ou `BeverageSizeId` |
+| FlavorNameSnapshot | string(40)? | nome do sabor ("Coca-Cola Zero"); preenchido exatamente quando há `BeverageFlavorId`. A exibição junta: "Refrigerante Lata 350 ml · Coca-Cola Zero" |
 | CompositionSnapshot | string(500)? | texto legível da composição para a cozinha |
-| RequiresPreparation | bool | snapshot de `Product.RequiresPreparation` (MARMITA/PF = `true`) |
+| RequiresPreparation | bool | snapshot de `Product.RequiresPreparation` ou `Dish.RequiresPreparation` (MARMITA/PF = `true`; `COMBO`, `FIXED_BEVERAGE` e parte de bebida = `false`; `GROUP_ADDON` = o do pai) |
 | Notes | string(200)? | |
 | Status | enum `ACTIVE`, `REMOVED` | remoção é lógica; totais ignoram `REMOVED` |
 | CreatedByEmployeeId | Guid? | nulo só nos itens montados pelo cliente na página (pedido `WEB`) |
 | CreatedAt, RemovedByEmployeeId, RemovedAt | | |
 
 **Regras:**
-- Adicionais só podem ser filhos de `MARMITA`/`PF`. Filho de filho não existe.
-- Remover o pai remove os filhos.
+- Combinações de pai e filho (no banco desde a 0010): `ADDON` só sob `MARMITA`/`PF`; `COMBO_PART` só sob `COMBO`; `GROUP_ADDON` só sob `FIXED_DISH` ou parte **de prato**; `COMBO_PART` e `GROUP_ADDON` nunca no primeiro nível; os demais tipos nunca têm pai. Daí o máximo de três níveis.
+- O combo vira um `COMBO` com um `COMBO_PART` por componente (as partes são cópia dos componentes no momento da venda; os componentes não são referenciados) e, sob cada parte de prato, os `GROUP_ADDON`. A cozinha recebe as partes e os pratos avulsos como itens normais, com adicionais e observação, sem a linha do `COMBO` e sem bebidas (ADR-0058 item 11).
+- Mudar a quantidade do `COMBO` reprecifica as partes e os adicionais. Uma parte não é removida sozinha (remove-se o combo inteiro); adicionais e observação por parte de prato podem ser incluídos depois. Trocar o sabor de uma parte = remover e incluir o combo (Q-322).
+- Remover o pai remove os filhos (e os netos).
 - `Quantity` é editável na própria linha enquanto o pedido não está pago, e a mudança gera `OrderChangeEvent` `QUANTITY_CHANGED`. Não é preciso remover a linha e incluir outra.
 
 ### OrderItemComponent [T] — composição de marmita
@@ -587,6 +597,7 @@ PK `(TenantId, BusinessDate)`, `LastOrderNumber int`. Fonte do `OrderNumber` (`U
 | NotAcceptedCount | int | informativo, fora do vendido: pedidos do site do expediente recusados, expirados ou desistências (RF-210.2), incluindo os recusados pela finalização |
 | AutoRejectedCount | int | parte de `NotAcceptedCount`: os `AWAITING_ACCEPTANCE` recusados pela finalização (`BUSINESS_DAY_CLOSED`, ADR-0046 item 13) |
 | UnmarkedDeliveryCount | int | informativo: entregas aceitas e ativas sem `DELIVERED` (ADR-0046 item 20) |
+| SiteSoldTotal | Money | "Vendido pelo site" (ADR-0057 item 12), informativo: Σ `TotalAmount` dos pedidos `ACTIVE` aceitos do expediente com `PriceList = SITE`; parte de `TotalSold`. Fechamentos anteriores à 0010 ficam com 0. A base da cobrança da plataforma (com ou sem a taxa de entrega) está em aberto (Q-310) |
 | ClosedByEmployeeId, ClosedAt | | |
 
 ### DailyClosingLine [T] — detalhamento do snapshot
@@ -595,7 +606,7 @@ PK `(TenantId, BusinessDate)`, `LastOrderNumber int`. Fonte do `OrderNumber` (`U
 |---|---|---|
 | DailyClosingId | Guid | |
 | Dimension | enum `ORDER_TYPE`, `PAYMENT_METHOD` | |
-| Key | string | `MARMITA`/`PF`/`KILO` ou `CASH`/`PIX`/`CARD` |
+| Key | string | `MARMITA`/`PF`/`KILO`/`A_LA_CARTE` ou `CASH`/`PIX`/`CARD`. "À la carte" é uma linha só, com salão, entrega e retirada juntos (Q-311); a abertura por atendimento, se mostrada, não é gravada no snapshot |
 | Sold, Received, Pending, Reversed | Money | `Sold`/`Pending` só em `ORDER_TYPE` |
 | Count | int | pedidos (ORDER_TYPE) ou pagamentos (PAYMENT_METHOD) |
 

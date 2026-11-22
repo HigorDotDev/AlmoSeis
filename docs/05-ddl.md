@@ -1068,10 +1068,16 @@ Cada entidade [S] alterada na transação recebe seu próprio `seq`, porque a PK
 | Grupo de adicionais ligado a uma categoria ou a um prato, sem repetir (ADR-0056 item 18) | `ck_addon_group_links_target`, `ux_addon_group_links_*` (0009) |
 | Itens do cardápio fixo inativados, nunca apagados (ADR-0056 item 26) | grants (0009: `DELETE` só em `combo_components` e `addon_group_links`) |
 | Preço de site de produto só em bebida (Q-307, Q-308); pedido do app na tabela de balcão (ADR-0057 item 7) | `ck_products_site_price`, `ck_orders_price_list` (0009; contração pendente) |
+| À la carte no salão, na entrega e na retirada (ADR-0058 item 2) | `orders_order_type_check`, `ck_orders_fulfillment_by_type` (0010) |
+| Item do cardápio fixo com as referências do seu tipo, tamanho do próprio prato, sabor do próprio tamanho, sem cruzar tenants (ADR-0058 item 8) | `ck_order_items_refs`, `fk_order_items_dish_size`, `fk_order_items_beverage_flavor` e demais FKs compostas (0010) |
+| Combo em três níveis; parte só sob combo; adicional de grupo só sob prato avulso ou parte de prato; adicional do restaurante só sob marmita ou PF (ADR-0058 item 9, Q-321) | `ck_order_items_parent`, `ck_order_items_parent_dish`, `fk_order_items_parent_kind`, `fk_order_items_parent_dish` (0010; contração pendente) |
+| Snapshot de tamanho e sabor (ADR-0020); parte do combo a 0.00, salvo o acréscimo do sabor (ADR-0058 item 8) | `ck_order_items_snapshots`, `ck_order_items_combo_part_price` (0010) |
+| Combo e bebidas fora da cozinha (ADR-0058 itens 11 e 12) | `ck_order_items_preparation` (0010) |
+| Linha "À la carte" no fechamento; "Vendido pelo site" dentro do vendido (ADR-0058 item 13, ADR-0057 item 12) | `ck_daily_closing_lines_dimension`, `ck_daily_closings_site_sold` (0010) |
 
 ## 5.16 Validação
 
-O script foi validado em 2026-10-27 num PostgreSQL 16 (Docker): os blocos `sql` deste documento aplicados do zero (36 tabelas e 65 políticas na `0001`; 40 e 76 com as alterações até a `0004`; 42 e 80 até a `0005`; 44 e 86 até a `0006`; 44 e 87 até a `0007`; 46 e 91 até a `0008`; 57 e 113 até a `0009`) e depois o teste de fumaça [`05-ddl-smoke-test.sql`](05-ddl-smoke-test.sql), que roda como `almoseis_app`/`almoseis_platform` e confere 74 regras (22 da `0001`, 9 da `0003`, 10 da `0004`, 4 da `0005`, 5 da `0006`, 9 da `0008`, 15 da `0009`): isolamento entre dois tenants, plataforma do aparelho compartilhado, login, convite por código, totais, cancelamento, troco, estorno, conciliação, imutabilidade, casos com `NULL` e, desde a `0003`, o pedido da página (sem número, sem produção e sem autor enquanto aguarda aceite; recusa coerente; atendimento só em entrega) e, desde a `0004`, a página de pedidos (endereço para ativar, slug atual único e no formato, troco só em dinheiro, campos da página só em `WEB`, idempotência anônima, slug e token resolvíveis por outro tenant mas nunca gravados por ele, perfil e hash do IP isolados) e, desde a `0005`, a taxa por distância (cotação por distância completa, confirmação do ponto só com ponto, origem da taxa só em entrega, cotação e cache isolados) e, desde a `0006`, o push (token no formato do Expo e único, entrega com ticket ou erro, registro e entregas isolados, só quem comprova o token tira o aparelho do outro tenant; desde a `0007`, só a mesma instalação, pela função, e o token de acompanhamento só pela função de resolução) e, desde a `0008`, os comportamentos e rótulos (comportamento e origem da lista, rótulo do comportamento certo e só de comportamento habilitado, comportamento nunca alterado nem apagado pela aplicação, rótulo removível, isolamento e acréscimo pela plataforma) e, desde a `0009`, o cardápio fixo e o preço de site (prato com preço único ou tamanhos, "vende no site" com preço de site maior que zero em prato, tamanho, bebida, combo e marmita, componente de combo com o tamanho do próprio prato, acréscimo do sabor, vínculo de grupo único com categoria ou prato, preço de site só em bebida, tabela de preço do pedido, itens inativados e nunca apagados, componentes e vínculos trocados na edição, isolamento e combo de um tenant sem prato do outro). Toda mudança neste documento deve repetir os dois passos:
+O script foi validado em 2026-10-27 num PostgreSQL 16 (Docker): os blocos `sql` deste documento aplicados do zero (36 tabelas e 65 políticas na `0001`; 40 e 76 com as alterações até a `0004`; 42 e 80 até a `0005`; 44 e 86 até a `0006`; 44 e 87 até a `0007`; 46 e 91 até a `0008`; 57 e 113 até a `0009` e a `0010`) e depois o teste de fumaça [`05-ddl-smoke-test.sql`](05-ddl-smoke-test.sql), que roda como `almoseis_app`/`almoseis_platform` e confere 84 regras (22 da `0001`, 9 da `0003`, 10 da `0004`, 4 da `0005`, 5 da `0006`, 9 da `0008`, 15 da `0009`, 10 da `0010`): isolamento entre dois tenants, plataforma do aparelho compartilhado, login, convite por código, totais, cancelamento, troco, estorno, conciliação, imutabilidade, casos com `NULL` e, desde a `0003`, o pedido da página (sem número, sem produção e sem autor enquanto aguarda aceite; recusa coerente; atendimento só em entrega) e, desde a `0004`, a página de pedidos (endereço para ativar, slug atual único e no formato, troco só em dinheiro, campos da página só em `WEB`, idempotência anônima, slug e token resolvíveis por outro tenant mas nunca gravados por ele, perfil e hash do IP isolados) e, desde a `0005`, a taxa por distância (cotação por distância completa, confirmação do ponto só com ponto, origem da taxa só em entrega, cotação e cache isolados) e, desde a `0006`, o push (token no formato do Expo e único, entrega com ticket ou erro, registro e entregas isolados, só quem comprova o token tira o aparelho do outro tenant; desde a `0007`, só a mesma instalação, pela função, e o token de acompanhamento só pela função de resolução) e, desde a `0008`, os comportamentos e rótulos (comportamento e origem da lista, rótulo do comportamento certo e só de comportamento habilitado, comportamento nunca alterado nem apagado pela aplicação, rótulo removível, isolamento e acréscimo pela plataforma) e, desde a `0009`, o cardápio fixo e o preço de site (prato com preço único ou tamanhos, "vende no site" com preço de site maior que zero em prato, tamanho, bebida, combo e marmita, componente de combo com o tamanho do próprio prato, acréscimo do sabor, vínculo de grupo único com categoria ou prato, preço de site só em bebida, tabela de preço do pedido, itens inativados e nunca apagados, componentes e vínculos trocados na edição, isolamento e combo de um tenant sem prato do outro) e, desde a `0010`, o pedido à la carte (salão, entrega e retirada; combo em três níveis com o total do ADR-0058 e a cozinha sem o combo e sem bebidas; parte só sob combo; adicional de grupo só sob prato avulso ou parte de prato; adicional do restaurante só sob marmita ou PF, com ou sem o tipo do pai; referências por tipo, tamanho do próprio prato e sabor do próprio tamanho; snapshot de tamanho e sabor; preço da parte; linha `A_LA_CARTE` e vendido pelo site no fechamento; isolamento e item de um tenant sem cardápio fixo nem pai do outro). Toda mudança neste documento deve repetir os dois passos:
 
 ```text
 docker run -d --name almoseis-ddl-test -e POSTGRES_PASSWORD=test postgres:16
@@ -1081,7 +1087,7 @@ psql -U postgres -c "ALTER SCHEMA public OWNER TO almoseis_migrator"   # depois 
 (echo 'SET ROLE almoseis_migrator;'; cat schema.sql) | psql -U postgres -v ON_ERROR_STOP=1 && psql -U postgres -f docs/05-ddl-smoke-test.sql
 ```
 
-**Regras que ficam só na aplicação** (dependem de outra tabela ou de estado): `menu_items.section = products.kind`; `pf_price` obrigatório em menu PF; pedido com ao menos um item ou pesagem ativa; `items_total`/`weighings_total` = soma dos filhos; `paid_amount` = soma dos pagamentos `CONFIRMED`; pedido pago imutável; pelo menos um `OWNER` ativo; método de pagamento habilitado no tenant; adicional filho só de `MARMITA`/`PF`.
+**Regras que ficam só na aplicação** (dependem de outra tabela ou de estado): `menu_items.section = products.kind`; `pf_price` obrigatório em menu PF; pedido com ao menos um item ou pesagem ativa; `items_total`/`weighings_total` = soma dos filhos; `paid_amount` = soma dos pagamentos `CONFIRMED`; pedido pago imutável; pelo menos um `OWNER` ativo; método de pagamento habilitado no tenant; tipos de item conforme o `order_type` do pedido (cardápio fixo só em `A_LA_CARTE`, ADR-0058 item 3); tamanho e sabor obrigatórios quando o prato tem tamanho e o tamanho tem sabores; opção de adicional de um grupo ligado ao prato; valor do filho = `unit_price × quantity × quantidade do pai × quantidade do avô`; partes do combo = componentes do combo. Desde a `0010`, o adicional filho só de `MARMITA`/`PF` está no banco (`ck_order_items_parent`).
 
 ## 5.17 Alterações (ADR-0042)
 
@@ -2043,4 +2049,139 @@ GRANT INSERT, UPDATE ON
   combos, combo_components, addon_groups, addon_options, addon_group_links
 TO almoseis_app;
 GRANT DELETE ON combo_components, addon_group_links TO almoseis_app;
+```
+
+### 0010_ALaCarteOrders — 2026-11-22 (ADR-0058, ADR-0057 item 12)
+
+Pedido à la carte nas comandas e na cozinha (EP-003 fatia 3, F-312 a F-314). ADR-0058 e ADR-0057 estão `Proposto`.
+
+- **`orders.order_type = 'A_LA_CARTE'`** (ADR-0058 itens 1 e 2): aceita `DINE_IN`, `DELIVERY` e `PICKUP` (`ck_orders_fulfillment_by_type`); marmita continua só entrega/retirada e PF/quilo só salão. O balcão "para viagem" da lanchonete é uma comanda `DINE_IN` com número de comanda (Q-320): nada muda no banco. Um pedido tem **um** tipo (Q-317), e o tipo decide de onde vêm os itens (item 3): `A_LA_CARTE` só com os tipos de item do cardápio fixo, os outros só com `MARMITA`/`PF`/`BEVERAGE`/`ADDON`. Assim a comanda nunca mistura PF ou quilo com cardápio fixo. Essa regra depende do pedido (outra tabela) e fica na aplicação, como já ficava "item `MARMITA` só em pedido `MARMITA`". Mesa/comanda, nome e telefone seguem as regras atuais (a fatia 4 decide o delivery por telefone, ADR-0059).
+- **Tipos de item novos** (item 8, nomes do ADR): `FIXED_DISH` (prato avulso), `FIXED_BEVERAGE` (bebida avulsa), `COMBO`, `COMBO_PART` e `GROUP_ADDON`. Cada tipo tem as suas referências e nenhuma outra (`ck_order_items_refs`, reescrito com `num_nonnulls`): `FIXED_DISH` → `dish_id` (+ `dish_size_id` se o prato tem tamanho); `FIXED_BEVERAGE` → `beverage_size_id` (+ `beverage_flavor_id` se o tamanho tem sabores); `COMBO` → `combo_id`; `COMBO_PART` → um prato (`dish_id` + `dish_size_id`) **ou** um tamanho de bebida (`beverage_size_id` + `beverage_flavor_id`); `GROUP_ADDON` → `addon_option_id`. As FKs são compostas por tenant, e as de tamanho e sabor incluem o pai (`(tenant_id, dish_id, dish_size_id) → dish_sizes (tenant_id, dish_id, id)`, `(tenant_id, beverage_size_id, beverage_flavor_id) → beverage_flavors (tenant_id, beverage_size_id, id)`, alvos preparados na 0009): o tamanho é **daquele** prato e o sabor é **daquele** tamanho. Os componentes do combo não são referenciados (a edição do combo os troca, 0009); a parte grava o prato ou a bebida do componente. "Tamanho obrigatório se o prato tem tamanho", "sabor obrigatório se o tamanho tem sabores", "opção de um grupo ligado ao prato" e "item pausado" dependem de outras tabelas e ficam na aplicação (`409 ProductUnavailable`).
+- **Snapshot** (ADR-0020): nos tipos novos, `name_snapshot` é o nome **base** (prato, tipo de bebida, combo ou opção), e o tamanho e o sabor ganham colunas próprias, `size_name_snapshot` (30, como `dish_sizes.name`/`beverage_sizes.name`) e `flavor_name_snapshot` (40, como `beverage_flavors.name`), preenchidas exatamente quando há tamanho e sabor (`ck_order_items_snapshots`). Assim "Refrigerante" + "Lata 350 ml" + "Coca-Cola Zero" cabem sem estourar os 80 do nome, e a exibição junta as partes ("Refrigerante Lata 350 ml · Coca-Cola Zero"). Nos tipos antigos as duas colunas ficam nulas. O preço é o `unit_price` de sempre: tamanho + acréscimo do sabor na bebida avulsa; na parte do combo, `0.00` ou só o acréscimo do sabor (`ck_order_items_combo_part_price`).
+- **Hierarquia em três níveis** (item 9, Q-321): `COMBO` → `COMBO_PART` → `GROUP_ADDON`, e `FIXED_DISH` → `GROUP_ADDON`. Um `CHECK` não enxerga a linha do pai, por isso o filho copia o tipo do pai em **`parent_item_kind`**, garantido pela FK `(tenant_id, order_id, parent_order_item_id, parent_item_kind) → order_items (tenant_id, order_id, id, item_kind)`, e `ck_order_items_parent` decide as combinações: `COMBO_PART` só sob `COMBO`; `GROUP_ADDON` só sob `FIXED_DISH` ou `COMBO_PART`; `ADDON` só sob `MARMITA`/`PF` (antes, só na aplicação); `COMBO_PART` e `GROUP_ADDON` nunca no primeiro nível; os demais tipos nunca têm pai. A profundidade máxima (3) sai das próprias combinações. "Parte **de prato**" (o adicional nunca fica sob a parte de bebida) usa o mesmo recurso: o `GROUP_ADDON` grava o prato do pai em **`parent_dish_id`**, com a FK `(tenant_id, order_id, parent_order_item_id, parent_dish_id) → order_items (tenant_id, order_id, id, dish_id)`; a parte de bebida não tem `dish_id` e não casa. O valor do filho continua na aplicação: `unit_price × quantity × quantidade do pai × quantidade do avô`. Trocar o sabor de uma parte é remover e incluir o combo (Q-322): nenhuma coluna para isso.
+- **Cozinha** (itens 11 e 12): o `COMBO` e as bebidas (`FIXED_BEVERAGE` e parte de bebida) nunca têm `requires_preparation` (`ck_order_items_preparation`); a cozinha lista as linhas com preparo, que são os pratos avulsos, as partes de prato e os adicionais deles. O `requires_preparation` do `FIXED_DISH` e da parte de prato é o snapshot de `dishes.requires_preparation`; o do `GROUP_ADDON` é o do pai.
+- **Fechamento** (item 13, Q-311, F-314): `daily_closing_lines` aceita a chave `A_LA_CARTE` na dimensão `ORDER_TYPE`, **uma linha**, como as outras modalidades. A abertura por atendimento (salão, entrega, retirada) recomendada no Q-311 é informativa e não é gravada no snapshot (se o usuário decidir gravá-la, vira uma dimensão nova numa migration futura). `daily_closings.site_sold_total` é o "Vendido pelo site" (ADR-0057 item 12): Σ `total_amount` dos pedidos `ACTIVE` aceitos do expediente com `price_list = 'SITE'`, parte de `total_sold` (`ck_daily_closings_site_sold`), só informativo. A base da cobrança da plataforma (com ou sem a taxa de entrega) está em aberto (Q-310). Os fechamentos existentes ficam com `0`, como as colunas informativas da 0003.
+
+**Correção de dados:** os adicionais existentes (`ADDON` com pai) recebem `parent_item_kind` = tipo do pai (`MARMITA`/`PF`). A RLS de `order_items` é `FORCE`: o `FORCE` sai só durante o `UPDATE`, na mesma transação (§5.1). As restrições entram depois da correção.
+
+**Expand/contract (09 §9.4):** a API anterior não conhece os tipos nem as colunas novas e continua gravando `MARMITA`, `PF`, `BEVERAGE` e `ADDON` como antes: as referências, o snapshot e o preparo desses tipos não mudam, e o `CHECK` aceita o `ADDON` filho **sem** `parent_item_kind` (a FK do tipo do pai não é verificada com a coluna nula, mas `fk_order_items_parent` continua garantindo o pai no mesmo pedido). A API desta versão sempre grava `parent_item_kind` nos filhos. O fechamento gravado pela API anterior fica com `site_sold_total = 0` (o default). **Contração pendente** (próxima release): preencher o `parent_item_kind` dos `ADDON` filhos gravados na janela do deploy (o mesmo `UPDATE` abaixo, com `c.parent_item_kind IS NULL`) e trocar o ramo do `ADDON` em `ck_order_items_parent` por `parent_item_kind IS NOT NULL AND parent_item_kind IN ('MARMITA', 'PF')`. O default de `site_sold_total` fica, como os da 0003.
+
+```sql
+-- Modalidade à la carte: salão, entrega e retirada (ADR-0058 itens 1 e 2). O CHECK da coluna tem o nome padrão.
+ALTER TABLE orders DROP CONSTRAINT orders_order_type_check;
+ALTER TABLE orders ADD CONSTRAINT orders_order_type_check CHECK (order_type IN ('MARMITA', 'PF', 'KILO', 'A_LA_CARTE'));
+ALTER TABLE orders DROP CONSTRAINT ck_orders_fulfillment_by_type;
+ALTER TABLE orders ADD CONSTRAINT ck_orders_fulfillment_by_type CHECK (
+     (order_type = 'MARMITA' AND fulfillment_type IN ('DELIVERY', 'PICKUP'))
+  OR (order_type IN ('PF', 'KILO') AND fulfillment_type = 'DINE_IN')
+  OR (order_type = 'A_LA_CARTE' AND fulfillment_type IN ('DINE_IN', 'DELIVERY', 'PICKUP')));
+
+-- Item do cardápio fixo: referências, snapshot de tamanho e sabor, tipo e prato do pai (ADR-0058 itens 8 e 9)
+ALTER TABLE order_items
+  ADD COLUMN parent_item_kind      text,
+  ADD COLUMN parent_dish_id        uuid,
+  ADD COLUMN dish_id               uuid,
+  ADD COLUMN dish_size_id          uuid,
+  ADD COLUMN beverage_size_id      uuid,
+  ADD COLUMN beverage_flavor_id    uuid,
+  ADD COLUMN combo_id              uuid,
+  ADD COLUMN addon_option_id       uuid,
+  ADD COLUMN size_name_snapshot    varchar(30),
+  ADD COLUMN flavor_name_snapshot  varchar(40);
+
+-- Adicionais existentes: o tipo do pai. A RLS de order_items é FORCE: o FORCE sai só durante o UPDATE (§5.1).
+ALTER TABLE order_items NO FORCE ROW LEVEL SECURITY;
+UPDATE order_items c
+   SET parent_item_kind = p.item_kind
+  FROM order_items p
+ WHERE c.parent_order_item_id IS NOT NULL
+   AND p.tenant_id = c.tenant_id AND p.order_id = c.order_id AND p.id = c.parent_order_item_id;
+ALTER TABLE order_items FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE order_items DROP CONSTRAINT order_items_item_kind_check;
+ALTER TABLE order_items ADD CONSTRAINT order_items_item_kind_check CHECK (item_kind IN (
+  'MARMITA', 'PF', 'BEVERAGE', 'ADDON', 'FIXED_DISH', 'FIXED_BEVERAGE', 'COMBO', 'COMBO_PART', 'GROUP_ADDON'));
+
+-- Cada tipo com as suas referências e nenhuma outra. Tamanho sem prato e sabor sem tamanho nunca passam:
+-- a FK composta não seria verificada com o pai nulo.
+ALTER TABLE order_items DROP CONSTRAINT ck_order_items_refs;
+ALTER TABLE order_items ADD CONSTRAINT ck_order_items_refs CHECK (
+     (item_kind = 'MARMITA' AND marmita_size_id IS NOT NULL
+        AND num_nonnulls(product_id, dish_id, dish_size_id, beverage_size_id, beverage_flavor_id, combo_id, addon_option_id) = 0)
+  OR (item_kind IN ('PF', 'BEVERAGE', 'ADDON') AND product_id IS NOT NULL
+        AND num_nonnulls(marmita_size_id, dish_id, dish_size_id, beverage_size_id, beverage_flavor_id, combo_id, addon_option_id) = 0)
+  OR (item_kind = 'FIXED_DISH' AND dish_id IS NOT NULL
+        AND num_nonnulls(product_id, marmita_size_id, beverage_size_id, beverage_flavor_id, combo_id, addon_option_id) = 0)
+  OR (item_kind = 'FIXED_BEVERAGE' AND beverage_size_id IS NOT NULL
+        AND num_nonnulls(product_id, marmita_size_id, dish_id, dish_size_id, combo_id, addon_option_id) = 0)
+  OR (item_kind = 'COMBO' AND combo_id IS NOT NULL
+        AND num_nonnulls(product_id, marmita_size_id, dish_id, dish_size_id, beverage_size_id, beverage_flavor_id, addon_option_id) = 0)
+  OR (item_kind = 'COMBO_PART'
+        AND num_nonnulls(product_id, marmita_size_id, combo_id, addon_option_id) = 0
+        AND (   (dish_id IS NOT NULL AND beverage_size_id IS NULL AND beverage_flavor_id IS NULL)
+             OR (beverage_size_id IS NOT NULL AND dish_id IS NULL AND dish_size_id IS NULL)))
+  OR (item_kind = 'GROUP_ADDON' AND addon_option_id IS NOT NULL
+        AND num_nonnulls(product_id, marmita_size_id, dish_id, dish_size_id, beverage_size_id, beverage_flavor_id, combo_id) = 0));
+
+-- Snapshot do tamanho e do sabor exatamente quando há tamanho e sabor (ADR-0020)
+ALTER TABLE order_items ADD CONSTRAINT ck_order_items_snapshots CHECK (
+      (size_name_snapshot IS NOT NULL) = (dish_size_id IS NOT NULL OR beverage_size_id IS NOT NULL)
+  AND (flavor_name_snapshot IS NOT NULL) = (beverage_flavor_id IS NOT NULL));
+
+-- Três níveis: COMBO → COMBO_PART → GROUP_ADDON; FIXED_DISH → GROUP_ADDON; MARMITA/PF → ADDON (item 9, Q-321).
+-- ADDON filho sem parent_item_kind: só a API anterior, na janela do deploy (contração pendente).
+ALTER TABLE order_items DROP CONSTRAINT ck_order_items_parent;
+ALTER TABLE order_items ADD CONSTRAINT ck_order_items_parent CHECK (
+     (parent_order_item_id IS NULL AND parent_item_kind IS NULL AND item_kind NOT IN ('COMBO_PART', 'GROUP_ADDON'))
+  OR (parent_order_item_id IS NOT NULL AND item_kind = 'ADDON'
+        AND (parent_item_kind IS NULL OR parent_item_kind IN ('MARMITA', 'PF')))
+  OR (parent_order_item_id IS NOT NULL AND item_kind = 'COMBO_PART'
+        AND parent_item_kind IS NOT NULL AND parent_item_kind = 'COMBO')
+  OR (parent_order_item_id IS NOT NULL AND item_kind = 'GROUP_ADDON'
+        AND parent_item_kind IS NOT NULL AND parent_item_kind IN ('FIXED_DISH', 'COMBO_PART')));
+-- O adicional de grupo fica sob um prato (avulso ou parte de prato do combo), nunca sob a parte de bebida
+ALTER TABLE order_items ADD CONSTRAINT ck_order_items_parent_dish CHECK ((item_kind = 'GROUP_ADDON') = (parent_dish_id IS NOT NULL));
+
+-- Cozinha (itens 11 e 12): combo e bebidas fora; MARMITA/PF sempre com preparo
+ALTER TABLE order_items DROP CONSTRAINT ck_order_items_preparation;
+ALTER TABLE order_items ADD CONSTRAINT ck_order_items_preparation CHECK (
+      (item_kind NOT IN ('MARMITA', 'PF') OR requires_preparation)
+  AND (item_kind NOT IN ('COMBO', 'FIXED_BEVERAGE') OR NOT requires_preparation)
+  AND (item_kind <> 'COMBO_PART' OR beverage_size_id IS NULL OR NOT requires_preparation));
+
+-- Parte do combo custa 0.00, salvo o acréscimo do sabor (item 8)
+ALTER TABLE order_items ADD CONSTRAINT ck_order_items_combo_part_price CHECK (
+  item_kind <> 'COMBO_PART' OR beverage_flavor_id IS NOT NULL OR (unit_price = 0 AND line_total = 0));
+
+-- Alvos das FKs do pai: tipo e prato do pai, no mesmo pedido
+ALTER TABLE order_items
+  ADD CONSTRAINT ux_order_items_parent_kind_target UNIQUE (tenant_id, order_id, id, item_kind),
+  ADD CONSTRAINT ux_order_items_parent_dish_target UNIQUE (tenant_id, order_id, id, dish_id);
+
+ALTER TABLE order_items
+  ADD CONSTRAINT fk_order_items_parent_kind FOREIGN KEY (tenant_id, order_id, parent_order_item_id, parent_item_kind)
+    REFERENCES order_items (tenant_id, order_id, id, item_kind),
+  ADD CONSTRAINT fk_order_items_parent_dish FOREIGN KEY (tenant_id, order_id, parent_order_item_id, parent_dish_id)
+    REFERENCES order_items (tenant_id, order_id, id, dish_id),
+  ADD CONSTRAINT fk_order_items_dish FOREIGN KEY (tenant_id, dish_id) REFERENCES dishes (tenant_id, id),
+  ADD CONSTRAINT fk_order_items_dish_size FOREIGN KEY (tenant_id, dish_id, dish_size_id)
+    REFERENCES dish_sizes (tenant_id, dish_id, id),
+  ADD CONSTRAINT fk_order_items_beverage_size FOREIGN KEY (tenant_id, beverage_size_id)
+    REFERENCES beverage_sizes (tenant_id, id),
+  ADD CONSTRAINT fk_order_items_beverage_flavor FOREIGN KEY (tenant_id, beverage_size_id, beverage_flavor_id)
+    REFERENCES beverage_flavors (tenant_id, beverage_size_id, id),
+  ADD CONSTRAINT fk_order_items_combo FOREIGN KEY (tenant_id, combo_id) REFERENCES combos (tenant_id, id),
+  ADD CONSTRAINT fk_order_items_addon_option FOREIGN KEY (tenant_id, addon_option_id)
+    REFERENCES addon_options (tenant_id, id);
+
+-- Fechamento: linha "À la carte" (item 13, Q-311) e "Vendido pelo site", informativo (ADR-0057 item 12)
+ALTER TABLE daily_closing_lines DROP CONSTRAINT ck_daily_closing_lines_dimension;
+ALTER TABLE daily_closing_lines ADD CONSTRAINT ck_daily_closing_lines_dimension CHECK (
+     (dimension = 'ORDER_TYPE' AND key IN ('MARMITA', 'PF', 'KILO', 'A_LA_CARTE')
+        AND sold IS NOT NULL AND pending IS NOT NULL)
+  OR (dimension = 'PAYMENT_METHOD' AND key IN ('CASH', 'PIX', 'CARD')
+        AND sold IS NULL AND pending IS NULL));
+ALTER TABLE daily_closings
+  ADD COLUMN site_sold_total numeric(12,2) NOT NULL DEFAULT 0 CHECK (site_sold_total >= 0);
+ALTER TABLE daily_closings ADD CONSTRAINT ck_daily_closings_site_sold CHECK (site_sold_total <= total_sold);
 ```
