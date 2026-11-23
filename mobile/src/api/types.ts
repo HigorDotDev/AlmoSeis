@@ -777,11 +777,16 @@ export interface PendingOrders {
 
 // ---------------------------------------------------------------- 6.9 Pedidos
 
-export type OrderType = 'MARMITA' | 'PF' | 'KILO';
+/** `A_LA_CARTE`: itens do cardápio fixo (EP-003 fatia 3, ADR-0058). */
+export type OrderType = 'MARMITA' | 'PF' | 'KILO' | 'A_LA_CARTE';
 export type FulfillmentType = 'DELIVERY' | 'PICKUP' | 'DINE_IN';
 export type ProductionStatus = 'OPEN' | 'IN_PROGRESS' | 'COMPLETED';
 export type CancellationStatus = 'ACTIVE' | 'CANCELED';
-export type ItemKind = 'MARMITA' | 'PF' | 'BEVERAGE' | 'ADDON';
+/**
+ * Tipos de item (06 §6.9). Cardápio fixo (ADR-0058 item 8): `FIXED_DISH`, `FIXED_BEVERAGE` e `COMBO` no primeiro nível;
+ * `COMBO_PART` só dentro de `parts` do `COMBO`; `GROUP_ADDON` em `addons` de um prato avulso ou de uma parte de prato.
+ */
+export type ItemKind = 'MARMITA' | 'PF' | 'BEVERAGE' | 'ADDON' | 'FIXED_DISH' | 'FIXED_BEVERAGE' | 'COMBO' | 'COMBO_PART' | 'GROUP_ADDON';
 /** `APP`: criado no app; `WEB`: página de pedidos (EP-002, ADR-0046). */
 export type OrderOrigin = 'APP' | 'WEB';
 
@@ -800,8 +805,11 @@ export type EstimatedReadyMinutes = 15 | 30 | 45 | 60;
 
 export interface OrderAddon {
   id: Uuid;
-  itemKind: 'ADDON';
-  productId: Uuid;
+  /** `GROUP_ADDON`: opção de grupo do cardápio fixo, com `addonOptionId` e `productId: null`. */
+  itemKind: 'ADDON' | 'GROUP_ADDON';
+  productId: Uuid | null;
+  /** Ausente num pedido guardado no cache por um app anterior. */
+  addonOptionId?: Uuid | null;
   name: string;
   quantity: number;
   unitPrice: MoneyString;
@@ -815,10 +823,22 @@ export interface OrderAddon {
 
 export interface OrderItem {
   id: Uuid;
-  itemKind: Exclude<ItemKind, 'ADDON'>;
+  itemKind: Exclude<ItemKind, 'ADDON' | 'GROUP_ADDON'>;
   marmitaSizeId: Uuid | null;
   productId: Uuid | null;
+  /**
+   * Campos do cardápio fixo (EP-003 fatia 3): `null` nos itens de marmita, PF e catálogo. Opcionais só porque um
+   * pedido guardado no cache por um app anterior vem sem eles.
+   */
+  dishId?: Uuid | null;
+  dishSizeId?: Uuid | null;
+  beverageSizeId?: Uuid | null;
+  beverageFlavorId?: Uuid | null;
+  comboId?: Uuid | null;
+  /** Nome de exibição do snapshot: nome base + `sizeName` + " · " + `flavorName` ("Açaí 500 ml"). */
   name: string;
+  sizeName?: string | null;
+  flavorName?: string | null;
   composition: string | null;
   components: { productId: Uuid; role: MenuSection; name: string }[];
   quantity: number;
@@ -827,6 +847,8 @@ export interface OrderItem {
   requiresPreparation: boolean;
   notes: string | null;
   addons: OrderAddon[];
+  /** Só no `COMBO`: as `COMBO_PART`, uma por componente, na ordem do combo (06 §6.9). Fora dele, `[]`. */
+  parts?: OrderItem[];
   createdAt: Instant;
   createdBy: Author | null;
 }
@@ -982,7 +1004,29 @@ export type NewItemInput =
     }
   | { itemKind: 'PF'; productId: Uuid; quantity: number; notes: string | null; addons: AddonInput[] }
   | { itemKind: 'BEVERAGE'; productId: Uuid; quantity: number; notes: string | null }
-  | { itemKind: 'ADDON'; parentOrderItemId: Uuid; productId: Uuid; quantity: number; notes: string | null };
+  | { itemKind: 'ADDON'; parentOrderItemId: Uuid; productId: Uuid; quantity: number; notes: string | null }
+  // Cardápio fixo (06 §6.9 "Regras do corpo A_LA_CARTE").
+  | { itemKind: 'FIXED_DISH'; dishId: Uuid; dishSizeId: Uuid | null; quantity: number; notes: string | null; groupAddons: GroupAddonInput[] }
+  | { itemKind: 'FIXED_BEVERAGE'; beverageSizeId: Uuid; beverageFlavorId: Uuid | null; quantity: number; notes: string | null }
+  | { itemKind: 'COMBO'; comboId: Uuid; quantity: number; parts: ComboPartInput[] }
+  /** Só em `POST /orders/{id}/items`: num prato avulso ou numa parte de prato de um combo já registrado. */
+  | { itemKind: 'GROUP_ADDON'; parentOrderItemId: Uuid; addonOptionId: Uuid; quantity: number; notes: null };
+
+export interface GroupAddonInput {
+  addonOptionId: Uuid;
+  /** 1 a 10 (ADR-0056 item 19). */
+  quantity: number;
+}
+
+/** Escolhas de um componente do combo (`comboComponentId` = `components[].id` do `GET /fixed-menu`). */
+export interface ComboPartInput {
+  comboComponentId: Uuid;
+  /** Só na parte de bebida (obrigatório se o tamanho tem sabores). */
+  beverageFlavorId: Uuid | null;
+  /** Só na parte de prato. */
+  notes: string | null;
+  groupAddons: GroupAddonInput[] | null;
+}
 
 export interface CreateOrderBody {
   orderType: OrderType;
@@ -1152,6 +1196,8 @@ export interface ClosingSummary {
   orderCount: number;
   totalSold: MoneyString;
   deliveryFeesTotal: MoneyString;
+  /** "Vendido pelo site" (ADR-0057 item 12), já contido no `totalSold`; ausente num resumo guardado por um app anterior. */
+  siteSoldTotal?: MoneyString;
   totalReceived: MoneyString;
   receivedFromPreviousDays: MoneyString;
   totalPending: MoneyString;

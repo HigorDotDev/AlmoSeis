@@ -348,6 +348,7 @@ const kindNames: Record<string, string> = {
   NEW_ORDER_MARMITA: 'Nova marmita',
   NEW_ORDER_PF: 'Nova mesa (PF)',
   NEW_ORDER_KILO: 'Nova comanda (quilo)',
+  NEW_ORDER_A_LA_CARTE: 'Nova comanda (à la carte)',
   ADD_ITEMS: 'Inclusão de itens',
   PAYMENT: 'Pagamento',
 };
@@ -356,6 +357,7 @@ const resumeRoute: Record<string, (d: Draft) => string> = {
   NEW_ORDER_MARMITA: () => '/orders/new/marmita',
   NEW_ORDER_PF: () => '/orders/new/pf',
   NEW_ORDER_KILO: () => '/orders/new/kilo',
+  NEW_ORDER_A_LA_CARTE: () => '/orders/new/a-la-carte',
   ADD_ITEMS: (d) => `/orders/${d.targetId}/add-items`,
   PAYMENT: (d) => `/orders/${d.targetId}/pay`,
 };

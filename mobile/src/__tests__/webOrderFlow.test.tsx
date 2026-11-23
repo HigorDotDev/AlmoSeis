@@ -196,7 +196,7 @@ afterEach(() => {
 });
 
 async function renderWith(ui: ReactElement) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false, gcTime: 0 } } });
   clients.push(client);
   return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
 }

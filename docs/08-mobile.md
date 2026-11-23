@@ -41,7 +41,7 @@ mobile/
         marmitas.tsx  salao.tsx  delivery.tsx  pedidos.tsx  fechamento.tsx
       business-day/open.tsx
       orders/
-        new/marmita.tsx  new/pf.tsx  new/kilo.tsx
+        new/marmita.tsx  new/pf.tsx  new/kilo.tsx  new/a-la-carte.tsx   # comanda à la carte (EP-003 fatia 3)
         [id]/index.tsx  [id]/add-items.tsx  [id]/weighings.tsx  [id]/pay.tsx
         [id]/history.tsx  [id]/alerts.tsx  [id]/edit.tsx
       closing/finalize.tsx  closing/cash-movement.tsx  closing/history.tsx  closing/[id].tsx  closing/monthly.tsx
@@ -58,7 +58,7 @@ mobile/
     api/          client.ts  errors.ts  headers.ts  endpoints/*.ts (um arquivo por recurso do 06)
     features/     auth/ orders/ production/ payments/ closing/ menu/ catalog/ customers/ employees/ sync/ realtime/ drafts/ storefront/ push/
                   tenant/ (comportamentos, rótulos e módulos, EP-003)  delivery/ (aba Delivery, EP-003)
-                  fixedMenu/ (cardápio fixo, EP-003 fatia 2)
+                  fixedMenu/ (cardápio fixo, EP-003 fatia 2)  orders/aLaCarte.ts + aLaCarteComponents.tsx (pedido à la carte, fatia 3)
                   (cada uma com hooks/, components/, schemas.ts)
     components/ui/   design system (§8.10)
     db/           schema.ts  migrations.ts  draftsRepo.ts  pendingOpsRepo.ts  metaRepo.ts
@@ -144,7 +144,7 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS drafts (
   id          TEXT PRIMARY KEY,    -- uuid local
   tenant_id   TEXT NOT NULL,
-  kind        TEXT NOT NULL,       -- NEW_ORDER_MARMITA | NEW_ORDER_PF | NEW_ORDER_KILO | ADD_ITEMS | PAYMENT
+  kind        TEXT NOT NULL,       -- NEW_ORDER_MARMITA | NEW_ORDER_PF | NEW_ORDER_KILO | NEW_ORDER_A_LA_CARTE | ADD_ITEMS | PAYMENT (texto livre: tipo novo sem migração)
   target_id   TEXT,                -- orderId quando o rascunho é de um pedido existente
   form_json   TEXT NOT NULL,       -- estado do formulário (RHF) serializado
   updated_at  TEXT NOT NULL
@@ -341,7 +341,7 @@ As abas saem de `visibleTabs(me)` (`features/tenant/establishment.ts`): **só** 
 | Aba | Aparece com | Sem expediente aberto |
 |---|---|---|
 | Marmitas | `MARMITA` + `orders.view` | Card "Abrir expediente" (`cash.open`) ou "Peça para o caixa abrir o expediente" |
-| Salão | (`PF`, `KILO` ou `A_LA_CARTE`) + `orders.view` | idem (PF e Quilo) |
+| Salão | (`PF`, `KILO` ou `A_LA_CARTE`) + `orders.view` | idem (PF, Quilo e Comandas; o segmentado continua visível). O "Prepare seu restaurante" só aparece com o módulo `MARMITA` |
 | Delivery | `DELIVERY` + `orders.view` | — (fatia 4; hoje só o estado "Disponível em breve") |
 | Pedidos / Cozinha | `production.view` | "Nenhum expediente aberto" |
 | Fechamento | `closing.view` | Histórico de fechamentos + "Abrir expediente" |
@@ -350,7 +350,7 @@ As abas saem de `visibleTabs(me)` (`features/tenant/establishment.ts`): **só** 
 - Lanchonete (`A_LA_CARTE`, `DELIVERY`, `FIXED_MENU`): Salão · Delivery · Cozinha · Fechamento.
 - Os dois (só pelo admin): Marmitas · Salão · Delivery · Cozinha · Fechamento (sugestão do ADR-0055 item 4; Q-304 a confirmar).
 - A rota de produção é sempre `pedidos`; o título é "Pedidos" quando o tenant não tem nenhum módulo da lanchonete e "Cozinha" nos outros casos (`productionTabTitle`, ADR-0055 item 5). O texto do "Som de pedidos" em Configurações usa o mesmo nome.
-- Sub-abas do Salão (`salaoKinds`): PF e Quilo no restaurante; na lanchonete, **sem sub-abas**, só as comandas; com os dois, PF · Quilo · Comandas. Enquanto a fatia 3 não chega, "Comandas" mostra "Comandas · Disponível em breve" com o texto do que vai existir, **sem botão** (nem "Nova comanda").
+- Sub-abas do Salão (`salaoKinds`): PF e Quilo no restaurante; na lanchonete, **sem sub-abas**, só as comandas à la carte; com os dois, PF · Quilo · Comandas. Cada sub-aba lista só a sua modalidade (`GET /orders?orderType=`): uma comanda nunca mistura PF ou quilo com o cardápio fixo (ADR-0058 item 3). Ver "Aba Salão" em §8.9.
 
 A aba inicial é a última usada no aparelho (o que permite a cozinha abrir direto na produção), **se ela ainda existe** para este tenant e este funcionário; senão, a primeira visível (`initialTab`, em `app/index.tsx`). O valor lembrado não é apagado: volta a valer se a aba voltar.
 
@@ -443,9 +443,9 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 
 ### Aba Salão — `(tabs)/salao`
 
-- **Layout:** segmentado *PF / Quilo*, com uma lista de comandas abertas do expediente (`isPaid=false` primeiro, depois as quitadas recentes).
-- **Card:** mesa ou comanda, número, total e saldo.
-- **FABs:** "Nova mesa (PF)" e "Nova comanda (quilo)".
+- **Layout:** segmentado pelos módulos (*PF / Quilo*, *PF / Quilo / Comandas* ou nenhum na lanchonete, §8.8), com a lista de comandas do expediente **da modalidade escolhida** (`GET /orders?orderType=PF|KILO|A_LA_CARTE&cancellationStatus=ACTIVE`; `isPaid=false` primeiro, depois as quitadas). Em *Comandas*, só as `DINE_IN`: o à la carte de entrega e retirada é da aba Delivery (ADR-0055 item 3).
+- **Card:** o mesmo `OrderCard` nas três: mesa ou comanda, número, total, saldo e a situação (financeiro e produção).
+- **FAB** (um só, segue o filtro, `docs/10-ux.md` D6): "Nova mesa" (PF), "Nova comanda" (quilo) ou **"Abrir comanda"** (à la carte → `orders/new/a-la-carte`).
 
 ### Nova mesa PF — `orders/new/pf`
 
@@ -453,6 +453,22 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 2. Pratos do cardápio PF em grade (nome + `pfPrice`), com stepper, observação e adicionais.
 3. Bebidas.
 4. "Abrir mesa" → Confirma → `POST /orders` [I].
+
+### Abrir comanda à la carte — `orders/new/a-la-carte` (EP-003 fatia 3, ADR-0058)
+
+Segue o fluxo do PF (ADR-0058 item 5), com itens **só do cardápio fixo** e preço de balcão (`priceList: COUNTER`). Lógica em `features/orders/aLaCarte.ts` (sem plataforma), peças em `aLaCarteComponents.tsx`.
+
+1. Mesa (`tableLabel`) e/ou comanda (`tabNumber`), teclado numérico; nome do cliente opcional. Sem mesa nem comanda não vai ("Informe a mesa ou a comanda."). O balcão "para viagem" é uma comanda com número (Q-320).
+2. **Cardápio** (`GET /fixed-menu?includeInactive=false`, `['fixedMenu', false]`) nas três partes do cadastro: **Pratos** por categoria (com o resumo de preço), **Bebidas** por tipo (um card por tamanho) e **Combos**. O que não está à venda (`isSellable: false`, sempre o do servidor) aparece **riscado, sem toque**, com o motivo: "Pausado", "Indisponível: todos os tamanhos pausados", "Indisponível: Batata frita G pausado" (os `name` dos componentes fora de venda). Tamanho, sabor e opção de adicional pausados aparecem desabilitados ("· pausado").
+3. Tocar num item abre a **folha de montagem** (`ALaCarteLineSheet`), com o botão desabilitado dizendo o que falta:
+   - **prato** → **tamanho** (chips com o preço; um só tamanho à venda já vem escolhido) → **adicionais** dos grupos do prato (`addonGroupIds`, de 0 a 10 por opção, "+ R$ 4,00"/"grátis") → **observação** → quantidade;
+   - **bebida** → **sabor** (com o acréscimo, "Coca-Cola Zero + R$ 0,50"; obrigatório quando o tamanho tem sabores ativos). Bebida **sem** sabor entra direto, com o stepper na linha;
+   - **combo** → para cada **parte de prato**, adicionais e observação próprios; para cada **parte de bebida**, o sabor; quantidade do combo. "Os adicionais são cobrados à parte, como o acréscimo do sabor."
+4. Cada item vira uma linha ("Na comanda") com o nome no formato do snapshot do servidor ("Açaí 500 ml", "Refrigerante Lata 350 ml · Coca-Cola"), os adicionais, a observação, as partes do combo ("1× X-Burguer (+ 1× Bacon · Obs.: Sem cebola)"), a prévia, o stepper, "Editar"/"Sabor" e remover.
+5. "Abrir comanda" → Confirma (mesa/comanda, cada linha com as partes e o valor, a prévia e "Preço de balcão. O total oficial vem do servidor.") → `POST /orders` [I] com `orderType: A_LA_CARTE`, `fulfillmentType: DINE_IN` e os itens `FIXED_DISH {dishId, dishSizeId, quantity, notes, groupAddons}`, `FIXED_BEVERAGE {beverageSizeId, beverageFlavorId, quantity, notes}` e `COMBO {comboId, quantity, parts}`. Em `parts` vão só os componentes com escolha (prato com observação ou adicional; bebida com sabor), como permite o 06.
+- **Prévia** em centavos com os preços do cache: prato (preço único ou do tamanho) + adicional × quantidade; bebida = tamanho + acréscimo; combo = preço fechado × quantidade + acréscimo do sabor × parte × combo + adicional × parte × combo (2 combos com bacon e Coca Zero = R$ 73,00). Só prévia.
+- **Rascunho e idempotência**: o mesmo mecanismo do PF (ADR-0010/0011): rascunho `NEW_ORDER_A_LA_CARTE` a cada mudança, "Continuar rascunho de 11:42?", `useCreateOrder` (`useCriticalMutation`, `Idempotency-Key`, pendência, resultado desconhecido resolvido por `/operations` antes de qualquer reenvio).
+- **Erros:** `422 ProductUnavailable` → o `detail` do servidor ("X-Burguer + batata + refri está indisponível. Pausado: Batata frita P.") e o cardápio (`['fixedMenu']`, e também `['menus']`/`['products']`) recarrega, para o item já aparecer desabilitado; `403 ModuleNotEnabled` → "Comandas à la carte não está habilitado neste estabelecimento." (e o `me` recarrega); `422 ValidationFailed` → a primeira mensagem do servidor.
 
 ### Nova comanda de quilo — `orders/new/kilo`
 
@@ -472,11 +488,12 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
   - Confirma com "Atendimento: Pendente → Saiu para entrega" (e "Produção: Em produção → Concluído" no concluir e marcar) e a nota "O financeiro não muda" → `PATCH /orders/{id}/fulfillment` [M]. `409 ProductionNotCompleted` (a cozinha voltou o status) mostra a mensagem no diálogo e recarrega o pedido.
 - **Depois da saída** (`OUT_FOR_DELIVERY`, `DELIVERED`, `PICKED_UP`): "Adicionar itens" some e a barra explica "O pedido já saiu: para incluir itens, crie outro pedido."; a tela de inclusão mostra o mesmo aviso e trava o envio; "Editar dados" não oferece trocar entrega ↔ retirada. Se a saída acontecer com a tela aberta, o `409 OrderAlreadyDispatched` mostra "Este pedido já saiu (ou foi retirado). Para incluir itens, crie outro pedido." (item 19).
 - **Lista de itens:** composição, observação e adicionais.
-  - Ações por item (`orders.edit`, pedido não pago): alterar quantidade/observação (`PATCH …/items/{itemId}` [M]) e remover (`DELETE` [M]). Ambas passam pelo Confirma.
+  - **À la carte (árvore do 06 §6.9):** prato avulso com os adicionais de grupo e a observação; bebida com o sabor no nome; o **combo** com as **partes recuadas** embaixo (nome com tamanho/sabor, adicionais, observação e o acréscimo "+ R$ 1,00" quando houver). O valor da linha do combo é a árvore inteira, somando os `lineTotal` da API (R$ 73,00); o app não recalcula.
+  - Ações por item (`orders.edit`, pedido não pago): alterar quantidade/observação (`PATCH …/items/{itemId}` [M]) e remover (`DELETE` [M]). Ambas passam pelo Confirma. No à la carte (ADR-0058 item 10, `itemEditMode`): o **combo** muda só a quantidade (reprecifica a árvore) e "Remover combo" ("O combo sai inteiro: as partes e os adicionais delas também."); a **parte de prato** muda só a observação (sem quantidade e sem remover: a parte não sai sozinha); a **parte de bebida** não tem ação. **Trocar o sabor de uma parte = remover o combo e incluir de novo** (Q-322): o app não oferece edição de parte, e a folha do combo diz isso.
   - Pesagens (quilo), com remover.
 - **Bloco financeiro:** total, pago, saldo, lista de pagamentos (estornados riscados, com o motivo).
 - **Barra de ações** (cada botão some sem permissão e fica desabilitado offline ou em somente leitura):
-  - "Adicionar itens" → `orders/[id]/add-items` (bebidas, marmitas/PFs, adicionais em linha existente) → `POST …/items` [I][M], com várias inclusões numa só confirmação (RN-012.3);
+  - "Adicionar itens" → `orders/[id]/add-items` (bebidas, marmitas/PFs, adicionais em linha existente) → `POST …/items` [I][M], com várias inclusões numa só confirmação (RN-012.3). Na comanda à la carte (`AddALaCarteItems`): o mesmo cardápio e a mesma folha de montagem da abertura (pratos, bebidas, combos), mais **"Adicionais em pratos do pedido"**: chips dos pratos avulsos e das **partes de prato** dos combos que têm grupo de adicionais ("2× X-Burguer (X-Burguer + batata + refri)") → opções do grupo → `GROUP_ADDON {parentOrderItemId, addonOptionId, quantity, notes: null}`, com a prévia pela quantidade dos antepassados (Bacon numa parte de combo 2× = R$ 8,00). Não há parte nova num combo registrado. Rascunho `ADD_ITEMS` com "Continuar rascunho"; `409 VersionConflict` → `ConflictSheet` com o `current`, sem reenvio;
   - "Pesagem" (quilo) → `orders/[id]/weighings` → `POST …/weighings` [I][M];
   - "Receber" → `orders/[id]/pay`;
   - "Editar dados" → `orders/[id]/edit` (`PATCH /orders/{id}` [M]);
@@ -509,13 +526,14 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
   - selo de alerta, que expande as mudanças e permite dar ciência ali mesmo.
 - **Ação:** um botão de avanço ("Iniciar" → "Concluir"), e "Voltar status" no menu do card. Ambos passam pelo Confirma (RN-007.3) e chamam `PATCH /orders/{id}/status` [M].
 - **Pedidos do site e atendimento (ADR-0046):** o painel só traz pedidos aceitos, ordenados pelo aceite. No topo, a faixa "Novos do site (n)" **recolhida** (só a contagem; "Ver" abre os cards; a cozinha não tem `orders.accept` e vê "Aguardando o balcão aceitar."). O card leva o selo "Site" e o selo de atendimento; nos **concluídos** de entrega/retirada, o avanço do atendimento ("Saiu para entrega", "Entregue", "Retirado") aparece no próprio card, com Confirma; as voltas ficam no detalhe.
+- **À la carte (ADR-0058 itens 11 e 12):** o servidor já manda a lista normal dos pratos avulsos e das **partes de prato** com preparo, com o tamanho no nome ("Açaí 500 ml", "Batata frita P"), os adicionais de grupo e a observação, a quantidade da parte já multiplicada pelo combo; sem a linha do combo, sem bebidas e sem preço. O card só mostra o que vem (o rótulo sem `label` é "Comanda").
 - **Comportamento da aba:** `useKeepAwake`, som (§8.6) e fonte maior, ajustável em `menu/settings`.
 
 ### Aba Fechamento — `(tabs)/fechamento`
 
 - **Dados:** `['closing', 'summary', current]`.
 - **Layout** (as tabelas do épico RF-010 viram cards):
-  1. **Por modalidade:** Marmitas / PF / Quilo / **Total**, com Vendido, Recebido e Pendente;
+  1. **Por modalidade:** Marmitas / PF / Quilo / **À la carte** / **Total**, com Vendido, Recebido e Pendente. O servidor manda sempre as quatro linhas; o app mostra as dos módulos do estabelecimento (À la carte com `A_LA_CARTE` ou `DELIVERY`) e as que tiveram movimento (`visibleOrderTypeRows`, também no mensal). À la carte é **uma linha** para salão, entrega e retirada (Q-311). Abaixo do total, **"Vendido pelo site (já no total)"** (`siteSoldTotal`, ADR-0057 item 12; informativo, a cobrança está em aberto, Q-310); o fechamento antigo sem o campo não mostra a linha;
   2. **Por forma de pagamento:** Dinheiro / Pix / Cartão, com estornos;
   3. **Caixa físico:** saldo inicial, recebido em dinheiro, suprimentos, retiradas, estornos em dinheiro, **esperado**;
   4. "Recebido de dias anteriores", Cancelamentos e Estornos;
@@ -543,7 +561,7 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 
 - **Lista:** fechamentos por data (`GET /closing/history`), com o total vendido e a diferença de caixa (vermelho quando ≠ 0).
 - **Detalhe:** o mesmo layout do resumo, em modo leitura, com ajustes posteriores e o botão "Registrar ajuste" (`closing.adjust`, `POST /closing/{id}/adjustments` [I]).
-- **Mensal:** seletor de mês, com totais e a lista por dia.
+- **Mensal:** seletor de mês, com totais, a lista por dia e "Por modalidade" com as mesmas linhas do resumo (inclusive À la carte).
 
 ---
 
@@ -636,7 +654,7 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 | `OrderHasPayments` | "Estorne os pagamentos antes de cancelar." |
 | `PaymentExceedsBalance` | "O valor passa do saldo (R$ {balance})." + corrige o campo |
 | `TotalBelowPaidAmount` | "O total ficaria menor que o já pago." |
-| `ProductUnavailable` | "{produto} não está disponível hoje." + atualiza o cardápio |
+| `ProductUnavailable` | O `detail` do servidor ("Costela não está disponível no cardápio de hoje.", "X-Burguer + batata + refri está indisponível. Pausado: Batata frita P."); sem `detail`, "Um produto não está disponível hoje." Na criação e na inclusão de itens, recarrega `['fixedMenu']`, `['menus']` e `['products']` |
 | `KiloPriceNotConfigured` | "Configure o preço do quilo." + atalho |
 | `PermissionDenied` | "Você não tem permissão para isso. Peça a um gerente." |
 | `SubscriptionInactive` | Ativa o modo somente leitura e o banner |
@@ -676,7 +694,8 @@ Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
 | Pedidos do site (ADR-0046) | `webOrders.test.ts`: botões de atendimento por tipo/status/permissão, "Concluir e marcar", `isDispatched`, contagem regressiva, texto do conflito pelo `current`, validação da recusa, título da aba, avisos do fechamento, mensagens dos `errorCode`s novos. `webOrderFlow.test.tsx` (fetch simulado, exemplos literais do 06): faixa com prazo, itens, endereço e "telefone não verificado"; cozinha sem botões; aceite com `If-Match` + `Idempotency-Key` + tempo estimado; `409` "Já aceito por Bruno"; `WebOrderExpired`; rede caindo → pendência `UNKNOWN` e nenhum reenvio; recusa com motivo, "Outro" obrigatório e sem `Idempotency-Key`; "Concluir e marcar saída" com `completeProduction`; `ProductionNotCompleted`; selos "Site"/atendimento no `OrderCard`; "Pronto para retirar"; fechamento com os pedidos do site |
 | Página de pedidos (EP-002 F-210) | `storefront.test.tsx` (fetch simulado, exemplo do 06 §6.18): slug normalizado e formato; chave rápida com o objeto inteiro e só a chave trocada; corpo do formulário (E.164, UF, vazios → `null`, taxa intocada); textos do estado; QR com os padrões de posição; ativar sem endereço → `PUT` com `If-Match` e o motivo do `422` na tela; pausar → `isAcceptingOrders: false` e "Pausada"; `409` → aviso, formulário recarregado, sem reenvio; chaves travadas com edição pendente; modo leitura com compartilhar; `share.web.ts` (copiar sem `navigator.share`, fechar a folha não copia); `isVisibleOnPage` no `PATCH` da bebida; "Vai pagar…" e o aviso de `riskFlag`. Fatia 4: texto do `pageDelivery.missing` (e `MAPS_PROVIDER` à parte); raio e coordenadas digitados; link do Google Maps; texto de "Página ativa" depois de ativar (defeito corrigido); "Ver no mapa" e "Confirmar este ponto" (`location` confirmado no objeto inteiro, `If-Match`); correção à mão; salvar a regra da taxa sem `location` no corpo; taxa fixa sem o ponto; "Entrega · 4,5 km · taxa R$ 3,60" |
 | Cardápio fixo e preço de site (EP-003 fatia 2) | `fixedMenu.test.tsx` (fetch simulado, exemplo literal do `GET /fixed-menu` do 06 §6.5): corpo do açaí com tamanhos (site vazio → `null`, ordem pela lista); "Tamanho?" sem tamanho e sem preço não salvam; `PATCH` com e sem tamanho; ligar "vende no site" preenche com o balcão e desligar guarda; copiar sabores sem repetir; combo "Indisponível: Batata frita P pausado"; reordenar categorias; `keysForEntity` das cinco raízes; mensagem do `UsedInActiveCombos`. Telas: lista com categorias, adicionais, site e o combo indisponível; atendente só pausa (sem botões de cadastro), reativar a batata P → `PATCH …/availability` com o `If-Match` da raiz, cardápio recarregado e combo de volta; pausa de sabor e de combo; caixa só lê; criar prato com tamanhos e site preenchido; criar bebida com sabores e "copiar"; criar combo com prato de tamanho fixo e bebida; combo sem o tamanho do prato não envia; `409 UsedInActiveCombos` com os combos; `409 VersionConflict` remonta com o salvo e não reenvia; recarga no meio da edição mantém o `If-Match` da abertura; `422` no campo do tamanho; `403 ModuleNotEnabled`; tamanhos de marmita com o aviso da página, site preenchido e `If-Match` |
-| Comportamento e módulos (EP-003 fatia 1) | `establishment.test.tsx`: abas do restaurante, da lanchonete, dos dois e de quem só tem `production.view` ("Cozinha"/"Pedidos"); `me` antigo sem `modules`; sub-abas do Salão e o Salão da lanchonete "em breve", sem botão; última aba que deixou de existir; menu sem os cadastros do restaurante e com "Cardápio" na lanchonete; lista fixa de rótulos e a validação; cadastro sem tipo, sem rótulo, só os rótulos do tipo, troca de tipo limpa, corpo com `behavior` e `labels`; "Dados do estabelecimento" com o tipo só leitura, troca de rótulos com `If-Match`, sem rótulo não salva, leitura sem `settings.manage`, `409` sem reenvio; `TenantModulesChanged` → `GET /auth/me` → abas novas; entrada `TENANT` no feed; mensagem do `ModuleNotEnabled` e o aviso do cliente |
+| Pedido à la carte (EP-003 fatia 3) | `aLaCarte.test.tsx` (fetch simulado; ids do exemplo literal do `Order` à la carte do 06 §6.9, preços do `GET /fixed-menu` do 06 §6.5): Açaí 500 ml + Granola = R$ 20,00 e o `FIXED_DISH` do contrato; tamanho obrigatório e um só tamanho à venda já escolhido; bebida com acréscimo e sabor obrigatório; 2 combos com bacon e Coca Zero = R$ 73,00 com só as partes com escolha em `parts`; corpo `A_LA_CARTE`/`DINE_IN` e mesa ou comanda obrigatória; motivo do combo fora de venda; alvos do adicional depois (prato e parte de prato) com o multiplicador. Telas: abrir comanda montando prato (tamanho + adicional + observação), bebida (sabor, pausado desabilitado) e combo (adicional e observação no prato, sabor na bebida, quantidade) → `POST /orders` com `Idempotency-Key` e o corpo inteiro; prato, tamanho e combo indisponíveis desabilitados com o motivo; `422 ProductUnavailable` com o `detail`, cardápio recarregado e sem pendência; `403 ModuleNotEnabled`; detalhe com a árvore (partes, adicionais, acréscimo, R$ 73,00), parte de bebida sem ação; "Remover combo" → `DELETE` do `COMBO` com `If-Match`; parte de prato só com observação; `GROUP_ADDON` numa parte de combo (R$ 8,00) com `If-Match` + `Idempotency-Key`; `409` com o `current` e sem reenvio; card da cozinha do exemplo do 06; fechamento com "À la carte" e "Vendido pelo site", e o restaurante sem a linha zerada |
+| Comportamento e módulos (EP-003 fatia 1) | `establishment.test.tsx`: abas do restaurante, da lanchonete, dos dois e de quem só tem `production.view` ("Cozinha"/"Pedidos"); `me` antigo sem `modules`; sub-abas do Salão e o Salão da lanchonete com as comandas à la carte (`orderType=A_LA_CARTE`), sem sub-abas e com "Abrir comanda"; última aba que deixou de existir; menu sem os cadastros do restaurante e com "Cardápio" na lanchonete; lista fixa de rótulos e a validação; cadastro sem tipo, sem rótulo, só os rótulos do tipo, troca de tipo limpa, corpo com `behavior` e `labels`; "Dados do estabelecimento" com o tipo só leitura, troca de rótulos com `If-Match`, sem rótulo não salva, leitura sem `settings.manage`, `409` sem reenvio; `TenantModulesChanged` → `GET /auth/me` → abas novas; entrada `TENANT` no feed; mensagem do `ModuleNotEnabled` e o aviso do cliente |
 | Push dos pedidos do site (EP-002 F-209) | `push.test.tsx` (`expo-notifications` e `expo-constants` simulados, exemplo literal do 06 §6.3): leitura do `data` (só `kind` conhecido e `orderId` UUID); decisão do toque (sem sessão espera, outro tenant descarta, toque velho descarta); corpo do `PUT` e resposta sem token; sem repetir com os mesmos dados e de novo com outro funcionário (PIN) ou token novo; sem permissão não registra e apaga o registro anterior; sem `projectId` não pede token, avisa uma vez e a tela diz o motivo; chave "Avisar pedidos do site" no `PUT`; `receivesWebOrders = false`; registro ao entrar e na troca de token; `DELETE` no "Encerrar sessão"; explicação antes do pedido do sistema, "Agora não", negada com atalho para as configurações, sem `orders.accept` não aparece; primeiro plano suprimido e canal `web-orders` com o som; toque abre o pedido, outro tenant ignorado, app fechado sem sessão abre depois do login, a mesma notificação uma vez só; `notifications.web.ts` no-op. **O push de verdade não foi testado** (exige `eas init`, credenciais FCM/APNs e o build novo) |
 | E2E (Maestro, emulador Android de entrada) | 1) cadastro → abrir expediente → marmita com bebida → receber em dinheiro com troco → fechar com diferença e justificativa; 2) desligar a rede no meio do "Receber" → religar → app resolve sem duplicar; 3) PIN no aparelho compartilhado + inatividade |
 
@@ -709,6 +728,8 @@ Critério de pronto do mobile (`docs/02-padroes.md` §2.6): fluxos E2E 1 e 2 pas
 | Inatividade compartilhada | `sharedDeviceIdleSeconds` é editado em "Formas de pagamento" (mesmo `PATCH /tenant/settings`) | `menu/settings` é só local (8.10) |
 | Som | `assets/sounds/new-order.wav` (bipe curto gerado) via `expo-audio`; `assets/sounds/web_order.wav` (dois toques sintetizados, 1,5 s) para o pedido do site, no app e no canal de push | ADR-0036, ADR-0049 item 7 |
 | Push e build | `expo-notifications` entrou na fatia 5 do EP-002: muda o fingerprint (`runtimeVersion: fingerprint`), então **nenhum EAS Update chega aos builds antigos** e é preciso gerar e instalar um Dev Client/APK novo. O token só sai com `extra.eas.projectId` (`eas init`) e as credenciais FCM (Android) e APNs (iOS) no EAS | Sem isso o app funciona, só não registra o push (Configurações diz o motivo) |
+| Testes sem saída do Jest | O `QueryClient` dos testes usa `gcTime: 0` também em `mutations` | O padrão (5 min) deixava um timer vivo, e o `establishment.test.tsx` levava ~5 min a mais para o Jest sair |
+| Pedido à la carte | Lógica pura em `features/orders/aLaCarte.ts` (índice do cardápio, prévia, rótulos, corpo, alvos do adicional); `OrderItem.parts` e os campos do cardápio fixo são opcionais no tipo, porque um pedido guardado no cache por um app anterior vem sem eles | O cache persistido sobrevive à atualização do app (§8.3) |
 | Abrir expediente sem `DAILY_MENU` | A tela "Expediente aberto" não fala de cardápio (06: `materializedMenus` vem `[]` na lanchonete) | Evita "Nenhum modelo semanal para hoje" numa lanchonete |
 | E2E | Fluxos Maestro em `mobile/e2e/` escritos a partir de 8.13; **ainda não rodados** em emulador | Exigem homolog e Dev Client instalado |
 

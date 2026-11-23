@@ -1,10 +1,11 @@
 /** Resumo do fechamento em cards (08 §8.9: as tabelas do RF-010 viram cards). */
 import { View } from 'react-native';
 
-import type { ClosingSummary } from '@/api/types';
+import type { ClosingSummary, Me, OrderType, TenantModule } from '@/api/types';
+import { hasAnyModule } from '@/features/tenant/establishment';
 import { Card, Divider, KeyValue, Row, Text, space, useColors } from '@/components/ui';
 import { formatDateTime } from '@/lib/dates';
-import { formatBRL, toCents } from '@/lib/money';
+import { formatBRL, toCents, type MoneyString } from '@/lib/money';
 import { orderTypeNames, paymentMethodNames } from '@/lib/strings';
 import { useSession } from '@/stores/session';
 
@@ -51,9 +52,27 @@ function WebOrdersCard({ summary: s }: { summary: ClosingSummary }) {
   );
 }
 
+/** Módulos que fazem cada modalidade existir (ADR-0054 item 12, ADR-0058 item 1: à la carte é salão ou entrega). */
+const orderTypeModules: Record<OrderType, TenantModule[]> = {
+  MARMITA: ['MARMITA'],
+  PF: ['PF'],
+  KILO: ['KILO'],
+  A_LA_CARTE: ['A_LA_CARTE', 'DELIVERY'],
+};
+
+/**
+ * Linhas "Por modalidade" do resumo, do fechamento e do mensal (06 §6.11): o servidor manda sempre as quatro; o app
+ * mostra as dos módulos do estabelecimento e as que tiveram movimento (um fechamento antigo de outro comportamento).
+ */
+export function visibleOrderTypeRows<T extends { orderType: OrderType; sold: MoneyString; received: MoneyString; count?: number }>(rows: readonly T[], me: Me | null): T[] {
+  return rows.filter((r) => hasAnyModule(me, orderTypeModules[r.orderType] ?? []) || (r.count ?? 0) > 0 || toCents(r.sold) !== 0 || toCents(r.received) !== 0);
+}
+
 export function ClosingSummaryView({ summary: s }: { summary: ClosingSummary }) {
   const c = useColors();
   const timeZone = useSession((st) => st.me?.tenant.timeZone ?? 'America/Sao_Paulo');
+  const me = useSession((st) => st.me);
+  const rows = visibleOrderTypeRows(s.byOrderType, me);
   const total = s.byOrderType.reduce(
     (acc, t) => ({ count: acc.count + t.count, sold: acc.sold + toCents(t.sold), received: acc.received + toCents(t.received), pending: acc.pending + toCents(t.pending) }),
     { count: 0, sold: 0, received: 0, pending: 0 },
@@ -74,7 +93,7 @@ export function ClosingSummaryView({ summary: s }: { summary: ClosingSummary }) 
             </Text>
           ))}
         </Row>
-        {s.byOrderType.map((t) => (
+        {rows.map((t) => (
           <Row key={t.orderType} style={{ justifyContent: 'space-between' }}>
             <Text style={{ flex: 2 }}>
               {orderTypeNames[t.orderType]} ({t.count})
@@ -94,6 +113,8 @@ export function ClosingSummaryView({ summary: s }: { summary: ClosingSummary }) 
         <Text variant="small" muted>
           Inclui {formatBRL(s.deliveryFeesTotal)} de taxas de entrega.
         </Text>
+        {/* ADR-0057 item 12: informativo, já contido no vendido (a cobrança da plataforma está em aberto, Q-310). */}
+        {s.siteSoldTotal !== undefined ? <KeyValue label="Vendido pelo site (já no total)" value={formatBRL(s.siteSoldTotal)} /> : null}
       </Card>
 
       <Card>

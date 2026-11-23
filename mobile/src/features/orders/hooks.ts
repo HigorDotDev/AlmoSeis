@@ -2,6 +2,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 
 import { critical, versioned } from '@/api/critical';
+import type { ApiError } from '@/api/errors';
 import { ordersApi } from '@/api/endpoints/orders';
 import { qk } from '@/api/queryKeys';
 import type {
@@ -121,10 +122,20 @@ export function applyOrderBalance(client: QueryClient, balance: OrderBalance): v
 }
 
 export function describeOrder(body: CreateOrderBody, previewCents: number | null): string {
-  const who = body.customerName ?? (body.tableLabel ? `Mesa ${body.tableLabel}` : null);
-  return [`Pedido de ${orderTypeNames[body.orderType].toLowerCase()}`, who, previewCents !== null ? formatBRL(previewCents) : null]
-    .filter(Boolean)
-    .join(' — ');
+  const who = body.customerName ?? (body.tableLabel ? `Mesa ${body.tableLabel}` : body.tabNumber ? `Comanda ${body.tabNumber}` : null);
+  const what = body.orderType === 'A_LA_CARTE' ? 'Comanda à la carte' : `Pedido de ${orderTypeNames[body.orderType].toLowerCase()}`;
+  return [what, who, previewCents !== null ? formatBRL(previewCents) : null].filter(Boolean).join(' — ');
+}
+
+/**
+ * `422 ProductUnavailable` (06 §6.1): algo acabou entre a leitura do cardápio e o envio. A mensagem é o `detail` do
+ * servidor; o cardápio (fixo e do dia) e o catálogo recarregam para a tela já mostrar o item desabilitado.
+ */
+function refreshMenusOnUnavailable(client: QueryClient, error: ApiError): void {
+  if (!error.is('ProductUnavailable')) return;
+  void client.invalidateQueries({ queryKey: ['fixedMenu'] });
+  void client.invalidateQueries({ queryKey: ['menus'] });
+  void client.invalidateQueries({ queryKey: ['products'] });
 }
 
 export function useCreateOrder(options: { draftId: string | null; previewCents: number | null; onCreated: (order: Order) => void }) {
@@ -136,6 +147,9 @@ export function useCreateOrder(options: { draftId: string | null; previewCents: 
     onConfirmed: (order) => {
       setOrderInCache(client, order);
       options.onCreated(order);
+    },
+    onRejected: (error) => {
+      refreshMenusOnUnavailable(client, error);
     },
     successMessage: (order) => `Pedido #${order.orderNumber} registrado`,
   });
@@ -153,6 +167,9 @@ export function useAddItems(order: Order | undefined, draftId: string | null, on
     },
     onConflict: (current) => {
       if (current) client.setQueryData(qk.order(order!.id), current as Order);
+    },
+    onRejected: (error) => {
+      refreshMenusOnUnavailable(client, error);
     },
     successMessage: (o) => `Itens incluídos no pedido #${o.orderNumber}`,
   });

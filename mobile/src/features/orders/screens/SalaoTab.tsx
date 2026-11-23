@@ -8,7 +8,6 @@ import type { OrderSummary } from '@/api/types';
 import { EmptyState, ErrorState, Fab, SegmentedControl, Skeleton, space, useColors, WEB_CONTENT_MAX } from '@/components/ui';
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { useCurrentMenu } from '@/features/menu/hooks';
-import { ALaCarteComingSoon } from '@/features/tenant/ComingSoon';
 import { salaoKinds, type SalaoKind } from '@/features/tenant/establishment';
 import { useCanWrite, useSession } from '@/stores/session';
 
@@ -19,7 +18,8 @@ const kindLabels: Record<SalaoKind, string> = { PF: 'PF', KILO: 'Quilo', A_LA_CA
 
 /**
  * 08 §8.9 Aba Salão: as sub-abas seguem os módulos (ADR-0055 itens 2 a 4). Restaurante: PF e Quilo. Lanchonete:
- * só as comandas, sem sub-abas. Os dois: PF, Quilo e Comandas. As comandas à la carte chegam na fatia 3.
+ * só as comandas à la carte, sem sub-abas. Os dois: PF, Quilo e Comandas. Cada sub-aba lista só a sua modalidade:
+ * uma comanda nunca mistura PF ou quilo com o cardápio fixo (ADR-0058 item 3).
  */
 export default function SalaoTab() {
   const me = useSession((s) => s.me);
@@ -27,28 +27,20 @@ export default function SalaoTab() {
   const [picked, setPicked] = useState<SalaoKind | null>(null);
   const type = picked && kinds.includes(picked) ? picked : (kinds[0] ?? 'PF');
   const segments = kinds.length > 1 ? kinds.map((k) => ({ value: k, label: kindLabels[k] })) : null;
-  if (type === 'A_LA_CARTE') return <ALaCarteView segments={segments} onChange={setPicked} />;
   return <SalaoOrders type={type} segments={segments} onChange={setPicked} />;
 }
 
 type Segments = { value: SalaoKind; label: string }[] | null;
 
-function ALaCarteView({ segments, onChange }: { segments: Segments; onChange: (k: SalaoKind) => void }) {
-  const c = useColors();
-  return (
-    <View style={{ flex: 1, backgroundColor: c.bg }}>
-      {segments ? (
-        <View style={[{ padding: space.lg, paddingBottom: 0 }, WEB_CONTENT_MAX]}>
-          <SegmentedControl value="A_LA_CARTE" onChange={onChange} options={segments} />
-        </View>
-      ) : null}
-      <ALaCarteComingSoon />
-    </View>
-  );
-}
+/** Um botão só: a ação segue o filtro (docs/10-ux.md D6). */
+const FABS: Record<SalaoKind, { label: string; icon: 'restaurant-outline' | 'scale-outline' | 'receipt-outline'; href: string }> = {
+  PF: { label: 'Nova mesa', icon: 'restaurant-outline', href: '/orders/new/pf' },
+  KILO: { label: 'Nova comanda', icon: 'scale-outline', href: '/orders/new/kilo' },
+  A_LA_CARTE: { label: 'Abrir comanda', icon: 'receipt-outline', href: '/orders/new/a-la-carte' },
+};
 
-/** Comandas de PF e de quilo do expediente, as não pagas primeiro. */
-function SalaoOrders({ type, segments, onChange }: { type: 'PF' | 'KILO'; segments: Segments; onChange: (k: SalaoKind) => void }) {
+/** Comandas da modalidade no expediente, as não pagas primeiro. */
+function SalaoOrders({ type, segments, onChange }: { type: SalaoKind; segments: Segments; onChange: (k: SalaoKind) => void }) {
   const c = useColors();
   const day = useCurrentBusinessDay();
   const open = !!day.data;
@@ -58,18 +50,22 @@ function SalaoOrders({ type, segments, onChange }: { type: 'PF' | 'KILO'; segmen
 
   const items = useMemo(() => {
     const all = orders.data?.pages.flatMap((p) => p.items) ?? [];
-    return [...all.filter((o) => !o.isPaid), ...all.filter((o) => o.isPaid)];
-  }, [orders.data]);
+    // À la carte de entrega/retirada é da aba Delivery (ADR-0055 item 3); o Salão mostra só as comandas.
+    const own = type === 'A_LA_CARTE' ? all.filter((o) => o.fulfillmentType === 'DINE_IN') : all;
+    return [...own.filter((o) => !o.isPaid), ...own.filter((o) => o.isPaid)];
+  }, [orders.data, type]);
 
   if (day.isLoading) return <View style={{ padding: space.lg }}><Skeleton /></View>;
   if (!open) {
     return (
-      <View style={{ flex: 1, padding: space.lg, backgroundColor: c.bg }}>
+      <View style={{ flex: 1, padding: space.lg, backgroundColor: c.bg, gap: space.md }}>
+        {segments ? <SegmentedControl value={type} onChange={onChange} options={segments} /> : null}
         <NoBusinessDayCard />
       </View>
     );
   }
 
+  const fab = FABS[type];
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       <View style={[{ flex: 1 }, WEB_CONTENT_MAX]}>
@@ -92,14 +88,7 @@ function SalaoOrders({ type, segments, onChange }: { type: 'PF' | 'KILO'; segmen
           renderItem={({ item }) => <OrderCard order={item} />}
         />
       </View>
-      {/* Um botão só: a ação segue o filtro (docs/10-ux.md D6). */}
-      {canCreate ? (
-        type === 'PF' ? (
-          <Fab label="Nova mesa" icon="restaurant-outline" onPress={() => router.push('/orders/new/pf')} />
-        ) : (
-          <Fab label="Nova comanda" icon="scale-outline" onPress={() => router.push('/orders/new/kilo')} />
-        )
-      ) : null}
+      {canCreate ? <Fab label={fab.label} icon={fab.icon} onPress={() => router.push(fab.href)} /> : null}
     </View>
   );
 }

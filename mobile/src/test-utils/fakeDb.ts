@@ -29,6 +29,10 @@ export const draftsRepo = {
   save: async (d: Omit<Draft, 'updatedAt'>) => void memory.drafts.set(d.id, { ...d, updatedAt: new Date().toISOString() }),
   remove: async (id: string) => void memory.drafts.delete(id),
   get: async (id: string) => memory.drafts.get(id) ?? null,
+  latest: async (tenantId: string, kind: Draft['kind'], targetId: string | null) =>
+    [...memory.drafts.values()]
+      .filter((d) => d.tenantId === tenantId && d.kind === kind && d.targetId === targetId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null,
 };
 
 export const metaRepo = {

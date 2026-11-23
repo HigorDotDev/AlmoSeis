@@ -26,6 +26,7 @@ import {
   useColors,
 } from '@/components/ui';
 import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
+import { itemWithChildrenCents } from '@/features/orders/aLaCarte';
 import { cashSuggestions } from '@/features/orders/compose';
 import { summarizeOrder, useOrder } from '@/features/orders/hooks';
 import { useSettings } from '@/features/session/hooks';
@@ -73,7 +74,7 @@ function PayForm({ order: o }: { order: Order }) {
   const parcels = useMemo(() => {
     if (split === 'EQUAL') return splitEvenly(balanceCents, people);
     if (split === 'ITEMS') {
-      const sum = o.items.filter((i) => selectedItems.includes(i.id)).reduce((s, i) => s + toCents(i.lineTotal) + i.addons.reduce((a, x) => a + toCents(x.lineTotal), 0), 0);
+      const sum = o.items.filter((i) => selectedItems.includes(i.id)).reduce((s, i) => s + itemWithChildrenCents(i), 0);
       return sum > 0 ? [Math.min(sum, balanceCents)] : [];
     }
     return [];
@@ -179,7 +180,7 @@ function PayForm({ order: o }: { order: Order }) {
                 {o.items.map((i) => (
                   <Chip
                     key={i.id}
-                    label={`${i.quantity}× ${i.name} · ${formatBRL(i.lineTotal)}`}
+                    label={`${i.quantity}× ${i.name} · ${formatBRL(i.itemKind === 'COMBO' ? itemWithChildrenCents(i) : toCents(i.lineTotal))}`}
                     selected={selectedItems.includes(i.id)}
                     onPress={() => { setAmount(null); setSelectedItems((s) => (s.includes(i.id) ? s.filter((x) => x !== i.id) : [...s, i.id])); }}
                   />

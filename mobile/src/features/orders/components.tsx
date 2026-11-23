@@ -23,6 +23,7 @@ import { useCurrentBusinessDay } from '@/features/businessDay/hooks';
 import { useMarmitaSizes, useProducts } from '@/features/catalog/hooks';
 import { useCloneMenu } from '@/features/menu/hooks';
 import { SetupChecklist, setupComplete, setupState } from '@/features/onboarding/SetupChecklist';
+import { hasModule } from '@/features/tenant/establishment';
 import { formatBRL } from '@/lib/money';
 import { fulfillmentNames } from '@/lib/strings';
 import { formatTime } from '@/lib/dates';
@@ -83,7 +84,9 @@ export function NoBusinessDayCard() {
   const canCatalog = usePermission('catalog.manage');
   const sizes = useMarmitaSizes();
   const products = useProducts();
-  if (canCatalog && sizes.data && products.data) {
+  // O "Prepare seu restaurante" fala de tamanhos de marmita e pratos do dia: só faz sentido com o módulo MARMITA.
+  const restaurant = useSession((s) => hasModule(s.me, 'MARMITA'));
+  if (canCatalog && restaurant && sizes.data && products.data) {
     const state = setupState(sizes.data, products.data);
     if (!setupComplete(state)) return <SetupChecklist state={state} />;
   }

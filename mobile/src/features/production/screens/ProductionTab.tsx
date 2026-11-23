@@ -42,6 +42,13 @@ const ADVANCE_LABEL: Record<ProductionStatus, string> = { OPEN: 'Iniciar', IN_PR
  * 08 §8.9 Aba Pedidos (produção): Abertos → Em produção → Concluídos, do mais antigo ao mais novo (pelo aceite).
  * No topo, a faixa "Novos do site" recolhida (ADR-0046 item 21): a cozinha vê a contagem; só o balcão aceita.
  */
+/**
+ * Sem `label` (06 §6.9: mesa/comanda ou cliente), o tipo. À la carte (ADR-0058 item 11, RN-311.2): o servidor já
+ * manda a lista normal dos pratos e das partes de prato com preparo, com tamanho no nome, adicionais e observação;
+ * sem a linha do combo e sem bebidas. O card só mostra o que vem.
+ */
+const productionFallbackLabel: Record<ProductionOrder['orderType'], string> = { MARMITA: 'Marmita', PF: 'Salão', KILO: 'Salão', A_LA_CARTE: 'Comanda' };
+
 export default function ProductionTab() {
   useKeepAwake();
   const c = useColors();
@@ -121,7 +128,7 @@ export default function ProductionTab() {
   );
 }
 
-function ProductionCard({ order: o, status, flash, onFlashed }: { order: ProductionOrder; status: ProductionStatus; flash: boolean; onFlashed: () => void }) {
+export function ProductionCard({ order: o, status, flash, onFlashed }: { order: ProductionOrder; status: ProductionStatus; flash: boolean; onFlashed: () => void }) {
   const c = useColors();
   const scale = usePreferences((s) => s.kitchenFontScale);
   const canUpdate = useCanWrite('production.update');
@@ -159,7 +166,7 @@ function ProductionCard({ order: o, status, flash, onFlashed }: { order: Product
           </Text>
         </Row>
         <Text style={[big, { fontWeight: '700' }]} maxFontSizeMultiplier={1.3}>
-          {o.label ?? (o.orderType === 'PF' ? 'Salão' : 'Marmita')}
+          {o.label ?? productionFallbackLabel[o.orderType]}
           {o.fulfillmentType === 'DELIVERY' ? ' · Entrega' : o.fulfillmentType === 'PICKUP' ? ' · Retirada' : ''}
         </Text>
         {o.origin === 'WEB' || (o.fulfillmentStatus && o.fulfillmentStatus !== 'PENDING') || (status === 'COMPLETED' && o.fulfillmentType === 'PICKUP') ? (

@@ -54,6 +54,7 @@ import { AddonPicker, BeverageGrid } from '../formParts';
 import { summarizeOrder, useAcknowledgeAlerts, useAddItems, useAddWeighings, useOrder, useOrderAlerts, useOrderHistory, useUpdateOrder } from '../hooks';
 import { isDispatched } from '../fulfillment';
 import { MarmitaBuilderSheet } from '../MarmitaBuilderSheet';
+import { AddALaCarteItems } from './AddALaCarteItems';
 import { newKey } from '@/lib/ids';
 
 function useLoadedOrder() {
@@ -78,6 +79,8 @@ interface AddItemsForm {
 export function AddItemsScreen() {
   const order = useLoadedOrder();
   if (!order.data) return <Loading query={order} />;
+  // Comanda à la carte: só o cardápio fixo (ADR-0058 item 3).
+  if (order.data.orderType === 'A_LA_CARTE') return <AddALaCarteItems order={order.data} />;
   return <AddItems order={order.data} />;
 }
 

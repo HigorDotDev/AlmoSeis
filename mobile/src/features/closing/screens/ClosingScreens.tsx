@@ -30,9 +30,9 @@ import { formatBusinessDate, formatMonth } from '@/lib/dates';
 import { formatBRL, fromCents, toCents } from '@/lib/money';
 import { orderTypeNames, paymentMethodNames } from '@/lib/strings';
 import { useIsOnline } from '@/stores/connectivity';
-import { useCanWrite } from '@/stores/session';
+import { useCanWrite, useSession } from '@/stores/session';
 
-import { autoRejectWarning, ClosingSummaryView, differenceText } from '../components';
+import { autoRejectWarning, ClosingSummaryView, differenceText, visibleOrderTypeRows } from '../components';
 import { useAddAdjustment, useAddCashMovement, useCashMovements, useClosing, useClosingHistory, useClosingSummary, useFinalizeClosing, useMonthlyClosing } from '../hooks';
 
 export function CashMovementScreen() {
@@ -316,6 +316,7 @@ function shiftMonth(month: string, delta: number): string {
 export function MonthlyScreen() {
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const monthly = useMonthlyClosing(month);
+  const me = useSession((st) => st.me);
   const m = monthly.data;
   const days = useMemo(() => m?.days ?? [], [m]);
   return (
@@ -337,7 +338,7 @@ export function MonthlyScreen() {
             <KeyValue label="Diferenças de caixa" value={formatBRL(m.cashDifferenceTotal)} />
           </Card>
           <Card>
-            {m.byOrderType.map((t) => (
+            {visibleOrderTypeRows(m.byOrderType, me).map((t) => (
               <KeyValue key={t.orderType} label={orderTypeNames[t.orderType]} value={`${formatBRL(t.sold)} · rec. ${formatBRL(t.received)}`} />
             ))}
             {m.byPaymentMethod.map((p) => (

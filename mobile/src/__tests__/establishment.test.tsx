@@ -103,7 +103,8 @@ afterEach(() => {
 });
 
 function newClient() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
+  // `gcTime: 0` também nas mutações: o padrão (5 min) deixa um timer vivo, e o Jest esperava ~5 min para sair.
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false, gcTime: 0 } } });
   clients.push(client);
   return client;
 }
@@ -169,13 +170,18 @@ describe('abas pelos módulos e permissões (ADR-0055)', () => {
     expect(salaoKinds(makeMe([...RESTAURANT, ...SNACK_BAR]))).toEqual(['PF', 'KILO', 'A_LA_CARTE']);
   });
 
-  it('Salão da lanchonete: estado "em breve", sem sub-abas nem botão de nova comanda', async () => {
+  it('Salão da lanchonete (fatia 3): as comandas à la carte, sem sub-abas, com "Abrir comanda"', async () => {
     useSession.setState({ status: 'signedIn', me: makeMe(SNACK_BAR) });
+    routes['GET /business-days/current'] = () => json(200, { id: 'bd1', version: 1, businessDate: '2026-11-22', status: 'OPEN' });
+    routes['GET /orders'] = () => json(200, { items: [], nextCursor: null });
     await renderWith(<SalaoTab />);
-    expect(screen.getByText('Comandas · Disponível em breve')).toBeTruthy();
+    expect(await screen.findByText('Abrir comanda')).toBeTruthy();
+    expect(screen.queryByText(/Disponível em breve/)).toBeNull();
     expect(screen.queryByText('PF')).toBeNull();
     expect(screen.queryByText('Nova comanda')).toBeNull();
     expect(screen.queryByText('Nova mesa')).toBeNull();
+    // Só a modalidade da sub-aba: nunca mistura PF ou quilo com o cardápio fixo (ADR-0058 item 3).
+    await waitFor(() => expect(requests.some((r) => r.path.startsWith('/orders?') && r.path.includes('orderType=A_LA_CARTE'))).toBe(true));
   });
 });
 

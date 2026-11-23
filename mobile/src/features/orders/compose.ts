@@ -284,7 +284,7 @@ export function repeatOrder(order: Order, menu: Menu | null, sizes: MarmitaSize[
       continue;
     }
     const addons = item.addons.flatMap((a) => {
-      if (usable.get(a.productId)?.kind === 'ADDON') return [{ productId: a.productId, quantity: a.quantity }];
+      if (a.productId && usable.get(a.productId)?.kind === 'ADDON') return [{ productId: a.productId, quantity: a.quantity }];
       dropped.add(a.name);
       return [];
     });

@@ -11,7 +11,7 @@ jest.mock('@/api/endpoints/auth', () => ({ authApi: { changePassword: jest.fn() 
 const changePassword = authApi.changePassword as jest.Mock;
 
 async function renderSection() {
-  const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+  const client = new QueryClient({ defaultOptions: { mutations: { retry: false, gcTime: 0 } } });
   await render(
     <QueryClientProvider client={client}>
       <ChangePasswordSection />

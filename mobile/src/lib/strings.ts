@@ -31,7 +31,7 @@ export const moduleNames: Record<TenantModule, string> = {
   FIXED_MENU: 'Cardápio fixo',
 };
 
-export const orderTypeNames: Record<OrderType, string> = { MARMITA: 'Marmita', PF: 'PF', KILO: 'Quilo' };
+export const orderTypeNames: Record<OrderType, string> = { MARMITA: 'Marmita', PF: 'PF', KILO: 'Quilo', A_LA_CARTE: 'À la carte' };
 
 export const fulfillmentNames: Record<FulfillmentType, string> = { DELIVERY: 'Entrega', PICKUP: 'Retirada', DINE_IN: 'No salão' };
 

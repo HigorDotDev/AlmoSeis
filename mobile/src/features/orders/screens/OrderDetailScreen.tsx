@@ -32,13 +32,14 @@ import {
   WEB_CONTENT_MAX,
 } from '@/components/ui';
 import { formatBusinessDate, formatTime } from '@/lib/dates';
-import { formatBRL } from '@/lib/money';
+import { formatBRL, toCents } from '@/lib/money';
 import { fulfillmentNames, fulfillmentStatusNames, orderTypeNames, paymentMethodNames, READY_FOR_PICKUP } from '@/lib/strings';
 import { gramsToKgLabel } from '@/lib/weight';
 import { useIsOnline } from '@/stores/connectivity';
 import { useBlockedBy } from '@/stores/pendingOps';
 import { useCanWrite, useSession } from '@/stores/session';
 
+import { itemWithChildrenCents } from '../aLaCarte';
 import { orderLabel } from '../components';
 import { isDispatched } from '../fulfillment';
 import { summarizeOrder, useCancelOrder, useOrder, useRemoveItem, useRemoveWeighing, useUpdateItem } from '../hooks';
@@ -174,7 +175,7 @@ function ItemsBlock({ order: o }: { order: Order }) {
   const online = useIsOnline();
   const editable = canEdit && online && !o.isPaid && o.cancellationStatus === 'ACTIVE' && o.acceptanceStatus === 'ACCEPTED';
   const [editing, setEditing] = useState<OrderItem | null>(null);
-  const [removing, setRemoving] = useState<{ kind: 'item' | 'weighing'; id: string; label: string } | null>(null);
+  const [removing, setRemoving] = useState<{ kind: 'item' | 'weighing'; id: string; label: string; combo?: boolean } | null>(null);
   const [conflict, setConflict] = useState<Order | null>(null);
   const update = useUpdateItem(o.id);
   const removeItem = useRemoveItem(o.id);
@@ -195,16 +196,15 @@ function ItemsBlock({ order: o }: { order: Order }) {
                 {item.quantity}× {item.name}
               </Text>
               {item.composition ? <Text variant="small" muted>{item.composition}</Text> : null}
-              {item.addons.map((a) => (
-                <Text key={a.id} variant="small" muted>
-                  + {a.quantity}× {a.name} ({formatBRL(a.lineTotal)})
-                </Text>
-              ))}
+              <AddonLines addons={item.addons} />
               {item.notes ? <Text variant="small">Obs.: {item.notes}</Text> : null}
             </View>
-            <Text>{formatBRL(item.lineTotal)}</Text>
-            {editable ? <IconButton icon="create-outline" label={`Alterar ${item.name}`} onPress={() => setEditing(item)} /> : null}
+            <Text>{formatBRL(itemTreeTotal(item))}</Text>
+            {editable && itemEditMode(item) ? <IconButton icon="create-outline" label={`Alterar ${item.name}`} onPress={() => setEditing(item)} /> : null}
           </Row>
+          {(item.parts ?? []).map((part) => (
+            <ComboPartRow key={part.id} part={part} combo={item} editable={editable && itemEditMode(part) !== null} onEdit={() => setEditing(part)} />
+          ))}
           <Divider />
         </View>
       ))}
@@ -223,6 +223,7 @@ function ItemsBlock({ order: o }: { order: Order }) {
         {editing ? (
           <EditItem
             item={editing}
+            mode={itemEditMode(editing) ?? 'NOTES_ONLY'}
             busy={update.busy}
             error={update.error}
             onSave={async (body) => {
@@ -231,7 +232,7 @@ function ItemsBlock({ order: o }: { order: Order }) {
               if (outcome.kind === 'confirmed') setEditing(null);
             }}
             onRemove={() => {
-              setRemoving({ kind: 'item', id: editing.id, label: `${editing.quantity}× ${editing.name}` });
+              setRemoving({ kind: 'item', id: editing.id, label: `${editing.quantity}× ${editing.name}`, combo: editing.itemKind === 'COMBO' });
               setEditing(null);
             }}
           />
@@ -240,8 +241,9 @@ function ItemsBlock({ order: o }: { order: Order }) {
 
       <ConfirmDialog
         visible={removing !== null}
-        title={removing?.kind === 'item' ? 'Remover item?' : 'Remover pesagem?'}
-        lines={removing ? [{ label: removing.kind === 'item' ? 'Item' : 'Pesagem', value: removing.label }] : []}
+        title={removing?.combo ? 'Remover combo?' : removing?.kind === 'item' ? 'Remover item?' : 'Remover pesagem?'}
+        description={removing?.combo ? 'O combo sai inteiro: as partes e os adicionais delas também.' : undefined}
+        lines={removing ? [{ label: removing.kind === 'item' ? (removing.combo ? 'Combo' : 'Item') : 'Pesagem', value: removing.label }] : []}
         warning={removeItem.error ?? removeWeighing.error}
         confirmLabel="Remover"
         danger
@@ -261,20 +263,102 @@ function ItemsBlock({ order: o }: { order: Order }) {
   );
 }
 
-function EditItem({ item, busy, error, onSave, onRemove }: { item: OrderItem; busy: boolean; error: string | null; onSave: (b: { quantity?: number; notes?: string | null }) => void; onRemove: () => void }) {
+/**
+ * O que dá para alterar em cada item (06 §6.9 `PATCH …/items/{itemId}`, ADR-0058 item 10):
+ * - `FULL`: quantidade, observação e remover (marmita, PF, bebida, prato avulso);
+ * - `COMBO`: só a quantidade (reprecifica a árvore) e remover o combo inteiro; o `COMBO` não tem observação;
+ * - `NOTES_ONLY`: parte **de prato** do combo, só a observação (a quantidade é a do componente; não sai sozinha).
+ * Parte de bebida: nada (`null`). Trocar o sabor é remover e incluir o combo de novo (Q-322).
+ */
+export type ItemEditMode = 'FULL' | 'COMBO' | 'NOTES_ONLY';
+
+export function itemEditMode(item: OrderItem): ItemEditMode | null {
+  if (item.itemKind === 'COMBO') return 'COMBO';
+  if (item.itemKind === 'COMBO_PART') return item.dishId ? 'NOTES_ONLY' : null;
+  return 'FULL';
+}
+
+/**
+ * Valor mostrado na linha (valores da API, nunca recalculados): o `lineTotal` do item; no combo, a árvore inteira
+ * (o combo, as partes e os adicionais delas: 2× "X-Burguer + batata + refri" = R$ 73,00, 06 §6.9). Os adicionais
+ * do prato avulso e da marmita aparecem cada um com o seu valor, como antes.
+ */
+export function itemTreeTotal(item: OrderItem): number {
+  return item.itemKind === 'COMBO' ? itemWithChildrenCents(item) : toCents(item.lineTotal);
+}
+
+function AddonLines({ addons }: { addons: OrderItem['addons'] }) {
+  return (
+    <>
+      {addons.map((a) => (
+        <Text key={a.id} variant="small" muted>
+          + {a.quantity}× {a.name} ({formatBRL(a.lineTotal)})
+        </Text>
+      ))}
+    </>
+  );
+}
+
+/** Parte do combo, recuada sob o combo: nome (com tamanho/sabor), adicionais, observação e o acréscimo, se houver. */
+function ComboPartRow({ part, combo, editable, onEdit }: { part: OrderItem; combo: OrderItem; editable: boolean; onEdit: () => void }) {
+  const c = useColors();
+  return (
+    <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start', paddingLeft: space.md, borderLeftWidth: 2, borderLeftColor: c.border, marginLeft: space.xs }}>
+      <View style={{ flex: 1 }} accessibilityLabel={`Parte do combo ${combo.name}: ${part.quantity}× ${part.name}`}>
+        <Text variant="small" style={{ fontWeight: '600' }}>
+          {part.quantity}× {part.name}
+        </Text>
+        <AddonLines addons={part.addons} />
+        {part.notes ? <Text variant="small">Obs.: {part.notes}</Text> : null}
+      </View>
+      {toCents(part.lineTotal) > 0 ? <Text variant="small">+ {formatBRL(part.lineTotal)}</Text> : null}
+      {editable ? <IconButton icon="create-outline" label={`Observação de ${part.name}`} onPress={onEdit} /> : null}
+    </Row>
+  );
+}
+
+function EditItem({
+  item,
+  mode,
+  busy,
+  error,
+  onSave,
+  onRemove,
+}: {
+  item: OrderItem;
+  mode: ItemEditMode;
+  busy: boolean;
+  error: string | null;
+  onSave: (b: { quantity?: number; notes?: string | null }) => void;
+  onRemove: () => void;
+}) {
   const [quantity, setQuantity] = useState(item.quantity);
   const [notes, setNotes] = useState(item.notes ?? '');
   const [confirm, setConfirm] = useState(false);
+  const withQuantity = mode !== 'NOTES_ONLY';
+  const withNotes = mode !== 'COMBO';
   return (
     <>
-      <Row style={{ justifyContent: 'space-between' }}>
-        <Text>Quantidade</Text>
-        <QuantityStepper label="Quantidade" min={1} value={quantity} onChange={setQuantity} />
-      </Row>
-      <TextField label="Observação" value={notes} onChangeText={setNotes} />
+      {withQuantity ? (
+        <Row style={{ justifyContent: 'space-between' }}>
+          <Text>Quantidade</Text>
+          <QuantityStepper label="Quantidade" min={1} value={quantity} onChange={setQuantity} />
+        </Row>
+      ) : null}
+      {withNotes ? <TextField label="Observação" value={notes} onChangeText={setNotes} /> : null}
+      {mode === 'COMBO' ? (
+        <Text variant="small" muted>
+          A quantidade do combo vale para as partes e os adicionais delas. Observação e adicionais ficam em cada prato do combo. Para trocar o sabor de uma bebida, remova o combo e inclua de novo.
+        </Text>
+      ) : null}
+      {mode === 'NOTES_ONLY' ? (
+        <Text variant="small" muted>
+          Parte de combo: a quantidade é a do combo, e ela não sai sozinha (remova o combo inteiro).
+        </Text>
+      ) : null}
       {error ? <Banner tone="danger" text={error} /> : null}
       <Button title="Salvar alteração" onPress={() => setConfirm(true)} disabled={quantity === item.quantity && notes === (item.notes ?? '')} />
-      <Button title="Remover item" variant="danger" onPress={onRemove} />
+      {mode !== 'NOTES_ONLY' ? <Button title={mode === 'COMBO' ? 'Remover combo' : 'Remover item'} variant="danger" onPress={onRemove} /> : null}
       <ConfirmDialog
         visible={confirm}
         title="Alterar item?"

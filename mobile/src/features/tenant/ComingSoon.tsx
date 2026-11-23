@@ -13,14 +13,3 @@ export function ComingSoon({ icon, title, text }: { icon: IconName; title: strin
     </View>
   );
 }
-
-/** Salão da lanchonete (ADR-0058, fatia 3). */
-export function ALaCarteComingSoon() {
-  return (
-    <ComingSoon
-      icon="receipt-outline"
-      title="Comandas"
-      text="Aqui você vai abrir comandas por número ou mesa, com os itens do cardápio fixo, e mandar os pratos para a cozinha."
-    />
-  );
-}
