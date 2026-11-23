@@ -252,20 +252,20 @@ Aparelho registrado como compartilhado (ADR-0027).
 | IsActive | bool | desativado = some dos cadastros, mas o histórico permanece (RN-002.6) |
 | IsAvailable | bool | falta momentânea de bebida ou adicional (pratos usam a disponibilidade do cardápio) |
 | IsVisibleOnPage | bool | padrão `true`. Bebida ou adicional com `false` não aparece na página de pedidos (ADR-0044 item 5). Na bebida, é o **"vende no site"** (ADR-0057 item 5, Q-307) |
-| SitePrice | Money? | só `BEVERAGE` (adicional usa o mesmo preço no site, Q-308); > 0; obrigatório na bebida com `IsVisibleOnPage` (na aplicação até a contração da 0009). Migração 0009: `= DefaultPrice` nas bebidas visíveis; a de `0.00` sai do site |
+| SitePrice | Money? | só `BEVERAGE` (adicional usa o mesmo preço no site, Q-308); **≥ 0** desde a 0012 (a bebida do restaurante pode custar `0.00` no site: água da casa, cafezinho; as outras unidades continuam > 0); obrigatório na bebida com `IsVisibleOnPage` (na aplicação até a contração da 0009). Migração 0009: `= DefaultPrice` nas bebidas visíveis; a de `0.00` saiu do site. Migração 0012: a de `0.00` que a 0009 tirou do site (última auditoria visível) volta, com `SitePrice = 0.00` |
 | CreatedAt, UpdatedAt | | |
 
 ### MarmitaSize [T][V][S]
 
 `Name` string(20), `Price` Money > 0, `SortOrder` int, `IsActive` bool. Único por `(TenantId, Name)` entre ativos.
 
-`SellsOnSite` bool (padrão `false`) e `SitePrice` Money? (> 0, obrigatório com `SellsOnSite`) (ADR-0057 item 1). Ao ligar a chave, o preço de site vem preenchido com o `Price`; desligada, o tamanho não aparece na página, e o `SitePrice` pode ficar guardado. Migração 0009: todo tamanho **ativo** fica `SellsOnSite = true`, `SitePrice = Price`.
+`SellsOnSite` bool (padrão `false`) e `SitePrice` Money? (> 0, obrigatório com `SellsOnSite`) (ADR-0057 item 1). Ao ligar a chave, o preço de site vem preenchido com o `Price`; desligada, o tamanho não aparece na página, e o `SitePrice` pode ficar guardado. Migração 0009: todo tamanho **ativo** fica `SellsOnSite = true`, `SitePrice = Price`. Migração 0012: o mesmo nos **inativos** que nunca tiveram a chave ligada e que a API da 0009 não gravou, para o tamanho reativado voltar vendendo no site. Reativar não muda a chave.
 
 ### 4.5.1 Cardápio fixo (EP-003, ADR-0056, ADR-0057)
 
 Permanente, sem data: edição vale na hora para os pedidos seguintes, e o pedido grava o snapshot (ADR-0020). Só com o módulo `FIXED_MENU` (ADR-0054). Cadastro com `catalog.manage`; **pausar e reativar** com `catalog.availability` (OWNER, MANAGER, ATTENDANT, KITCHEN; ADR-0028, Q-306). Escritas com `If-Match` na versão da **raiz** do agregado, auditoria, `CatalogUpdated` e feed (ADR-0031, ADR-0032, ADR-0034). Os filhos não têm versão própria: alterar ou pausar um filho incrementa a `Version` da raiz.
 
-**Preço de site** (ADR-0057): toda unidade vendável tem `SellsOnSite` bool (padrão `false`) e `SitePrice` Money? (> 0; obrigatório com a chave ligada; pode ser maior, menor ou igual ao de balcão; ao ligar, vem preenchido com o preço de balcão). Preço de balcão de prato, tamanho, bebida e combo é > 0.
+**Preço de site** (ADR-0057): toda unidade vendável tem `SellsOnSite` bool (padrão `false`) e `SitePrice` Money? (> 0, exceto a bebida do restaurante, `Product` `BEVERAGE`, que aceita `0.00` desde a 0012; obrigatório com a chave ligada; pode ser maior, menor ou igual ao de balcão; ao ligar, vem preenchido com o preço de balcão). Preço de balcão de prato, tamanho, bebida e combo é > 0.
 
 #### DishCategory [T][V][S]
 
@@ -597,7 +597,8 @@ PK `(TenantId, BusinessDate)`, `LastOrderNumber int`. Fonte do `OrderNumber` (`U
 | NotAcceptedCount | int | informativo, fora do vendido: pedidos do site do expediente recusados, expirados ou desistências (RF-210.2), incluindo os recusados pela finalização |
 | AutoRejectedCount | int | parte de `NotAcceptedCount`: os `AWAITING_ACCEPTANCE` recusados pela finalização (`BUSINESS_DAY_CLOSED`, ADR-0046 item 13) |
 | UnmarkedDeliveryCount | int | informativo: entregas aceitas e ativas sem `DELIVERED` (ADR-0046 item 20) |
-| SiteSoldTotal | Money | "Vendido pelo site" (ADR-0057 item 12), informativo: Σ `TotalAmount` dos pedidos `ACTIVE` aceitos do expediente com `PriceList = SITE`; parte de `TotalSold`. Fechamentos anteriores à 0010 ficam com 0. A base da cobrança da plataforma (com ou sem a taxa de entrega) está em aberto (Q-310) |
+| SiteSoldTotal | Money | "Vendido pelo site" (ADR-0057 item 12), informativo: Σ (`TotalAmount` − `DeliveryFee`) dos pedidos `ACTIVE` aceitos do expediente com `PriceList = SITE`, ou seja, **sem a taxa de entrega** (desde a 0012). Fechamentos anteriores à 0010 ficam com 0; os gravados entre a 0010 e a 0012 foram recalculados quando os pedidos ainda batiam com o snapshot, senão ficam **com a taxa dentro** e `SiteDeliveryFeeTotal = 0`. A base da cobrança da plataforma (com ou sem a taxa de entrega) está em aberto (Q-310) |
+| SiteDeliveryFeeTotal | Money | "Taxa de entrega dos pedidos do site" (0012), informativo: Σ `DeliveryFee` dos mesmos pedidos; parte de `DeliveryFeesTotal`. `SiteSoldTotal + SiteDeliveryFeeTotal` ≤ `TotalSold` |
 | ClosedByEmployeeId, ClosedAt | | |
 
 ### DailyClosingLine [T] — detalhamento do snapshot

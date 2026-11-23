@@ -943,6 +943,61 @@ BEGIN
   RAISE NOTICE 'ok: cliente criado uma vez pelo telefone, sem mudar o nome; endereco do ultimo pedido';
 END $$;
 
+-- ===== Preço de site 0.00 da bebida e taxa de entrega do site no fechamento (ADR-0057, migration 0012) =====
+DO $$ BEGIN
+  INSERT INTO products (id, tenant_id, kind, name, default_price, requires_preparation, is_visible_on_page, site_price, created_at, updated_at)
+  VALUES ('aaaaaaaa-0000-0000-0000-000000012001', 'aaaaaaaa-0000-0000-0000-000000000001', 'BEVERAGE', 'Agua da casa', 0.00, false, true, 0.00, now(), now());
+  BEGIN
+    UPDATE products SET site_price = -0.01 WHERE id = 'aaaaaaaa-0000-0000-0000-000000012001';
+    RAISE EXCEPTION 'FALHOU: preco de site negativo na bebida';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    UPDATE marmita_sizes SET sells_on_site = true, site_price = 0 WHERE id = 'aaaaaaaa-0000-0000-0000-0000000000f1';
+    RAISE EXCEPTION 'FALHOU: preco de site zero na marmita';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    UPDATE beverage_sizes SET site_price = 0 WHERE id = 'aaaaaaaa-0000-0000-0000-000000009032';
+    RAISE EXCEPTION 'FALHOU: preco de site zero no tamanho de bebida do cardapio fixo';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  RAISE NOTICE 'ok: preco de site 0.00 so na bebida do restaurante';
+END $$;
+
+-- Fechamento d1 (c9): total vendido 52.07, sem taxas. Os INSERTs abaixo param no CHECK antes da unicidade do expediente.
+DO $$ BEGIN
+  IF (SELECT site_delivery_fee_total FROM daily_closings WHERE id = 'aaaaaaaa-0000-0000-0000-0000000000c9') <> 0 THEN
+    RAISE EXCEPTION 'FALHOU: taxa de entrega do site sem o padrao 0';
+  END IF;
+  BEGIN
+    -- 16.00 de itens do site + 5.00 de taxa do site > 20.00 vendidos (a regra da 0010 aceitaria: 16.00 <= 20.00)
+    INSERT INTO daily_closings (id, tenant_id, business_day_id, business_date, order_count, total_sold, delivery_fees_total, total_received,
+      received_from_previous_days, total_pending, canceled_count, canceled_total, reversed_count, reversed_total, opening_balance,
+      cash_received, cash_reversed, supplies, withdrawals, expected_cash, counted_cash, cash_difference, site_sold_total,
+      site_delivery_fee_total, closed_by_employee_id, closed_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-10-27', 1, 20.00, 5.00, 0,
+      0, 20.00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16.00, 5.00, 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: itens e taxa do site maiores que o vendido';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO daily_closings (id, tenant_id, business_day_id, business_date, order_count, total_sold, delivery_fees_total, total_received,
+      received_from_previous_days, total_pending, canceled_count, canceled_total, reversed_count, reversed_total, opening_balance,
+      cash_received, cash_reversed, supplies, withdrawals, expected_cash, counted_cash, cash_difference, site_sold_total,
+      site_delivery_fee_total, closed_by_employee_id, closed_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-10-27', 1, 20.00, 0, 0,
+      0, 20.00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10.00, 3.00, 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: taxa do site maior que as taxas do expediente';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO daily_closings (id, tenant_id, business_day_id, business_date, order_count, total_sold, delivery_fees_total, total_received,
+      received_from_previous_days, total_pending, canceled_count, canceled_total, reversed_count, reversed_total, opening_balance,
+      cash_received, cash_reversed, supplies, withdrawals, expected_cash, counted_cash, cash_difference, site_sold_total,
+      site_delivery_fee_total, closed_by_employee_id, closed_at)
+    VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-10-27', 1, 20.00, 5.00, 0,
+      0, 20.00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10.00, -1.00, 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+    RAISE EXCEPTION 'FALHOU: taxa do site negativa';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  RAISE NOTICE 'ok: taxa de entrega do site no fechamento, dentro das taxas e, com os itens do site, dentro do vendido';
+END $$;
+
 -- ===== Tenant B =====
 SELECT set_config('app.tenant_id', 'bbbbbbbb-0000-0000-0000-000000000002', false),
        set_config('app.user_id',   'bbbbbbbb-0000-0000-0000-0000000000b2', false);

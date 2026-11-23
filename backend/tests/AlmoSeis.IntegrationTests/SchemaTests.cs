@@ -51,7 +51,7 @@ public sealed class SchemaTests(PostgresFixture db)
 
         await transaction.RollbackAsync(Ct); // não deixa dados para os outros testes
 
-        notices.Count(n => n.StartsWith("ok:", StringComparison.Ordinal)).ShouldBe(89, string.Join(" | ", notices));
+        notices.Count(n => n.StartsWith("ok:", StringComparison.Ordinal)).ShouldBe(91, string.Join(" | ", notices));
     }
 
     /// 0003 (ADR-0046) num banco com pedidos: o backfill roda com a RLS `FORCE` de `orders` (o banco vazio dos outros
@@ -307,7 +307,8 @@ public sealed class SchemaTests(PostgresFixture db)
 
         await using (var context = new AppDbContext(options.Options, new TenantContext(), Array.Empty<IModuleModelConfiguration>()))
         {
-            await context.Database.MigrateAsync(Ct);
+            // Só até a 0009: a 0012 corrige os mesmos dados (bebida de 0.00 e tamanho inativo) e tem o próprio teste.
+            await context.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>().MigrateAsync("20261126000000_FixedMenuSitePrice", Ct);
         }
 
         await using (var connection = new NpgsqlConnection(superuser))
@@ -498,6 +499,129 @@ public sealed class SchemaTests(PostgresFixture db)
             reader.GetString(0).ShouldBe("-:-,CASH:50.00,PIX:-", "só o pedido com troco e sem forma recebe a forma dinheiro");
             reader.GetBoolean(1).ShouldBeTrue("o FORCE da RLS de orders volta depois da correção");
             reader.GetInt64(2).ShouldBe(1);
+        }
+
+        NpgsqlConnection.ClearAllPools();
+        await db.ExecuteAsSuperuserAsync($"DROP DATABASE {database} WITH (FORCE)");
+    }
+
+    /// 0012 (ADR-0057, revisão do EP-003) num banco com catálogo, auditoria e fechamentos: a bebida de 0.00 que a 0009
+    /// escondeu volta à página com preço de site 0.00 (pela última auditoria), a escondida pelo dono e a sem auditoria
+    /// não; o tamanho de marmita inativo nunca ligado passa a vender no site, salvo o gravado pela API da 0009; o
+    /// fechamento cujo "Vendido pelo site" ainda bate com os pedidos separa a taxa de entrega, o outro fica; e o `FORCE` volta.
+    [Fact]
+    public async Task Migration_0012_corrects_site_prices_and_site_sold()
+    {
+        var database = "almoseis_sitefix_" + Guid.NewGuid().ToString("N")[..8];
+        await db.ExecuteAsSuperuserAsync($"CREATE DATABASE {database} OWNER almoseis_migrator");
+        var superuser = new NpgsqlConnectionStringBuilder(db.SuperuserConnectionString) { Database = database }.ConnectionString;
+        var migrator = new NpgsqlConnectionStringBuilder(db.ConnectionStringFor("almoseis_migrator_login", PostgresFixture.MigratorPassword))
+        {
+            Database = database,
+        }.ConnectionString;
+
+        var options = new DbContextOptionsBuilder<AppDbContext>();
+        options.UseAlmoSeisNpgsql(migrator);
+        await using (var context = new AppDbContext(options.Options, new TenantContext(), Array.Empty<IModuleModelConfiguration>()))
+        {
+            await context.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>().MigrateAsync("20261128000000_PhoneDeliveryCustomer", Ct);
+        }
+
+        await using (var connection = new NpgsqlConnection(superuser))
+        {
+            await connection.OpenAsync(Ct);
+            await using var seed = new NpgsqlCommand(
+                """
+                INSERT INTO users (id, full_name, email, normalized_email, password_hash, security_stamp, concurrency_stamp, created_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000a1', 'Dona A', 'a@x.com', 'A@X.COM', 'h', 's', 'c', now());
+                INSERT INTO tenants (id, name, document_type, document_number, city, state, terms_version, terms_accepted_at, terms_accepted_by_user_id, created_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'Marmitaria A', 'CNPJ', '11222333000181', 'Uberlandia', 'MG', '2026-10', now(), 'aaaaaaaa-0000-0000-0000-0000000000a1', now());
+                INSERT INTO tenant_employees (id, tenant_id, user_id, display_name, status, security_stamp, joined_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000e1', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000a1', 'Dona A', 'ACTIVE', gen_random_uuid(), now());
+
+                -- Bebidas de 0.00 escondidas e sem preço de site: b1 e b2 pela 0009 (última auditoria visível; b2 anterior à 0004,
+                -- sem a chave), b3 pelo dono (última auditoria false), b4 sem auditoria. b5 é a bebida paga visível.
+                INSERT INTO products (id, tenant_id, kind, name, default_price, requires_preparation, is_visible_on_page, site_price, created_at, updated_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000b1', 'aaaaaaaa-0000-0000-0000-000000000001', 'BEVERAGE', 'Agua', 0.00, false, false, NULL, now(), now()),
+                       ('aaaaaaaa-0000-0000-0000-0000000000b2', 'aaaaaaaa-0000-0000-0000-000000000001', 'BEVERAGE', 'Cafe', 0.00, false, false, NULL, now(), now()),
+                       ('aaaaaaaa-0000-0000-0000-0000000000b3', 'aaaaaaaa-0000-0000-0000-000000000001', 'BEVERAGE', 'Cha', 0.00, false, false, NULL, now(), now()),
+                       ('aaaaaaaa-0000-0000-0000-0000000000b4', 'aaaaaaaa-0000-0000-0000-000000000001', 'BEVERAGE', 'Mate', 0.00, false, false, NULL, now(), now()),
+                       ('aaaaaaaa-0000-0000-0000-0000000000b5', 'aaaaaaaa-0000-0000-0000-000000000001', 'BEVERAGE', 'Coca', 5.00, false, true, 5.00, now(), now());
+                -- Tamanhos: G inativo nunca ligado (sem auditoria da 0009); P inativo gravado pela API da 0009 com a chave desligada; M ativo.
+                INSERT INTO marmita_sizes (id, tenant_id, name, price, is_active, sells_on_site, site_price)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000f1', 'aaaaaaaa-0000-0000-0000-000000000001', 'G', 25.00, false, false, NULL),
+                       ('aaaaaaaa-0000-0000-0000-0000000000f2', 'aaaaaaaa-0000-0000-0000-000000000001', 'P', 15.00, false, false, NULL),
+                       ('aaaaaaaa-0000-0000-0000-0000000000f3', 'aaaaaaaa-0000-0000-0000-000000000001', 'M', 20.00, true, true, 21.00);
+                INSERT INTO audit_logs (id, tenant_id, origin, actor_user_id, operation_type, entity_type, entity_id, after, correlation_id, occurred_at)
+                VALUES (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'APP', 'aaaaaaaa-0000-0000-0000-0000000000a1', 'ProductCreated', 'PRODUCT',
+                        'aaaaaaaa-0000-0000-0000-0000000000b1', '{"name": "Agua", "isVisibleOnPage": true}', 'c1', now() - interval '3 days'),
+                       (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'APP', 'aaaaaaaa-0000-0000-0000-0000000000a1', 'ProductCreated', 'PRODUCT',
+                        'aaaaaaaa-0000-0000-0000-0000000000b2', '{"name": "Cafe"}', 'c2', now() - interval '30 days'),
+                       (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'APP', 'aaaaaaaa-0000-0000-0000-0000000000a1', 'ProductCreated', 'PRODUCT',
+                        'aaaaaaaa-0000-0000-0000-0000000000b3', '{"name": "Cha", "isVisibleOnPage": true}', 'c3', now() - interval '3 days'),
+                       (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'APP', 'aaaaaaaa-0000-0000-0000-0000000000a1', 'ProductUpdated', 'PRODUCT',
+                        'aaaaaaaa-0000-0000-0000-0000000000b3', '{"name": "Cha", "isVisibleOnPage": false}', 'c4', now() - interval '2 days'),
+                       (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'APP', 'aaaaaaaa-0000-0000-0000-0000000000a1', 'MarmitaSizeCreated', 'MARMITA_SIZE',
+                        'aaaaaaaa-0000-0000-0000-0000000000f1', '{"name": "G", "isActive": true}', 'c5', now() - interval '30 days'),
+                       (gen_random_uuid(), 'aaaaaaaa-0000-0000-0000-000000000001', 'APP', 'aaaaaaaa-0000-0000-0000-0000000000a1', 'MarmitaSizeUpdated', 'MARMITA_SIZE',
+                        'aaaaaaaa-0000-0000-0000-0000000000f2', '{"name": "P", "isActive": false, "sellsOnSite": false, "sitePrice": null}', 'c6', now() - interval '1 day');
+
+                -- d1: pedido do site de entrega (20.00 + 5.00 de taxa) e um do app; o fechamento ainda bate com os pedidos.
+                -- d2: pedido do site (30.00 + 4.00), mas o fechamento gravou 30.00 (o pedido mudou depois): fica como está.
+                INSERT INTO business_days (id, tenant_id, business_date, status, opening_balance, opened_by_employee_id, opened_at, closed_by_employee_id, closed_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000d1', 'aaaaaaaa-0000-0000-0000-000000000001', '2026-11-21', 'CLOSED', 0, 'aaaaaaaa-0000-0000-0000-0000000000e1', now(), 'aaaaaaaa-0000-0000-0000-0000000000e1', now()),
+                       ('aaaaaaaa-0000-0000-0000-0000000000d2', 'aaaaaaaa-0000-0000-0000-000000000001', '2026-11-22', 'CLOSED', 0, 'aaaaaaaa-0000-0000-0000-0000000000e1', now(), 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+                INSERT INTO orders (id, tenant_id, business_day_id, business_date, order_number, order_type, origin, fulfillment_type, price_list,
+                                    customer_name, customer_phone, delivery_address, items_total, weighings_total, delivery_fee, total_amount,
+                                    production_status, accepted_at, fulfillment_status, fulfillment_status_changed_at, created_by_employee_id, created_at, updated_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-000000000c01', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-11-21', 1,
+                        'MARMITA', 'WEB', 'DELIVERY', 'SITE', 'Maria', '+5534999991111', '{"street": "Rua A", "number": "10"}', 20.00, 0, 5.00, 25.00,
+                        'OPEN', now(), 'PENDING', now(), NULL, now(), now()),
+                       ('aaaaaaaa-0000-0000-0000-000000000c02', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-11-21', 2,
+                        'MARMITA', 'APP', 'PICKUP', 'COUNTER', 'Joao', NULL, NULL, 10.00, 0, 0, 10.00,
+                        'OPEN', now(), 'PENDING', now(), 'aaaaaaaa-0000-0000-0000-0000000000e1', now(), now()),
+                       ('aaaaaaaa-0000-0000-0000-000000000c03', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d2', '2026-11-22', 1,
+                        'MARMITA', 'WEB', 'DELIVERY', 'SITE', 'Carla', '+5534999992222', '{"street": "Rua B", "number": "20"}', 30.00, 0, 4.00, 34.00,
+                        'OPEN', now(), 'PENDING', now(), NULL, now(), now());
+                INSERT INTO daily_closings (id, tenant_id, business_day_id, business_date, order_count, total_sold, delivery_fees_total, total_received,
+                  received_from_previous_days, total_pending, canceled_count, canceled_total, reversed_count, reversed_total, opening_balance,
+                  cash_received, cash_reversed, supplies, withdrawals, expected_cash, counted_cash, cash_difference, site_sold_total,
+                  closed_by_employee_id, closed_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000a9', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-11-21',
+                  2, 35.00, 5.00, 0, 0, 35.00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25.00, 'aaaaaaaa-0000-0000-0000-0000000000e1', now()),
+                       ('aaaaaaaa-0000-0000-0000-0000000000b9', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d2', '2026-11-22',
+                  1, 34.00, 4.00, 0, 0, 34.00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30.00, 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+                """, connection);
+            await seed.ExecuteNonQueryAsync(Ct);
+        }
+
+        await using (var context = new AppDbContext(options.Options, new TenantContext(), Array.Empty<IModuleModelConfiguration>()))
+        {
+            await context.Database.MigrateAsync(Ct);
+        }
+
+        await using (var connection = new NpgsqlConnection(superuser))
+        {
+            await connection.OpenAsync(Ct);
+            await using var check = new NpgsqlCommand(
+                """
+                SELECT (SELECT string_agg(name || ':' || is_visible_on_page || ':' || coalesce(site_price::text, '-'), ',' ORDER BY name) FROM products),
+                       (SELECT string_agg(name || ':' || sells_on_site || ':' || coalesce(site_price::text, '-'), ',' ORDER BY name) FROM marmita_sizes),
+                       (SELECT string_agg(business_date || ':' || site_sold_total || ':' || site_delivery_fee_total, ',' ORDER BY business_date) FROM daily_closings),
+                       (SELECT bool_and(relforcerowsecurity) FROM pg_class
+                         WHERE relname IN ('products', 'marmita_sizes', 'daily_closings', 'orders', 'audit_logs')),
+                       (SELECT max(version) FROM products)
+                """, connection);
+            await using var reader = await check.ExecuteReaderAsync(Ct);
+            await reader.ReadAsync(Ct);
+            reader.GetString(0).ShouldBe("Agua:true:0.00,Cafe:true:0.00,Cha:false:-,Coca:true:5.00,Mate:false:-",
+                "volta só a bebida de 0.00 cuja última auditoria diz visível (ou é anterior à 0004)");
+            reader.GetString(1).ShouldBe("G:true:25.00,M:true:21.00,P:false:-",
+                "o inativo nunca ligado passa a vender no site; o gravado pela API da 0009 e o ativo não mudam");
+            reader.GetString(2).ShouldBe("2026-11-21:20.00:5.00,2026-11-22:30.00:0.00",
+                "o fechamento que bate com os pedidos separa a taxa; o que não bate fica como está");
+            reader.GetBoolean(3).ShouldBeTrue("o FORCE da RLS volta depois da correção");
+            reader.GetInt32(4).ShouldBe(1, "a correção não muda a versão");
         }
 
         NpgsqlConnection.ClearAllPools();
