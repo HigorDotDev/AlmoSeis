@@ -89,11 +89,17 @@ internal sealed class ReversePaymentHandler(
     }
 }
 
-internal sealed class ListOrderPaymentsQueryHandler(AppDbContext db, PaymentDtoBuilder dtos)
+internal sealed class ListOrderPaymentsQueryHandler(AppDbContext db, IOrderPaymentPort orders, PaymentDtoBuilder dtos)
     : IQueryHandler<ListOrderPaymentsQuery, ItemsDto<PaymentDto>>
 {
     public async Task<ItemsDto<PaymentDto>> HandleAsync(ListOrderPaymentsQuery query, CancellationToken cancellationToken)
     {
+        // Pedido inexistente ou de outro tenant → 404, não lista vazia (ADR-0026, TenantIsolationTests).
+        if (!await orders.ExistsAsync(query.OrderId, cancellationToken))
+        {
+            throw new NotFoundException("ORDER", query.OrderId);
+        }
+
         var payments = await db.Set<Payment>().AsNoTracking()
             .Where(p => p.OrderId == query.OrderId)
             .OrderBy(p => p.PaidAt).ThenBy(p => p.Id)

@@ -99,6 +99,7 @@ internal sealed class UpdateOrderHandler(
     IIdGenerator ids,
     IConcurrencyContext concurrency,
     ITenantSettingsReader settings,
+    ITenantModules modules,
     IPermissionChecker permissions,
     IAuditWriter audit,
     OrderDtoBuilder dtos,
@@ -107,19 +108,32 @@ internal sealed class UpdateOrderHandler(
     public async Task<OrderDto> HandleAsync(UpdateOrderCommand command, CancellationToken cancellationToken)
     {
         var order = await OrderRules.LoadAsync(db, command.OrderId, cancellationToken);
+        var c = command.Changes;
+
+        // Trocar o atendimento muda o módulo no à la carte (DINE_IN → A_LA_CARTE; DELIVERY/PICKUP → DELIVERY): o novo
+        // atendimento exige o módulo dele, como na criação (ADR-0054 item 14, ADR-0058 item 1), antes do If-Match.
+        if (c.FulfillmentType.HasValue && c.FulfillmentType.Value != order.FulfillmentType)
+        {
+            await modules.EnsureAsync(OrderRules.ModuleOf(order.OrderType, c.FulfillmentType.Value), cancellationToken);
+        }
+
         order.EnsureVersion(concurrency.ExpectedVersion);
 
-        var c = command.Changes;
         var defaultFee = (await settings.GetAsync(cancellationToken)).DefaultDeliveryFee;
         if (c.DeliveryFee.HasValue && c.DeliveryFee.Value != order.DeliveryFee)
         {
             OrderRules.EnsureCanSetDeliveryFee(permissions, c.DeliveryFee.Value, defaultFee);
         }
 
+        // Mesmo formato do POST /orders (06 §6.9): o telefone brasileiro é gravado normalizado.
+        var phone = c.CustomerPhone is { HasValue: true, Value: { } typed }
+            ? new Optional<string?>(OrderingFormats.NormalizePhone(typed))
+            : c.CustomerPhone;
+
         var before = Details(order);
         var version = order.Version;
         order.UpdateDetails(
-            new OrderDetailsChanges(c.CustomerName, c.CustomerPhone, c.FulfillmentType, c.DeliveryAddress, c.DeliveryFee, c.TableLabel, c.TabNumber, c.Notes),
+            new OrderDetailsChanges(c.CustomerName, phone, c.FulfillmentType, c.DeliveryAddress, c.DeliveryFee, c.TableLabel, c.TabNumber, c.Notes),
             defaultFee, tenant.EmployeeId!.Value, ids.New, time.GetUtcNow());
 
         if (order.Version != version)

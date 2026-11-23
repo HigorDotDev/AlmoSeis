@@ -1,7 +1,11 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using AlmoSeis.Infrastructure.Persistence;
+using AlmoSeis.Infrastructure.Tenancy;
 using AlmoSeis.IntegrationTests.Ordering;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Shouldly;
 
@@ -202,6 +206,14 @@ public sealed class EstablishmentBehaviorFlowTests(PostgresFixture db) : IDispos
         var settings = await (await client.GetAsync("/api/v1/tenant/settings", Ct)).ExpectAsync(HttpStatusCode.OK, _api);
         await ExpectModule(await client.SendJsonAsync(HttpMethod.Patch, "/api/v1/tenant/settings", new { kiloPricePerKg = "59.90" }, settings.Version()), "KILO");
 
+        // I4: o catálogo de produtos é do restaurante (algum de MARMITA/PF/KILO/DAILY_MENU); a leitura continua.
+        await ExpectModule(await client.PostAsJsonAsync("/api/v1/products",
+            new { kind = "BEVERAGE", name = "Coca-Cola 350ml", description = (string?)null, category = (string?)null, defaultPrice = "6.00", requiresPreparation = false }, Ct), "MARMITA");
+        await ExpectModule(await client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/products/{dish}", new { defaultPrice = "23.00" }, 1), "MARMITA");
+        await ExpectModule(await client.PostAsJsonAsync($"/api/v1/products/{dish}/image-upload", new { contentType = "image/jpeg", sizeBytes = 1000 }, Ct), "MARMITA");
+        await ExpectModule(await client.PostAsJsonAsync("/api/v1/products", new { kind = "BEVERAGE", name = "", defaultPrice = "-1.00" }, Ct), "MARMITA");
+        (await (await client.GetAsync($"/api/v1/products/{dish}", Ct)).ExpectAsync(HttpStatusCode.OK, _api)).GetProperty("defaultPrice").GetString().ShouldBe("22.00");
+
         // O módulo vem antes da validação do corpo: um corpo inválido também recebe 403.
         await ExpectModule(await client.PostAsJsonAsync("/api/v1/marmita-sizes", new { name = "", price = "-1.00", sortOrder = 0 }, Ct), "MARMITA");
 
@@ -282,6 +294,37 @@ public sealed class EstablishmentBehaviorFlowTests(PostgresFixture db) : IDispos
         var otherMe = await (await _api.Authenticated(other.AccessToken()).GetAsync("/api/v1/auth/me", Ct)).ExpectAsync(HttpStatusCode.OK, _api);
         Strings(otherMe.GetProperty("tenant"), "modules").ShouldBe(RestaurantModules);
         (await ScalarAsync<long>("SELECT count(*) FROM tenant_behaviors WHERE tenant_id = @t", Guid.Parse(other.TenantId()))).ShouldBe(1);
+    }
+
+    /// I3 (ADR-0025, complemento de 2026-11-23): a sessão do admin dentro de um tenant não leva o `app.user_id` dele, e as
+    /// políticas por usuário (05 §5.12, grupo 2) não abrem os vínculos que ele tem como proprietário de outro
+    /// estabelecimento. A sessão do próprio usuário (JWT) continua vendo os vínculos dele, como no login.
+    [Fact]
+    public async Task Platform_admin_session_does_not_open_the_admins_own_memberships()
+    {
+        var (_, adminUserId) = await AdminAsync(); // o admin é proprietário do tenant do autocadastro dele
+        var target = Guid.Parse((await _api.SignUpAsync()).TenantId());
+
+        async Task<(string UserId, long Tenants, long Employees, long Roles)> VisibleAsync(Action<ITenantContext> initialize)
+        {
+            await using var scope = _api.Services.CreateAsyncScope();
+            initialize(scope.ServiceProvider.GetRequiredService<ITenantContext>());
+            var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await context.Database.OpenConnectionAsync(Ct);
+            await scope.ServiceProvider.GetRequiredService<ITenantSession>().ApplyAsync(Ct);
+            var userId = await context.Database.SqlQueryRaw<string>("SELECT coalesce(current_setting('app.user_id', true), '') AS \"Value\"").SingleAsync(Ct);
+            var tenants = await context.Database.SqlQueryRaw<long>("SELECT count(*) AS \"Value\" FROM tenants").SingleAsync(Ct);
+            var employees = await context.Database.SqlQueryRaw<long>("SELECT count(*) AS \"Value\" FROM tenant_employees").SingleAsync(Ct);
+            var roles = await context.Database.SqlQueryRaw<long>("SELECT count(*) AS \"Value\" FROM tenant_employee_roles").SingleAsync(Ct);
+            return (userId, tenants, employees, roles);
+        }
+
+        var admin = await VisibleAsync(t => t.InitializeForPlatformAdmin(target, adminUserId));
+        admin.ShouldBe((string.Empty, 1L, 1L, 1L)); // só o tenant da rota e o proprietário dele
+
+        var own = await VisibleAsync(t => t.InitializeForTenant(target, adminUserId));
+        own.UserId.ShouldBe(adminUserId.ToString());
+        own.Tenants.ShouldBe(2); // o da sessão + o vínculo do próprio usuário (grupo 2)
     }
 
     [Fact]

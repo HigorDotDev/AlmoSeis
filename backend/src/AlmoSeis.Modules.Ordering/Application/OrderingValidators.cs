@@ -9,6 +9,26 @@ internal static class OrderingFormats
     /// E.164, igual ao CHECK de customers.phone_number e orders.customer_phone.
     public const string PhonePattern = @"^\+[1-9][0-9]{7,14}$";
     public const string PhoneMessage = "Telefone no formato internacional, ex.: +5534999991234.";
+
+    /// Telefone do pedido do app (`customerPhone`) e da busca do cliente (`POST /customers/lookup`): o número brasileiro
+    /// passa pelo mesmo `BrazilianPhone.Normalize` da página de pedidos, para "(34) 99999-1234", "34999991234",
+    /// "+55 34 99999-1234" e "+5534999991234" virarem o mesmo cliente (06 §6.8 e §6.9). Outro E.164 (estrangeiro, ou
+    /// `+55` fora da regra brasileira) segue como veio, como antes. Fora dos dois → `null` (`422`).
+    public static string? NormalizePhone(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return null;
+        }
+
+        if (BrazilianPhone.Normalize(input) is { } brazilian)
+        {
+            return brazilian;
+        }
+
+        var trimmed = input.Trim();
+        return System.Text.RegularExpressions.Regex.IsMatch(trimmed, PhonePattern) ? trimmed : null;
+    }
 }
 
 internal sealed class DeliveryAddressValidator : AbstractValidator<DeliveryAddressDto>
@@ -123,7 +143,7 @@ internal sealed class CreateOrderCommandValidator : AbstractValidator<CreateOrde
         RuleFor(x => x.OrderType).IsInEnum();
         RuleFor(x => x.FulfillmentType).IsInEnum();
         RuleFor(x => x.CustomerName).MaximumLength(80);
-        RuleFor(x => x.CustomerPhone).Matches(OrderingFormats.PhonePattern).WithMessage(OrderingFormats.PhoneMessage);
+        RuleFor(x => x.CustomerPhone).Must(p => p is null || OrderingFormats.NormalizePhone(p) is not null).WithMessage(OrderingFormats.PhoneMessage);
         RuleFor(x => x.DeliveryAddress!).SetValidator(new DeliveryAddressValidator()).When(x => x.DeliveryAddress is not null);
         RuleFor(x => x.TableLabel).MaximumLength(10);
         RuleFor(x => x.TabNumber).MaximumLength(10);
@@ -148,7 +168,7 @@ internal sealed class UpdateOrderRequestValidator : AbstractValidator<UpdateOrde
     public UpdateOrderRequestValidator()
     {
         RuleFor(x => x.CustomerName.Value).MaximumLength(80).When(x => x.CustomerName.HasValue).OverridePropertyName("customerName");
-        RuleFor(x => x.CustomerPhone.Value).Matches(OrderingFormats.PhonePattern).WithMessage(OrderingFormats.PhoneMessage)
+        RuleFor(x => x.CustomerPhone.Value).Must(p => p is null || OrderingFormats.NormalizePhone(p) is not null).WithMessage(OrderingFormats.PhoneMessage)
             .When(x => x.CustomerPhone.HasValue).OverridePropertyName("customerPhone");
         RuleFor(x => x.FulfillmentType.Value).IsInEnum().When(x => x.FulfillmentType.HasValue).OverridePropertyName("fulfillmentType");
         RuleFor(x => x.DeliveryAddress.Value!).SetValidator(new DeliveryAddressValidator())

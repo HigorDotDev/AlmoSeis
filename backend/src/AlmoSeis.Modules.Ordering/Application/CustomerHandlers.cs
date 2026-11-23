@@ -233,18 +233,17 @@ internal sealed class SearchCustomersQueryHandler(AppDbContext db, CustomerDtoBu
     }
 }
 
-/// GET /customers/by-phone: telefone exato (E.164), nunca por trecho. O cliente anonimizado não tem telefone e não
-/// aparece. O endereço é o do pedido mais recente do cliente com entrega (05 §5.14, `ix_orders_customer_recent`).
+/// POST /customers/lookup: o telefone vem no corpo (nunca na URL, que vai para os logs de acesso, ADR-0024) e é
+/// normalizado como no POST /orders (`OrderingFormats.NormalizePhone`); a busca é pelo número exato, nunca por trecho.
+/// O cliente anonimizado não tem telefone e não aparece. O endereço é o do pedido mais recente do cliente com entrega
+/// (05 §5.14, `ix_orders_customer_recent`).
 internal sealed class LookupCustomerByPhoneQueryHandler(AppDbContext db, CustomerDtoBuilder dtos)
     : IQueryHandler<LookupCustomerByPhoneQuery, CustomerPhoneLookupDto>
 {
     public async Task<CustomerPhoneLookupDto> HandleAsync(LookupCustomerByPhoneQuery query, CancellationToken cancellationToken)
     {
-        var phone = query.PhoneNumber?.Trim();
-        if (string.IsNullOrEmpty(phone) || !Regex.IsMatch(phone, OrderingFormats.PhonePattern))
-        {
-            throw BusinessException.Validation("phoneNumber", OrderingFormats.PhoneMessage);
-        }
+        var phone = OrderingFormats.NormalizePhone(query.PhoneNumber)
+            ?? throw BusinessException.Validation("phoneNumber", OrderingFormats.PhoneMessage);
 
         var customer = await db.Set<Customer>().AsNoTracking().Include(c => c.Addresses)
             .SingleOrDefaultAsync(c => c.PhoneNumber == phone && c.AnonymizedAt == null, cancellationToken);

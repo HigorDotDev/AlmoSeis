@@ -30,6 +30,7 @@ public sealed class ProductsController : ControllerBase
 
     [HttpPost]
     [HasPermission(Permissions.CatalogManage)]
+    [RequiresModule(TenantModule.Marmita, TenantModule.Pf, TenantModule.Kilo, TenantModule.DailyMenu)]
     public async Task<ActionResult<ProductDto>> Create(
         [FromBody] CreateProductCommand command,
         [FromServices] ICommandHandler<CreateProductCommand, ProductDto> handler,
@@ -41,6 +42,7 @@ public sealed class ProductsController : ControllerBase
 
     [HttpPatch("{id:guid}")]
     [HasPermission(Permissions.CatalogManage)]
+    [RequiresModule(TenantModule.Marmita, TenantModule.Pf, TenantModule.Kilo, TenantModule.DailyMenu)]
     [RequiresIfMatch]
     public async Task<ActionResult<ProductDto>> Update(
         Guid id,
@@ -51,6 +53,7 @@ public sealed class ProductsController : ControllerBase
 
     [HttpPost("{id:guid}/image-upload")]
     [HasPermission(Permissions.CatalogManage)]
+    [RequiresModule(TenantModule.Marmita, TenantModule.Pf, TenantModule.Kilo, TenantModule.DailyMenu)]
     public async Task<ActionResult<ImageUploadDto>> RequestImageUpload(
         Guid id,
         [FromBody] RequestImageUploadRequest request,

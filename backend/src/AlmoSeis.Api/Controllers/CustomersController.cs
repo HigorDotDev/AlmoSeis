@@ -19,13 +19,15 @@ public sealed class CustomersController : ControllerBase
         CancellationToken cancellationToken, [FromQuery] int limit = 20) =>
         Ok(await handler.HandleAsync(new SearchCustomersQuery(search, limit, cursor), cancellationToken));
 
-    /// Telefone digitado no pedido (ADR-0059 item 14): preenche o nome e oferece o endereço do último pedido.
-    [HttpGet("by-phone")]
-    [HasPermission(Permissions.Orders.View)]
-    public async Task<ActionResult<CustomerPhoneLookupDto>> ByPhone(
-        [FromQuery] string? phoneNumber,
+    /// Telefone digitado no pedido (ADR-0059 item 14): preenche o nome e oferece o endereço do último pedido. É uma
+    /// leitura, mas o telefone vai no corpo para não aparecer na URL (logs de acesso, ADR-0024), e o corpo não é logado.
+    /// Só quem cria pedido (`orders.create`): a cozinha não consulta cliente por telefone.
+    [HttpPost("lookup")]
+    [HasPermission(Permissions.Orders.Create)]
+    public async Task<ActionResult<CustomerPhoneLookupDto>> Lookup(
+        [FromBody] LookupCustomerByPhoneQuery query,
         [FromServices] IQueryHandler<LookupCustomerByPhoneQuery, CustomerPhoneLookupDto> handler, CancellationToken cancellationToken) =>
-        Ok(await handler.HandleAsync(new LookupCustomerByPhoneQuery(phoneNumber), cancellationToken));
+        Ok(await handler.HandleAsync(query, cancellationToken));
 
     [HttpGet("{id:guid}")]
     [HasPermission(Permissions.Orders.View)]

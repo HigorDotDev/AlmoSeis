@@ -327,6 +327,9 @@ internal sealed class OrderFulfillmentChangedMapper(ITenantContext tenant) : Int
 
 internal sealed class OrderPaymentPort(AppDbContext db, TimeProvider time) : IOrderPaymentPort
 {
+    public Task<bool> ExistsAsync(Guid orderId, CancellationToken cancellationToken) =>
+        db.Set<Order>().AnyAsync(o => o.Id == orderId, cancellationToken);
+
     public async Task<OrderPaymentSnapshot> LoadForPaymentAsync(Guid orderId, int expectedVersion, CancellationToken cancellationToken)
     {
         var order = await LoadAsync(orderId, cancellationToken);

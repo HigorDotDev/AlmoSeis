@@ -27,7 +27,7 @@ public sealed class TenantSessionConnectionInterceptor(ITenantContext tenant) : 
         var command = connection.CreateCommand();
         command.CommandText = "SELECT set_config('app.tenant_id', @t, false), set_config('app.user_id', @u, false)";
         AddParameter(command, "t", tenant.TenantId?.ToString() ?? string.Empty);
-        AddParameter(command, "u", tenant.UserId?.ToString() ?? string.Empty);
+        AddParameter(command, "u", tenant.SessionUserId?.ToString() ?? string.Empty);
         return command;
     }
 

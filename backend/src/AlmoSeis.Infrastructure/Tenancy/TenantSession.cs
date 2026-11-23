@@ -19,7 +19,7 @@ internal sealed class TenantSession(AppDbContext db, ITenantContext tenant) : IT
     public async Task ApplyAsync(CancellationToken cancellationToken)
     {
         var tenantId = tenant.TenantId?.ToString() ?? string.Empty;
-        var userId = tenant.UserId?.ToString() ?? string.Empty;
+        var userId = tenant.SessionUserId?.ToString() ?? string.Empty;
         await db.Database.ExecuteSqlAsync(
             $"SELECT set_config('app.tenant_id', {tenantId}, false), set_config('app.user_id', {userId}, false)",
             cancellationToken);

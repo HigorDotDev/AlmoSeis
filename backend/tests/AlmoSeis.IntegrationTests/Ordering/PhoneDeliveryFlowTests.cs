@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Shouldly;
 
@@ -211,10 +212,68 @@ public sealed class PhoneDeliveryFlowTests(PostgresFixture db) : IDisposable
     public async Task Lookup_validates_the_phone_format()
     {
         var s = await OrderingScenario.CreateAsync(_api, db);
-        var problem = await (await s.Client.GetAsync("/api/v1/customers/by-phone?phoneNumber=34999", Ct)).ExpectAsync(HttpStatusCode.UnprocessableEntity, _api);
+        var problem = await (await Lookup(s.Client, new { phoneNumber = "34999" })).ExpectAsync(HttpStatusCode.UnprocessableEntity, _api);
         problem.GetProperty("errors").TryGetProperty("phoneNumber", out _).ShouldBeTrue();
-        (await (await s.Client.GetAsync("/api/v1/customers/by-phone", Ct)).ExpectAsync(HttpStatusCode.UnprocessableEntity, _api))
+        (await (await Lookup(s.Client, new { phoneNumber = (string?)null })).ExpectAsync(HttpStatusCode.UnprocessableEntity, _api))
             .GetProperty("errorCode").GetString().ShouldBe("ValidationFailed");
+
+        // A rota antiga, com o telefone na URL, não existe mais.
+        (await s.Client.GetAsync("/api/v1/customers/by-phone?phoneNumber=%2B5534999991234", Ct)).StatusCode
+            .ShouldBeOneOf(HttpStatusCode.NotFound, HttpStatusCode.MethodNotAllowed);
+    }
+
+    /// I5: a busca é de quem cria pedido (`orders.create`). A cozinha (só `orders.view`) e o caixa recebem 403.
+    [Fact]
+    public async Task Lookup_requires_orders_create()
+    {
+        var s = await OrderingScenario.CreateAsync(_api, db);
+        await s.CreateOrderAsync(s.MarmitaDelivery(phone: "+5534991110010"));
+
+        foreach (var role in new[] { "KITCHEN", "CASHIER" })
+        {
+            var client = _api.Authenticated(await _api.EmployeeTokenAsync(db, s.Owner, role));
+            var denied = await (await Lookup(client, new { phoneNumber = "+5534991110010" })).ExpectAsync(HttpStatusCode.Forbidden, _api);
+            denied.GetProperty("errorCode").GetString().ShouldBe("PermissionDenied");
+            denied.GetProperty("permission").GetString().ShouldBe("orders.create");
+        }
+
+        var attendant = _api.Authenticated(await _api.EmployeeTokenAsync(db, s.Owner, "ATTENDANT"));
+        (await LookupAsync(attendant, "+5534991110010")).GetProperty("customer").GetProperty("name").GetString().ShouldBe("João Silva");
+    }
+
+    /// M2: o mesmo número digitado em formatos diferentes no POST /orders é um cliente só, gravado no E.164 da página
+    /// (`BrazilianPhone`), e a busca o encontra em qualquer um deles. O PATCH grava o telefone normalizado.
+    [Fact]
+    public async Task Same_phone_in_different_formats_is_one_customer()
+    {
+        var s = await OrderingScenario.CreateAsync(_api, db);
+        string[] formats = ["(34) 99111-0020", "+55 34 99111-0020", "034991110020", "34991110020", "+5534991110020"];
+
+        var ids = new List<Guid>();
+        foreach (var format in formats)
+        {
+            var order = await s.CreateOrderAsync(s.MarmitaDelivery(phone: format));
+            order.GetProperty("customer").GetProperty("phoneNumber").GetString().ShouldBe("+5534991110020");
+            ids.Add(order.GetProperty("customer").Id());
+        }
+
+        ids.Distinct().Count().ShouldBe(1);
+        (await s.ScalarAsync<long>("SELECT count(*) FROM customers WHERE tenant_id = @t")).ShouldBe(1);
+        (await s.ScalarAsync<string>("SELECT phone_number FROM customers WHERE tenant_id = @t")).ShouldBe("+5534991110020");
+        (await s.ScalarAsync<long>("SELECT count(DISTINCT customer_phone) FROM orders WHERE tenant_id = @t")).ShouldBe(1);
+
+        foreach (var format in new[] { "(34) 99111-0020", "34 99111 0020", "+5534991110020" })
+        {
+            (await LookupAsync(s.Client, format)).GetProperty("customer").Id().ShouldBe(ids[0]);
+        }
+
+        // Fora do formato brasileiro e do E.164 → 422 no pedido.
+        (await Errors(s, s.MarmitaDelivery(phone: "99111-0020"))).ShouldContain("customerPhone");
+
+        var created = await s.CreateOrderAsync(s.MarmitaDelivery(phone: "+5534991110020"));
+        var patched = await (await s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/orders/{created.Id()}", new { customerPhone = "(34) 99111-0021" }, created.Version()))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+        patched.GetProperty("customer").GetProperty("phoneNumber").GetString().ShouldBe("+5534991110021");
     }
 
     /// ADR-0026: o mesmo telefone em dois tenants são dois clientes; a busca de B não vê o cliente de A, nem o endereço
@@ -239,7 +298,11 @@ public sealed class PhoneDeliveryFlowTests(PostgresFixture db) : IDisposable
     }
 
     private async Task<JsonElement> LookupAsync(HttpClient client, string phone) =>
-        await (await client.GetAsync($"/api/v1/customers/by-phone?phoneNumber={Uri.EscapeDataString(phone)}", Ct)).ExpectAsync(HttpStatusCode.OK, _api);
+        await (await Lookup(client, new { phoneNumber = phone })).ExpectAsync(HttpStatusCode.OK, _api);
+
+    /// POST /customers/lookup (06 §6.8): o telefone vai no corpo, nunca na URL.
+    private static Task<HttpResponseMessage> Lookup(HttpClient client, object body) =>
+        client.PostAsJsonAsync("/api/v1/customers/lookup", body, Ct);
 
     private async Task<List<JsonElement>> ListAsync(HttpClient client, string query) =>
         (await (await client.GetAsync($"/api/v1/orders{query}", Ct)).ExpectAsync(HttpStatusCode.OK, _api)).GetProperty("items").EnumerateArray().ToList();

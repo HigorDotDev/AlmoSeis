@@ -551,4 +551,7 @@ public interface IOrderPaymentPort
     Task<OrderBalanceDto> ApplyPaymentAsync(Guid orderId, Money amount, CancellationToken cancellationToken);
 
     Task<OrderBalanceDto> UndoPaymentAsync(Guid orderId, Money amount, CancellationToken cancellationToken);
+
+    /// O pedido existe no tenant da sessão? `GET /orders/{id}/payments` de pedido inexistente ou de outro tenant → `404`.
+    Task<bool> ExistsAsync(Guid orderId, CancellationToken cancellationToken);
 }

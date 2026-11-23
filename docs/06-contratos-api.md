@@ -974,6 +974,22 @@ Convite inexistente, expirado ou já usado → `404 NotFound` (não diferencia, 
 
 Tipos aceitos: `image/jpeg`, `image/png`, `image/webp`, até 2 MB. Depois do `PUT`, o app grava `imageStorageKey` via `PATCH`. O `PATCH` confere o objeto no bucket: chave ainda não enviada, maior que 2 MB ou de outro tipo → `422` em `errors.imageStorageKey`. Cada pedido gera uma chave nova; a imagem atual continua até o `PATCH` trocar. **Trocar a imagem** é repetir o fluxo (pedido de URL, `PUT`, `PATCH` com a chave nova); **remover** é `PATCH { "imageStorageKey": null }`. Nos dois casos o arquivo anterior é apagado do bucket só depois que o `PATCH` é confirmado (em segundos, de forma assíncrona); um `PATCH` recusado não apaga nada. Arquivos enviados e nunca gravados num produto não são apagados por esta rota.
 
+Módulos (ADR-0054 item 14): o catálogo de produtos serve aos módulos do restaurante, e basta **um** de `MARMITA`, `PF`, `KILO` ou `DAILY_MENU`. Sem nenhum deles (a lanchonete pura, que cadastra pelo cardápio fixo), `POST /products`, `PATCH /products/{id}` e `POST /products/{id}/image-upload` → `403 ModuleNotEnabled` com o primeiro da lista em `module`, antes da validação do corpo:
+
+```json
+{
+  "type": "urn:almoseis:error:module-not-enabled",
+  "title": "Este recurso não está habilitado no estabelecimento.",
+  "status": 403,
+  "instance": "/api/v1/products",
+  "errorCode": "ModuleNotEnabled",
+  "traceId": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+  "module": "MARMITA"
+}
+```
+
+As leituras (`GET /products`, `GET /products/{id}`) não mudam.
+
 ### Tamanhos de marmita
 
 `MarmitaSize`: `{ "id": "0192d6a0-0000-7000-8000-000000000202", "version": 1, "name": "M", "price": "20.00", "sortOrder": 2, "isActive": true, "sellsOnSite": true, "sitePrice": "21.90" }`
@@ -1473,7 +1489,7 @@ Módulo `DAILY_MENU` (ADR-0054): sem ele, `POST /menus`, `PUT /menus/{id}/items`
 | Método e rota | Permissão | Corpo → resposta |
 |---|---|---|
 | `GET /customers?search=joao&limit=20&cursor=` | `orders.view` | busca por nome ou telefone → `200 { "items": [Customer], "nextCursor": null }` |
-| `GET /customers/by-phone?phoneNumber=%2B5534999991234` | `orders.view` | cliente do telefone e endereço do último pedido → ver abaixo (EP-003 fatia 4) |
+| `POST /customers/lookup` | `orders.create` | `{ "phoneNumber": "+5534999991234" }` → cliente do telefone e endereço do último pedido, ver abaixo (EP-003 fatia 4) |
 | `GET /customers/{id}` | `orders.view` | → `200 Customer` |
 | `POST /customers` | `customers.manage` | `{ "name": "João Silva", "phoneNumber": "+5534999991234", "notes": null, "addresses": [ { "label": "Casa", "street": "Rua das Acácias", "number": "120", "complement": "Ap 201", "neighborhood": "Santa Mônica", "reference": null, "isDefault": true } ] }` → `201 Customer` |
 | `PATCH /customers/{id}` [M] | `customers.manage` | `{ "name": "João P. Silva", "notes": null }` → `200 Customer` |
@@ -1497,9 +1513,15 @@ Módulo `DAILY_MENU` (ADR-0054): sem ele, `POST /menus`, `PUT /menus/{id}/items`
 
 `409` em `POST /customers` com telefone já cadastrado, trazendo o cliente existente em `current`.
 
-### `GET /customers/by-phone?phoneNumber=` — `orders.view` (EP-003 fatia 4, ADR-0059 item 14, Q-313)
+### `POST /customers/lookup` — `orders.create` (EP-003 fatia 4, ADR-0059 item 14, Q-313)
 
-Chamado quando o atendente termina de digitar o telefone no pedido por telefone (entrega ou retirada, marmita ou à la carte). O telefone vai em E.164 e codificado na URL (`+` → `%2B`); a busca é pelo número exato, nunca por trecho. → `200`:
+Chamado quando o atendente termina de digitar o telefone no pedido por telefone (entrega ou retirada, marmita ou à la carte). É uma **leitura**, mas o telefone vai no **corpo**, nunca na URL (a URL vai para os logs de acesso; ADR-0024), e o corpo não é logado. Não leva `Idempotency-Key` nem `If-Match`, e a assinatura suspensa não a bloqueia (não é escrita, ADR-0017 §6). A permissão é `orders.create`: só quem cria pedido consulta cliente pelo telefone (a cozinha e o caixa, sem `orders.create`, recebem `403 PermissionDenied`).
+
+```json
+{ "phoneNumber": "+5534999991234" }
+```
+
+O telefone é normalizado como o `customerPhone` do `POST /orders` (§6.9): o número brasileiro aceita os formatos da página de pedidos (`"(34) 99999-1234"`, `"34999991234"`, `"+55 34 99999-1234"`, DDD com zero) e vira `"+5534999991234"`; outro E.164 segue como veio. A busca é pelo número normalizado exato, nunca por trecho. → `200`:
 
 ```json
 {
@@ -1521,7 +1543,7 @@ Chamado quando o atendente termina de digitar o telefone no pedido por telefone 
 
 - `customer` é o `Customer` de §6.8 (o app preenche o nome; na marmita, oferece também os `addresses` salvos, Q-313). Telefone sem cadastro → `200 { "customer": null, "lastDeliveryAddress": null }`, nunca `404`. Cliente anonimizado não tem telefone e não aparece.
 - `lastDeliveryAddress`: o `deliveryAddress` do pedido mais recente desse cliente que tinha endereço, de qualquer data e atendimento (é o "usar o endereço do último pedido" da lanchonete, Q-313). `null` se ele nunca pediu entrega.
-- Telefone ausente ou fora do formato E.164 → `422 ValidationFailed` em `phoneNumber`.
+- Telefone ausente, nem brasileiro nem E.164 → `422 ValidationFailed` em `phoneNumber`. A rota `GET /customers/by-phone?phoneNumber=` (telefone na URL) foi removida.
 - Cliente de outro tenant nunca aparece (ADR-0026): o mesmo telefone em dois estabelecimentos são dois clientes.
 
 **Cliente criado pelo pedido.** O cliente do delivery é criado pelo próprio `POST /orders` (§6.9), só com nome e telefone e sem endereço salvo, e aparece nesta lista e em `GET /customers` com `pendingAmount` do saldo dos pedidos dele (ADR-0059 item 16). A auditoria `CustomerCreated` leva o nome e a contagem de endereços, nunca o telefone (ADR-0024).
@@ -2136,6 +2158,7 @@ Regras do corpo:
 - **Taxa de entrega** (Q-315 do EP-003, ADR-0021 complementado): `deliveryFee: null` usa a taxa padrão; o app começa o campo com ela. Quem cria o pedido (`orders.create`) pode digitar outro valor **na criação**, sem `orders.delivery-fee.edit`: o pedido grava `deliveryFeeSource: "MANUAL"` e a auditoria `OrderCreated` leva o valor digitado e a taxa padrão do momento. Igual à padrão → `FIXED_DEFAULT`. Alterar a taxa **depois** (`PATCH /orders/{id}`) continua exigindo `orders.delivery-fee.edit` (`403 PermissionDenied`, extensão `permission`).
 - **Cliente:** `customerId` vincula o cadastro informado. Sem ele, `saveCustomer: true` cria o cliente com o endereço (o "salvar cliente" da marmita, Q-313). Sem os dois, em **entrega ou retirada** com `customerPhone`, o pedido é vinculado ao cliente desse telefone ou cria um novo **só com nome e telefone, sem endereço salvo** (ADR-0059 item 14), sem precisar marcar nada. Telefone já cadastrado com outro nome: o pedido guarda o nome digitado e o cadastro não muda (Q-314). Dois atendentes com o mesmo telefone novo ao mesmo tempo criam um cliente só (05 §5.14). No salão (`DINE_IN`), o telefone nunca cria cliente.
 - **Nome e telefone** (`customerName`, `customerPhone` em E.164; ADR-0059, Q-312): marmita sempre com nome; **entrega de marmita** também com telefone; retirada de marmita (balcão) com telefone opcional, como hoje. À la carte de **entrega ou retirada** (delivery por telefone) com nome e telefone. Faltando → `422 ValidationFailed` em `customerName` ou `customerPhone`.
+- **Formato do telefone** (normalizado no servidor, para o mesmo número não virar dois clientes): o número brasileiro passa pela mesma normalização da página de pedidos (§6.19) e aceita `"(34) 99999-1234"`, `"34999991234"`, `"+55 34 99999-1234"`, `"034999991234"` e `"+5534999991234"`, todos gravados (no pedido e no cliente) e devolvidos como `"+5534999991234"`; outro E.164 (estrangeiro) segue como veio. Fora dos dois → `422 ValidationFailed` em `customerPhone`. O `PATCH /orders/{id}` normaliza do mesmo jeito.
 - **Forma prevista e troco** (`expectedPaymentMethod`: `CASH`, `PIX`, `CARD`; `changeFor`: string de dinheiro; ADR-0059 item 5, Q-316): a forma é **obrigatória na entrega**, opcional na retirada e **proibida no salão** (`422` em `expectedPaymentMethod`). Precisa estar entre as formas habilitadas do estabelecimento (`422 PaymentMethodDisabled`). `changeFor` só com `CASH` e de pelo menos o total do pedido, conferido na criação (`422` em `changeFor`). É só informação para o entregador: **não cria pagamento** nem marca nada como pago; o pagamento é registrado na confirmação do recebimento (`POST /orders/{id}/payments`, ADR-0059 item 8). Uma edição posterior que passe o total do "troco para" não é recusada por isso (05 §5.17 0011).
 - **Cardápio do dia:** pratos e acompanhamentos precisam estar disponíveis no cardápio `MARMITA` da data (`422 ProductUnavailable`).
 
@@ -2242,7 +2265,7 @@ Quilo:
 
 Regras do corpo `A_LA_CARTE`:
 - **Atendimento** (ADR-0058 item 2): `DINE_IN` (comanda), `DELIVERY` ou `PICKUP`. A comanda segue o fluxo do PF: `tableLabel` e/ou `tabNumber`, nome opcional. O balcão "para viagem" é uma comanda `DINE_IN` com `tabNumber` (Q-320).
-- **Entrega e retirada (delivery por telefone, EP-003 fatia 4, ADR-0059):** `customerName` e `customerPhone` obrigatórios nas duas; `deliveryAddress` obrigatório em `DELIVERY` (o delivery da lanchonete não usa `customerAddressId` nem `saveCustomer`: o endereço fica só no pedido, e o app oferece o `lastDeliveryAddress` de `GET /customers/by-phone`, Q-313); taxa digitada na criação e forma prevista/troco como nas regras da marmita acima. O cliente é vinculado ou criado pelo telefone. O pedido entra direto na cozinha, com número, sem fila de aceite (ADR-0059 item 6), e segue os status de atendimento (`PATCH /orders/{id}/fulfillment`).
+- **Entrega e retirada (delivery por telefone, EP-003 fatia 4, ADR-0059):** `customerName` e `customerPhone` obrigatórios nas duas; `deliveryAddress` obrigatório em `DELIVERY` (o delivery da lanchonete não usa `customerAddressId` nem `saveCustomer`: o endereço fica só no pedido, e o app oferece o `lastDeliveryAddress` de `POST /customers/lookup`, Q-313); taxa digitada na criação e forma prevista/troco como nas regras da marmita acima. O cliente é vinculado ou criado pelo telefone. O pedido entra direto na cozinha, com número, sem fila de aceite (ADR-0059 item 6), e segue os status de atendimento (`PATCH /orders/{id}/fulfillment`).
 - **Só cardápio fixo** (ADR-0058 item 3, Q-317): `itemKind` `FIXED_DISH`, `FIXED_BEVERAGE` ou `COMBO`. `MARMITA`, `PF`, `BEVERAGE` e `ADDON` (do catálogo) → `422 ValidationFailed` em `items[i].itemKind`, e os tipos do cardápio fixo num pedido `MARMITA`, `PF` ou `KILO` também. Pesagens → `422`. `COMBO_PART` e `GROUP_ADDON` nunca vão no primeiro nível: as partes vêm em `parts`, os adicionais em `groupAddons`.
 - **`FIXED_DISH`:** `dishId`, `dishSizeId` (obrigatório se o prato tem tamanho e proibido se não tem), `quantity` (1 a 99), `notes` (até 200), `groupAddons` (opções dos grupos ligados à categoria do prato ou ao próprio prato, ADR-0056 item 18; cada uma com `quantity` de 1 a 10).
 - **`FIXED_BEVERAGE`:** `beverageSizeId` e `beverageFlavorId` (obrigatório se o tamanho tem sabores, proibido se não tem), `quantity`, `notes`.
@@ -2348,6 +2371,7 @@ Desde o EP-003 fatia 4 (ADR-0059):
 - Nome e telefone seguem as regras da criação: trocar `fulfillmentType` confere os dois (comanda à la carte que vira retirada precisa de nome e telefone no mesmo `PATCH`); sem trocar, só o campo enviado é conferido (apagar o telefone de uma entrega → `422` em `customerPhone`). Um pedido antigo sem telefone continua editável.
 - `expectedPaymentMethod` e `changeFor` não mudam por esta rota. Trocar um pedido à la carte para `DINE_IN` apaga os dois (a comanda paga na mesa).
 - O vínculo com o cliente (`customer.id`) não muda por esta rota.
+- Trocar `fulfillmentType` exige o módulo do **novo** atendimento, como na criação (ADR-0054 item 14, ADR-0058 item 1): no à la carte, `DINE_IN` → `A_LA_CARTE` e `DELIVERY`/`PICKUP` → `DELIVERY`; nas outras modalidades, o módulo delas. Sem ele → `403 ModuleNotEnabled` com `module`, antes da conferência da versão do `If-Match` (`409`) e das regras de nome e telefone. Editar sem trocar o atendimento não confere módulo.
 
 ### `POST /orders/{id}/items` — `orders.edit` [I][M]
 
@@ -2613,7 +2637,7 @@ Alertas pendentes **para quem chama**:
 { "eventIds": ["0192d6a0-0000-7000-8000-000000000b01"] }
 ```
 
-→ `204`. A ciência vale só para quem chama (RN-008.7), e repetir não dá erro. Ids de outro pedido → `422` em `eventIds`.
+→ `204`. A ciência vale só para quem chama (RN-008.7), e repetir não dá erro. Pedido inexistente ou de outro tenant → `404 NotFound` (antes de conferir os ids); ids de outro pedido → `422` em `eventIds`.
 
 O `summary` é montado no servidor a partir de `details`: `+1 Coca-Cola 350ml`, `−1 Coca-Cola 350ml`, `Marmita M: 2 → 3`, `Obs. de PF Frango grelhado: Sem salada`, `Obs. do pedido: ...`, `+ pesagem de 318 g`, `Pesagem de 318 g removida`, `Entrega ou retirada alterada`, `Pedido cancelado: <motivo>`.
 
@@ -2725,7 +2749,7 @@ Erros:
 
 ### `GET /orders/{id}/payments` — `orders.view`
 
-→ `200 { "items": [Payment] }`, incluindo os estornados.
+→ `200 { "items": [Payment] }`, incluindo os estornados. Pedido inexistente ou de outro tenant → `404 NotFound` (nunca lista vazia, ADR-0026).
 
 ### `GET /payments/{id}` — `orders.view` → `200 Payment`
 
@@ -3085,7 +3109,7 @@ Toda ação gera auditoria com `origin = PLATFORM_ADMIN`.
 - `reactivate`: `ACTIVE` até agora + 1 mês (pagamento confirmado fora do gateway); assinatura `CANCELED` → `422`.
 - `reason` com pelo menos 5 caracteres. Tenant inexistente → `404`.
 - `reprocess`: volta o evento para a fila (`processed_at = null`); o processador o aplica de novo, de forma idempotente.
-- `behaviors` (ADR-0054 item 5, EP-003 F-305): acrescenta um comportamento ao tenant, mediante aumento na assinatura combinado fora do app (Q-301). Remover não existe nesta fase. Os rótulos não mudam (o proprietário marca os do comportamento novo em "Dados do estabelecimento"). Comportamento já habilitado → `200` com o estado atual, sem auditoria nem evento. `behavior` ausente ou `reason` com menos de 5 caracteres → `422`; código fora da lista → `400`. Grava `tenant_behaviors` com `origin = PLATFORM_ADMIN` e o administrador em `enabled_by_user_id`, sobe a `version` do tenant, gera a auditoria `TenantBehaviorAdded` (`PLATFORM_ADMIN`, ator = o administrador), a entrada `TENANT` no feed e o evento `TenantModulesChanged` (§6.14), na mesma transação.
+- `behaviors` (ADR-0054 item 5, EP-003 F-305): acrescenta um comportamento ao tenant, mediante aumento na assinatura combinado fora do app (Q-301). Remover não existe nesta fase. Os rótulos não mudam (o proprietário marca os do comportamento novo em "Dados do estabelecimento"). Comportamento já habilitado → `200` com o estado atual, sem auditoria nem evento. `behavior` ausente ou `reason` com menos de 5 caracteres → `422`; código fora da lista → `400`. Grava `tenant_behaviors` com `origin = PLATFORM_ADMIN` e o administrador em `enabled_by_user_id`, sobe a `version` do tenant, gera a auditoria `TenantBehaviorAdded` (`PLATFORM_ADMIN`, ator = o administrador), a entrada `TENANT` no feed e o evento `TenantModulesChanged` (§6.14), na mesma transação. A gravação usa a sessão RLS do tenant da rota com `app.user_id` vazio (ADR-0025, complemento de 2026-11-23; 05 §5.12, grupo 2), e a resposta leva só o `TenantBehaviors` abaixo, sem outro dado do estabelecimento.
 
 `TenantBehaviors`:
 

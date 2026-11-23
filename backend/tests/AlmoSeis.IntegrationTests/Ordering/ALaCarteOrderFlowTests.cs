@@ -451,6 +451,43 @@ public sealed class ALaCarteOrderFlowTests(PostgresFixture db) : IDisposable
         }
     }
 
+    /// M3: trocar o atendimento do à la carte pelo PATCH exige o módulo do novo atendimento, como na criação (DINE_IN →
+    /// `A_LA_CARTE`, DELIVERY/PICKUP → `DELIVERY`). O tenant perde a lanchonete por SQL (só para o teste); editar sem
+    /// trocar o atendimento continua.
+    [Fact]
+    public async Task Changing_the_fulfillment_checks_the_module_of_the_new_one()
+    {
+        var s = await ShopAsync();
+        var comanda = await CreateAsync(s.Client, Comanda(Dish(s.XBurguer, null)));
+        var pickup = await CreateAsync(s.Client, Order("PICKUP", [Dish(s.XBurguer, null)], name: "Carla"));
+        await Sql(s.TenantId, """
+            DELETE FROM tenant_labels WHERE tenant_id = @t;
+            DELETE FROM tenant_behaviors WHERE tenant_id = @t;
+            INSERT INTO tenant_behaviors (tenant_id, behavior, origin, enabled_at) VALUES (@t, 'RESTAURANT', 'SYSTEM', now());
+            """);
+
+        var toPickup = await Problem(s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/orders/{comanda.Id()}",
+            new { fulfillmentType = "PICKUP", customerName = "Ana", customerPhone = "+5534999990000" }, comanda.Version()), HttpStatusCode.Forbidden);
+        toPickup.GetProperty("errorCode").GetString().ShouldBe("ModuleNotEnabled");
+        toPickup.GetProperty("module").GetString().ShouldBe("DELIVERY");
+
+        // Antes do If-Match: versão velha também recebe 403.
+        var toTable = await Problem(s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/orders/{pickup.Id()}",
+            new { fulfillmentType = "DINE_IN", tableLabel = "7" }, pickup.Version() + 5), HttpStatusCode.Forbidden);
+        toTable.GetProperty("module").GetString().ShouldBe("A_LA_CARTE");
+
+        var notes = await Problem(s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/orders/{comanda.Id()}", new { notes = "Sem pressa" }, comanda.Version()), HttpStatusCode.OK);
+        notes.GetProperty("fulfillmentType").GetString().ShouldBe("DINE_IN");
+        (await Scalar<string>(s.TenantId, "SELECT string_agg(fulfillment_type, ',' ORDER BY order_number) FROM orders WHERE tenant_id = @t"))
+            .ShouldBe("DINE_IN,PICKUP");
+
+        // Com a lanchonete de volta, a mesma troca passa.
+        await Sql(s.TenantId, "INSERT INTO tenant_behaviors (tenant_id, behavior, origin, enabled_at) VALUES (@t, 'SNACK_BAR', 'SYSTEM', now())");
+        var changed = await Problem(s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/orders/{comanda.Id()}",
+            new { fulfillmentType = "PICKUP", customerName = "Ana", customerPhone = "+5534999990000" }, notes.Version()), HttpStatusCode.OK);
+        changed.GetProperty("fulfillmentType").GetString().ShouldBe("PICKUP");
+    }
+
     /// Isolamento (ADR-0026): o prato, o combo e o pedido de A não existem para B.
     [Fact]
     public async Task Tenants_are_isolated()

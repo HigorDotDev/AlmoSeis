@@ -117,6 +117,8 @@ Em 2026-11-20, os ADRs 0044 a 0053 foram alinhados à implementação das fatias
 
 Complementados em 2026-11-22 (seção "Complementado por ADR-00xx" no próprio ADR, status mantido): 0005, 0017, 0020, 0021, 0024, 0025, 0028, 0038 (`Aceito`) e 0044, 0046, 0050 (`Proposto`; no 0050, nota no item 19).
 
+Complementado em 2026-11-23 (status mantido): 0025 (`Aceito`), com o padrão da ação do administrador que grava dentro de um tenant (sessão RLS do tenant, `app.user_id` vazio, auditoria `PLATFORM_ADMIN`, resposta mínima).
+
 ## Impacto no modelo do épico (§6)
 
 O modelo consolidado, com todos os campos, invariantes e o mapeamento épico → modelo, está em [`docs/04-modelo-dados.md`](../04-modelo-dados.md).

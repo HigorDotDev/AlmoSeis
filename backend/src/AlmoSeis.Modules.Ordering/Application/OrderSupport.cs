@@ -210,7 +210,7 @@ internal sealed class CustomerResolver(AppDbContext db, ITenantContext tenant, I
                     ?? throw BusinessException.Validation("customerAddressId", "Endereço não pertence a este cliente.");
             }
 
-            return new Resolved(customer.Id, command.CustomerName ?? customer.Name, command.CustomerPhone ?? customer.PhoneNumber, address);
+            return new Resolved(customer.Id, command.CustomerName ?? customer.Name, OrderingFormats.NormalizePhone(command.CustomerPhone) ?? customer.PhoneNumber, address);
         }
 
         if (command.CustomerAddressId is not null)
@@ -219,7 +219,8 @@ internal sealed class CustomerResolver(AppDbContext db, ITenantContext tenant, I
         }
 
         var name = string.IsNullOrWhiteSpace(command.CustomerName) ? null : command.CustomerName.Trim();
-        var phone = command.CustomerPhone;
+        // Mesmo número em qualquer formato → o mesmo cliente (o `BrazilianPhone` da página, 06 §6.9).
+        var phone = OrderingFormats.NormalizePhone(command.CustomerPhone);
         if (command.SaveCustomer)
         {
             if (name is null)

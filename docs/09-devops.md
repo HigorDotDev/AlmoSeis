@@ -85,6 +85,40 @@ Produção exige aprovação no Environment `production`. As migrations rodam **
 
 **Contração pendente:** 0003 (05 §5.17), na release seguinte à que pôs a API da 0003 em produção: preencher `accepted_at`/`fulfillment_status` nulos da janela do deploy, apertar `ck_orders_acceptance` e `ck_orders_fulfillment` e `ALTER TABLE orders ALTER COLUMN acceptance_status DROP DEFAULT`. 0009 (05 §5.17), na release seguinte à que pôs a API da 0009 em produção: preencher o `site_price` das bebidas visíveis e o `price_list = 'SITE'` dos pedidos `WEB` gravados na janela do deploy, criar `ck_products_beverage_site_price`, apertar `ck_orders_price_list` para `(origin = 'WEB') = (price_list = 'SITE')` e `ALTER TABLE orders ALTER COLUMN price_list DROP DEFAULT`. 0010 (05 §5.17), na release seguinte à que pôs a API da 0010 em produção: preencher o `parent_item_kind` dos `ADDON` filhos gravados na janela do deploy (o `UPDATE` da 0010 com `parent_item_kind IS NULL`) e apertar o ramo do `ADDON` em `ck_order_items_parent` para `parent_item_kind IS NOT NULL AND parent_item_kind IN ('MARMITA', 'PF')`. 0011 (05 §5.17), na release seguinte à que pôs a API da 0011 em produção, **condicionada**: se não houver entrega nem retirada `A_LA_CARTE` sem `customer_name` (gravada pela API da 0010), criar `ck_orders_a_la_carte_customer`; se houver, a regra fica só na aplicação e a contração é descartada.
 
+**Correção pós-deploy da 0008 (05 §5.17):** um tenant criado pela API anterior na janela do deploy (depois da migration, antes da revisão nova ativa) fica sem linha em `tenant_behaviors` e `tenant_labels`. A API nova já o trata como `RESTAURANT` e grava a linha na primeira escrita (07 §7.13), mas a correção não depende disso: **logo depois do smoke do deploy que pôs a API da 0008 em produção** (e em homolog), repetir a carga da 0008 com o login `almoseis_migrator`. Ela é idempotente pelo `NOT EXISTS`, então pode rodar mais de uma vez, e não precisa de migration nova. O rótulo só entra para quem tem `RESTAURANT` (a FK de `tenant_labels` exige o comportamento):
+
+```sql
+BEGIN;
+ALTER TABLE tenants NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE tenant_behaviors NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE tenant_labels NO FORCE ROW LEVEL SECURITY;
+INSERT INTO tenant_behaviors (tenant_id, behavior, origin, enabled_at)
+  SELECT t.id, 'RESTAURANT', 'SYSTEM', now() FROM tenants t
+   WHERE NOT EXISTS (SELECT 1 FROM tenant_behaviors b WHERE b.tenant_id = t.id);
+INSERT INTO tenant_labels (tenant_id, label, behavior, created_at)
+  SELECT t.id, 'RESTAURANT', 'RESTAURANT', now() FROM tenants t
+   WHERE NOT EXISTS (SELECT 1 FROM tenant_labels l WHERE l.tenant_id = t.id)
+     AND EXISTS (SELECT 1 FROM tenant_behaviors b WHERE b.tenant_id = t.id AND b.behavior = 'RESTAURANT');
+ALTER TABLE tenant_labels FORCE ROW LEVEL SECURITY;
+ALTER TABLE tenant_behaviors FORCE ROW LEVEL SECURITY;
+ALTER TABLE tenants FORCE ROW LEVEL SECURITY;
+COMMIT;
+-- Conferência: deve voltar 0.
+SELECT count(*) FROM tenants t WHERE NOT EXISTS (SELECT 1 FROM tenant_behaviors b WHERE b.tenant_id = t.id);
+```
+
+Se a conferência não voltar 0 (por exemplo, um tenant criado pela API anterior durante a própria execução, numa revisão antiga que ainda recebia tráfego), repetir o bloco. Depois que a revisão anterior sair de vez, não nasce mais tenant sem comportamento.
+
+### Ordem de deploy do EP-003
+
+O app antigo (sem o EP-003) recebe `422` em duas rotas das APIs do EP-003: o **cadastro** da fatia 1 exige `tenant.behavior` e `tenant.labels` (ADR-0054), e a **entrega de marmita** da fatia 4 exige `customerPhone` e `expectedPaymentMethod` (ADR-0059, Q-312 e Q-316). Por isso a **versão mínima do app** (ADR-0035: `App:MinSupportedAppVersion:ANDROID`/`:IOS`/`:WEB`, conferida pelo `AppVersionMiddleware`, que responde `426 AppVersionUnsupported`) precisa subir **na mesma release** que coloca em produção as APIs das fatias 1 e 4, e não numa release depois:
+
+1. Publicar o app com o EP-003 nas lojas (`mobile-release.yml`, tag `mobile-v*`) e a web do restaurante, e esperar a aprovação das lojas. A API anterior aceita o app novo.
+2. Na release do backend que leva as fatias 1 e 4, ajustar no Key Vault/configuração de produção as versões mínimas para a do passo 1, no mesmo deploy (antes do smoke).
+3. Rodar a correção pós-deploy da 0008 (acima).
+
+Subir só a API sem a versão mínima deixa o app antigo funcionando até o primeiro cadastro ou a primeira entrega de marmita, que falham com `422`. A estratégia (forçar a atualização, ou aceitar o corpo antigo por uma janela) está em aberto na Q-323 (`12-epico-ep003.md`).
+
 ### `mobile-ci.yml` — PR e push (paths `mobile/**`)
 
 `npm ci` → `npx tsc --noEmit` → `npx eslint .` → `npx jest --ci`.

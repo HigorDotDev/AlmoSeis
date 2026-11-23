@@ -64,7 +64,7 @@ O interceptor de conexão do EF (ADR-0026) executa a cada abertura de conexão:
 SELECT set_config('app.tenant_id', @tenantId, false), set_config('app.user_id', @userId, false);
 ```
 
-Na devolução da conexão ao pool, as variáveis são limpas (`RESET app.tenant_id; RESET app.user_id; RESET app.invitation_code`). A `app.push_token` da 0006 deixou de existir na 0007 (a liberação do token passou para a função `release_push_token`).
+`@userId` é o usuário da sessão, exceto na ação do administrador dentro de um tenant, que grava vazio (§5.12, grupo 2). Na devolução da conexão ao pool, as variáveis são limpas (`RESET app.tenant_id; RESET app.user_id; RESET app.invitation_code`). A `app.push_token` da 0006 deixou de existir na 0007 (a liberação do token passou para a função `release_push_token`).
 
 ```sql
 CREATE OR REPLACE FUNCTION app_tenant_id() RETURNS uuid
@@ -887,6 +887,7 @@ Quatro grupos de tabelas (04 §4.12):
 
 1. **Tenant:** `tenant_id = app_tenant_id()` para `almoseis_app`; acesso total para `almoseis_platform`.
 2. **Vínculo:** `tenant_employees` e `tenant_employee_roles` também liberam as linhas do próprio usuário (`app_user_id()`). Assim o login lista os estabelecimentos do usuário.
+   Na ação do administrador da plataforma dentro de um tenant (acréscimo de comportamento, ADR-0025 complementado em 2026-11-23), a sessão leva `app.tenant_id` do tenant da rota e `app.user_id` **vazio**: com o id do administrador, estas políticas (e a de `tenants`) abririam os estabelecimentos em que ele seja funcionário. Nenhuma política deste grupo fica aberta por `app.user_id` nessa sessão; as do grupo 1 só olham `app.tenant_id`.
 3. **Convite:** `employee_invitations` também libera o convite `PENDING` cujo código está em `app.invitation_code`. O aceite define esse código, lê o convite, passa a usar o `tenant_id` dele e só então grava.
 4. **Sem RLS:** `users`, `refresh_tokens` (identidade), `trial_claims`, `billing_webhook_events` (plataforma). O acesso é controlado por grants (§5.13).
 

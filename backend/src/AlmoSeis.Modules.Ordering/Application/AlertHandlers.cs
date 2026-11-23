@@ -82,6 +82,11 @@ internal sealed class AcknowledgeAlertsHandler(AppDbContext db, ITenantContext t
 {
     public async Task<bool> HandleAsync(AcknowledgeAlertsCommand command, CancellationToken cancellationToken)
     {
+        if (!await db.Set<Order>().AnyAsync(o => o.Id == command.OrderId, cancellationToken))
+        {
+            throw new NotFoundException("ORDER", command.OrderId);
+        }
+
         var ids = command.Request.EventIds.Distinct().ToArray();
         var known = await db.Set<OrderChangeEvent>()
             .Where(e => e.OrderId == command.OrderId && ids.Contains(e.Id))

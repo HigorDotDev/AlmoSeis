@@ -50,6 +50,13 @@ public interface ITenantContext
     /// `app.user_id` fica vazio, e a auditoria sai sem ator.
     bool IsAnonymous => Source is TenantSource.PublicSlug or TenantSource.TrackingToken;
 
+    /// Valor de `app.user_id` na sessão do banco (05 §5.2). É o `UserId`, exceto na ação do administrador dentro de um
+    /// tenant (`PlatformAdmin`): ali fica vazio, para as políticas do grupo 2 de 05 §5.12 (`tenants`, `tenant_employees`,
+    /// `tenant_employee_roles`, que também liberam as linhas do próprio usuário) não abrirem os vínculos que o
+    /// administrador tenha como funcionário de outros estabelecimentos (ADR-0025, complemento de 2026-11-23). O ator da
+    /// auditoria continua sendo o `UserId`.
+    Guid? SessionUserId => Source is TenantSource.PlatformAdmin ? null : UserId;
+
     /// Requisição autenticada: valores das claims do access token.
     void Initialize(Guid tenantId, Guid userId, Guid employeeId, Guid? sharedDeviceId, string? installationId);
 

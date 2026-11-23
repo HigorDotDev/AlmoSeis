@@ -13,7 +13,9 @@ namespace AlmoSeis.Modules.Identity.Application;
 /// POST /admin/tenants/{id}/behaviors (06 §6.15, ADR-0054 item 5). O administrador não tem tenant no token: o handler
 /// assume a sessão do tenant da rota (`InitializeForPlatformAdmin`) e grava com o papel da aplicação, para o acréscimo ter
 /// RLS, feed (`TENANT`) e outbox (`TenantModulesChanged`, Q-324) na mesma transação, como qualquer escrita do tenant.
-/// Auditoria `PLATFORM_ADMIN` com o administrador como ator.
+/// Auditoria `PLATFORM_ADMIN` com o administrador como ator. A sessão leva `app.user_id` vazio (`SessionUserId`): as
+/// políticas por usuário de 05 §5.12 (grupo 2) não abrem os vínculos do administrador em outros tenants (ADR-0025,
+/// complemento de 2026-11-23). A resposta leva só os comportamentos, rótulos e módulos.
 internal sealed class AddTenantBehaviorHandler(
     AppDbContext db,
     ITenantContext tenant,

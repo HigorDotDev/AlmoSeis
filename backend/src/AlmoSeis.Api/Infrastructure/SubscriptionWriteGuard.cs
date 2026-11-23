@@ -13,11 +13,16 @@ internal sealed class SubscriptionWriteGuardFilter(ITenantContext tenant, ISubsc
     /// `/api/v1/devices/push-token`: configuração do aparelho, não escrita do estabelecimento (ADR-0049).
     private static readonly string[] OpenPrefixes = ["/api/v1/auth", "/api/v1/admin", "/webhooks", "/api/v1/public", "/api/v1/devices/push-token"];
 
+    /// Leituras por POST (o corpo leva dado pessoal que não pode ir na URL): contam como leitura (06 §6.8).
+    private static readonly string[] ReadOnlyPosts = ["/api/v1/customers/lookup"];
+
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
         var request = context.HttpContext.Request;
         if (HttpMethods.IsGet(request.Method) || HttpMethods.IsHead(request.Method) || HttpMethods.IsOptions(request.Method)
-            || OpenPrefixes.Any(p => request.Path.StartsWithSegments(p)) || tenant.TenantId is not { } tenantId)
+            || OpenPrefixes.Any(p => request.Path.StartsWithSegments(p))
+            || ReadOnlyPosts.Any(p => request.Path.Equals(p, StringComparison.OrdinalIgnoreCase))
+            || tenant.TenantId is not { } tenantId)
         {
             await next();
             return;
