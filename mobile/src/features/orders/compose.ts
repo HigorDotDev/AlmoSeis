@@ -2,9 +2,11 @@
  * Formulários de pedido → corpo do `POST /orders` (06 §6.9) e prévia em centavos com os preços do cache.
  * A prévia é só prévia: o total oficial vem da API (ADR-0030).
  */
-import type { Address, CreateOrderBody, MarmitaSize, Menu, NewItemInput, Order, Product } from '@/api/types';
+import type { Address, CreateOrderBody, MarmitaSize, Menu, NewItemInput, Order, PaymentMethod, Product } from '@/api/types';
 import { formatBRL, toCents, type MoneyString } from '@/lib/money';
 import { previewKiloAmountCents } from '@/lib/weight';
+
+import { expectedPaymentBody } from './delivery';
 
 export interface AddonLine {
   productId: string;
@@ -41,8 +43,12 @@ export interface MarmitaForm {
   fulfillmentType: 'DELIVERY' | 'PICKUP';
   addressId: string | null;
   address: Address | null;
-  /** null = taxa padrão. */
+  /** null = taxa padrão; quem cria pode digitar outra (Q-315). */
   deliveryFee: MoneyString | null;
+  /** Forma prevista (ADR-0059 item 5): obrigatória na entrega, opcional na retirada. Não cria pagamento. */
+  expectedPaymentMethod: PaymentMethod | null;
+  /** "Troco para quanto", só com dinheiro. */
+  changeFor: MoneyString | null;
   lines: MarmitaLine[];
   beverages: Record<string, number>;
   notes: string;
@@ -70,6 +76,8 @@ export const emptyMarmitaForm = (): MarmitaForm => ({
   addressId: null,
   address: null,
   deliveryFee: null,
+  expectedPaymentMethod: null,
+  changeFor: null,
   lines: [],
   beverages: {},
   notes: '',
@@ -188,6 +196,8 @@ export function buildMarmitaBody(form: MarmitaForm, phoneE164: string | null): C
     tableLabel: null,
     tabNumber: null,
     notes: nullIfBlank(form.notes),
+    // Rascunho de antes da fatia 4 não tem os campos: vão `null`.
+    ...expectedPaymentBody({ expectedPaymentMethod: form.expectedPaymentMethod ?? null, changeFor: form.changeFor ?? null }),
     items: [...form.lines.map(marmitaLineItem), ...beverageItems(form.beverages)],
     weighings: [],
   };

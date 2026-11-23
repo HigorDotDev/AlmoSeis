@@ -11,7 +11,6 @@ import {
   Chip,
   ConfirmDialog,
   IconButton,
-  MoneyInput,
   Row,
   Screen,
   Section,
@@ -26,14 +25,17 @@ import { useDraft } from '@/features/drafts/useDraft';
 import { useCurrentMenu } from '@/features/menu/hooks';
 import { useSettings } from '@/features/session/hooks';
 import { formatBusinessDate } from '@/lib/dates';
-import { formatBRL } from '@/lib/money';
+import { formatBRL, fromCents } from '@/lib/money';
 import { newKey } from '@/lib/ids';
 import { toE164 } from '@/lib/phone';
 import { useIsOnline } from '@/stores/connectivity';
-import { usePermission, useSession } from '@/stores/session';
+import { paymentMethodNames } from '@/lib/strings';
+import { useSession } from '@/stores/session';
 
 import { MenuMissingCard } from '../components';
 import { beverageLines, buildMarmitaBody, emptyMarmitaForm, marmitaLineCents, marmitaLineLabel, previewMarmitaCents, priceBook, repeatOrder, type MarmitaForm, type MarmitaLine } from '../compose';
+import { changeForIssue, changeToCarryText, expectedPaymentIssue, fieldMessage } from '../delivery';
+import { AddressFields, DeliveryFeeField, ExpectedPaymentFields } from '../deliveryComponents';
 import { BeverageGrid, DraftOffer, SizeTiles, SubmitFooter } from '../formParts';
 import { useCreateOrder, useLastMarmitaOrder } from '../hooks';
 import { MarmitaBuilderSheet } from '../MarmitaBuilderSheet';
@@ -43,7 +45,6 @@ import { firstIssue, marmitaFormSchema } from '../schemas';
 export default function NewMarmitaScreen() {
   const timeZone = useSession((s) => s.me?.tenant.timeZone ?? 'America/Sao_Paulo');
   const online = useIsOnline();
-  const canEditFee = usePermission('orders.delivery-fee.edit');
   const sizes = useMarmitaSizes();
   const products = useProducts();
   const settings = useSettings();
@@ -56,7 +57,8 @@ export default function NewMarmitaScreen() {
   const [repeatNote, setRepeatNote] = useState<string | null>(null);
   const lastOrder = useLastMarmitaOrder(selected?.id ?? null);
   const [confirming, setConfirming] = useState(false);
-  const [issue, setIssue] = useState<string | null>(null);
+  // Depois do primeiro "Registrar", os problemas são recalculados a cada mudança (somem quando a pessoa corrige).
+  const [tried, setTried] = useState(false);
 
   const book = useMemo(() => priceBook(sizes.data, products.data), [sizes.data, products.data]);
   const activeSizes = useMemo(() => (sizes.data ?? []).filter((s) => s.isActive), [sizes.data]);
@@ -94,10 +96,17 @@ export default function NewMarmitaScreen() {
     setRepeatNote(r.dropped.length ? `Ficou de fora (não tem hoje): ${r.dropped.join(', ')}.` : null);
   };
 
-  const review = () => {
+  const methods = settings.data?.enabledPaymentMethods;
+  const payment = { expectedPaymentMethod: v.expectedPaymentMethod ?? null, changeFor: v.changeFor ?? null };
+  // Forma desabilitada e "troco para" abaixo da prévia: conferidos aqui; o servidor confere de novo (06 §6.9).
+  const check = () => {
     const parsed = marmitaFormSchema.safeParse(v);
-    setIssue(firstIssue(parsed));
-    if (parsed.success) setConfirming(true);
+    const payments = { method: expectedPaymentIssue(v.fulfillmentType, payment, methods), changeFor: changeForIssue(payment, preview) };
+    return { parsed, payments, first: firstIssue(parsed) ?? payments.method ?? payments.changeFor };
+  };
+  const review = () => {
+    setTried(true);
+    if (!check().first) setConfirming(true);
   };
 
   const submit = async () => {
@@ -109,6 +118,12 @@ export default function NewMarmitaScreen() {
 
   const errors = form.formState.errors;
   const delivery = v.fulfillmentType === 'DELIVERY';
+  const server = create.fieldErrors;
+  // Erros locais só depois do primeiro "Registrar", e os do `422` do servidor por campo.
+  const checked = tried ? check() : null;
+  const issue = checked?.first ?? null;
+  const localError = (path: string) => (checked && !checked.parsed.success ? (checked.parsed.error.issues.find((i) => i.path.join('.') === path)?.message ?? null) : null);
+  const changeLine = changeToCarryText({ ...payment, balance: fromCents(preview), isPaid: false });
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -119,7 +134,8 @@ export default function NewMarmitaScreen() {
           timeZone={timeZone}
           onResume={() => {
             const value = draft.resume();
-            if (value) form.reset(value);
+            // Rascunho de antes da fatia 4 não tem a forma prevista nem o troco.
+            if (value) form.reset({ ...emptyMarmitaForm(), ...value });
           }}
           onDiscard={() => void draft.discardOffer()}
         />
@@ -169,7 +185,11 @@ export default function NewMarmitaScreen() {
               const def = c?.addresses.find((a) => a.isDefault) ?? c?.addresses[0];
               set('addressId', def?.id ?? null);
             }}
-            errors={{ name: errors.customer?.name?.message, phone: errors.customer?.phone?.message }}
+            phoneRequired={delivery}
+            errors={{
+              name: errors.customer?.name?.message ?? localError('customer.name') ?? fieldMessage(server, 'customerName'),
+              phone: errors.customer?.phone?.message ?? localError('customer.phone') ?? fieldMessage(server, 'customerPhone'),
+            }}
           />
           {lastOrder.data ? (
             <Button
@@ -202,27 +222,34 @@ export default function NewMarmitaScreen() {
                 </Row>
               ) : null}
               {v.addressId === null ? (
-                <>
-                  <TextField label="Rua" value={v.address?.street ?? ''} onChangeText={(street) => set('address', { number: null, complement: null, neighborhood: null, reference: null, ...v.address, street })} />
-                  <Row>
-                    <View style={{ flex: 1 }}>
-                      <TextField label="Número" value={v.address?.number ?? ''} onChangeText={(number) => set('address', { street: '', complement: null, neighborhood: null, reference: null, ...v.address, number })} />
-                    </View>
-                    <View style={{ flex: 2 }}>
-                      <TextField label="Bairro" value={v.address?.neighborhood ?? ''} onChangeText={(neighborhood) => set('address', { street: '', number: null, complement: null, reference: null, ...v.address, neighborhood })} />
-                    </View>
-                  </Row>
-                  <TextField label="Complemento" value={v.address?.complement ?? ''} onChangeText={(complement) => set('address', { street: '', number: null, neighborhood: null, reference: null, ...v.address, complement })} />
-                  <TextField label="Referência" value={v.address?.reference ?? ''} onChangeText={(reference) => set('address', { street: '', number: null, neighborhood: null, complement: null, ...v.address, reference })} />
-                </>
+                <AddressFields
+                  value={v.address ?? { street: '', number: null, complement: null, neighborhood: null, reference: null }}
+                  onChange={(a) => set('address', a)}
+                  streetError={localError('address') ?? fieldMessage(server, 'deliveryAddress')}
+                />
               ) : null}
-              {canEditFee ? (
-                <MoneyInput label="Taxa de entrega" value={v.deliveryFee ?? settings.data?.defaultDeliveryFee ?? '0.00'} onChange={(fee) => set('deliveryFee', fee === settings.data?.defaultDeliveryFee ? null : fee)} />
-              ) : (
-                <Text muted>Taxa de entrega: {formatBRL(settings.data?.defaultDeliveryFee ?? '0.00')}</Text>
-              )}
+              {/* Q-315: quem cria digita a taxa na criação; depois, só `orders.delivery-fee.edit`. */}
+              <DeliveryFeeField value={v.deliveryFee} defaultFee={settings.data?.defaultDeliveryFee} onChange={(fee) => set('deliveryFee', fee)} error={fieldMessage(server, 'deliveryFee')} />
             </View>
           ) : null}
+        </Section>
+
+        {/* ADR-0059 item 5: forma prevista obrigatória na entrega (Q-316) e opcional na retirada (balcão). */}
+        <Section title="Pagamento">
+          <ExpectedPaymentFields
+            fulfillmentType={v.fulfillmentType}
+            value={payment}
+            onChange={(p) => {
+              set('expectedPaymentMethod', p.expectedPaymentMethod);
+              set('changeFor', p.changeFor);
+            }}
+            totalCents={preview}
+            methods={methods}
+            errors={{
+              method: localError('expectedPaymentMethod') ?? checked?.payments.method ?? fieldMessage(server, 'expectedPaymentMethod'),
+              changeFor: checked?.payments.changeFor ?? fieldMessage(server, 'changeFor'),
+            }}
+          />
         </Section>
 
         <TextField label="Observações do pedido" value={v.notes} onChangeText={(n) => set('notes', n)} multiline />
@@ -259,6 +286,9 @@ export default function NewMarmitaScreen() {
           { label: 'Atendimento', value: delivery ? 'Entrega' : 'Retirada' },
           ...v.lines.map((l) => ({ label: `${l.quantity}× ${marmitaLineLabel(l, book)}`, value: formatBRL(marmitaLineCents(book, l)) })),
           ...beverageLines(book, v.beverages),
+          ...(delivery ? [{ label: v.deliveryFee !== null ? 'Taxa de entrega (digitada)' : 'Taxa de entrega', value: formatBRL(v.deliveryFee ?? settings.data?.defaultDeliveryFee ?? '0.00') }] : []),
+          ...(payment.expectedPaymentMethod ? [{ label: 'Forma prevista', value: paymentMethodNames[payment.expectedPaymentMethod] }] : []),
+          ...(changeLine ? [{ label: 'Troco', value: changeLine }] : []),
           { label: 'Prévia do total', value: formatBRL(preview) },
         ]}
         warning={create.state === 'unknown' ? 'Não sabemos se o pedido foi registrado. Verificando antes de qualquer reenvio…' : create.error}

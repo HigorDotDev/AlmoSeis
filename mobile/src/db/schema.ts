@@ -47,7 +47,7 @@ export const MIGRATIONS: Record<number, string> = {
 };
 
 /** `kind` é texto livre no SQLite: um tipo novo não precisa de migração. */
-export type DraftKind = 'NEW_ORDER_MARMITA' | 'NEW_ORDER_PF' | 'NEW_ORDER_KILO' | 'NEW_ORDER_A_LA_CARTE' | 'ADD_ITEMS' | 'PAYMENT';
+export type DraftKind = 'NEW_ORDER_MARMITA' | 'NEW_ORDER_PF' | 'NEW_ORDER_KILO' | 'NEW_ORDER_A_LA_CARTE' | 'NEW_ORDER_DELIVERY' | 'ADD_ITEMS' | 'PAYMENT';
 
 export type PendingStatus = 'SENDING' | 'UNKNOWN' | 'FAILED';
 

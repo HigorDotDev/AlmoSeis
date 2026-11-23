@@ -30,6 +30,7 @@ import { formatTime } from '@/lib/dates';
 import { useBlockedBy } from '@/stores/pendingOps';
 import { usePermission, useSession } from '@/stores/session';
 
+import { ExpectedPaymentLine } from './deliveryComponents';
 import { FulfillmentActions } from './webOrderComponents';
 import { orderNumberLabel } from './webOrders';
 
@@ -70,6 +71,8 @@ export function OrderCard({ order }: { order: OrderSummary }) {
         {!canceled ? <FulfillmentBadge fulfillmentType={order.fulfillmentType} status={order.fulfillmentStatus} isReadyForPickup={order.isReadyForPickup} /> : null}
         {pending ? <SyncStatePill state="unknown" /> : null}
       </Row>
+      {/* ADR-0059 item 12: forma prevista e o troco que o motoboy leva. Não é pagamento: o selo financeiro não muda. */}
+      {!canceled && order.fulfillmentType !== 'DINE_IN' ? <ExpectedPaymentLine order={order} /> : null}
       <FulfillmentActions order={order} compact />
     </Card>
   );

@@ -41,6 +41,7 @@ import { useCanWrite, useSession } from '@/stores/session';
 
 import { itemWithChildrenCents } from '../aLaCarte';
 import { orderLabel } from '../components';
+import { changeToCarryText } from '../delivery';
 import { isDispatched } from '../fulfillment';
 import { summarizeOrder, useCancelOrder, useOrder, useRemoveItem, useRemoveWeighing, useUpdateItem } from '../hooks';
 import { AcceptanceCountdown, acceptanceOutcomeText, AcceptRejectActions, DistanceFeeLine, FulfillmentActions, PhoneLine, WebOrderPaymentInfo } from '../webOrderComponents';
@@ -101,7 +102,9 @@ function OrderHeader({ order: o, pending }: { order: Order; pending: boolean }) 
         {pending ? <SyncStatePill state="unknown" /> : null}
       </Row>
       {o.notes ? <Text>Obs.: {o.notes}</Text> : null}
-      {o.origin === 'WEB' ? <WebOrderPaymentInfo order={o} /> : null}
+      {/* Forma prevista: do site (ADR-0044 item 19) e do delivery por telefone (ADR-0059 item 5). Não é pagamento. */}
+      <WebOrderPaymentInfo order={o} />
+      <ChangeToCarry order={o} />
       {canceled && o.cancellation ? <Banner tone="danger" text={`Cancelado por ${o.cancellation.canceledBy.displayName}: ${o.cancellation.reason}`} /> : null}
       {o.pendingAlertCount > 0 ? (
         <Banner tone="warning" text="Este pedido mudou." action={{ label: 'Ver mudanças', onPress: () => router.push(`/orders/${o.id}/alerts`) }} />
@@ -109,6 +112,16 @@ function OrderHeader({ order: o, pending }: { order: Order; pending: boolean }) 
       {o.isPaid && !canceled ? <Banner tone="success" text="Pedido quitado. Para corrigir, estorne um pagamento." /> : null}
     </Card>
   );
+}
+
+/** "Levar troco para R$ 100,00 → troco R$ 43,00" (ADR-0059 item 12): `changeFor − balance`, só sem quitação. */
+function ChangeToCarry({ order: o }: { order: Order }) {
+  const text = o.cancellationStatus === 'ACTIVE' ? changeToCarryText(o) : null;
+  return text ? (
+    <Text testID="change-to-carry" style={{ fontWeight: '700' }}>
+      {text}
+    </Text>
+  ) : null;
 }
 
 /**
@@ -387,7 +400,7 @@ function FinancialBlock({ order: o }: { order: Order }) {
       {o.priceList === 'SITE' ? <Text variant="small" muted>Preços do site</Text> : null}
       <KeyValue label="Itens" value={formatBRL(o.itemsTotal)} />
       {o.weighings.length ? <KeyValue label="Pesagens" value={formatBRL(o.weighingsTotal)} /> : null}
-      {o.fulfillmentType === 'DELIVERY' ? <KeyValue label="Entrega" value={formatBRL(o.deliveryFee)} /> : null}
+      {o.fulfillmentType === 'DELIVERY' ? <KeyValue label={o.deliveryFeeSource === 'MANUAL' ? 'Entrega (taxa digitada)' : 'Entrega'} value={formatBRL(o.deliveryFee)} /> : null}
       <KeyValue label="Total" value={formatBRL(o.totalAmount)} strong />
       <KeyValue label="Pago" value={formatBRL(o.paidAmount)} />
       <KeyValue label="Saldo" value={formatBRL(o.balance)} strong color={o.isPaid ? c.success : c.danger} />

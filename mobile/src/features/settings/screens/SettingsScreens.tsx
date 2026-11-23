@@ -349,6 +349,7 @@ const kindNames: Record<string, string> = {
   NEW_ORDER_PF: 'Nova mesa (PF)',
   NEW_ORDER_KILO: 'Nova comanda (quilo)',
   NEW_ORDER_A_LA_CARTE: 'Nova comanda (à la carte)',
+  NEW_ORDER_DELIVERY: 'Novo pedido por telefone',
   ADD_ITEMS: 'Inclusão de itens',
   PAYMENT: 'Pagamento',
 };
@@ -358,6 +359,7 @@ const resumeRoute: Record<string, (d: Draft) => string> = {
   NEW_ORDER_PF: () => '/orders/new/pf',
   NEW_ORDER_KILO: () => '/orders/new/kilo',
   NEW_ORDER_A_LA_CARTE: () => '/orders/new/a-la-carte',
+  NEW_ORDER_DELIVERY: () => '/orders/new/delivery',
   ADD_ITEMS: (d) => `/orders/${d.targetId}/add-items`,
   PAYMENT: (d) => `/orders/${d.targetId}/pay`,
 };

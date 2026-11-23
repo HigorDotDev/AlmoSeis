@@ -41,7 +41,7 @@ mobile/
         marmitas.tsx  salao.tsx  delivery.tsx  pedidos.tsx  fechamento.tsx
       business-day/open.tsx
       orders/
-        new/marmita.tsx  new/pf.tsx  new/kilo.tsx  new/a-la-carte.tsx   # comanda à la carte (EP-003 fatia 3)
+        new/marmita.tsx  new/pf.tsx  new/kilo.tsx  new/a-la-carte.tsx  new/delivery.tsx   # comanda à la carte (EP-003 fatia 3); pedido por telefone (fatia 4)
         [id]/index.tsx  [id]/add-items.tsx  [id]/weighings.tsx  [id]/pay.tsx
         [id]/history.tsx  [id]/alerts.tsx  [id]/edit.tsx
       closing/finalize.tsx  closing/cash-movement.tsx  closing/history.tsx  closing/[id].tsx  closing/monthly.tsx
@@ -342,7 +342,7 @@ As abas saem de `visibleTabs(me)` (`features/tenant/establishment.ts`): **só** 
 |---|---|---|
 | Marmitas | `MARMITA` + `orders.view` | Card "Abrir expediente" (`cash.open`) ou "Peça para o caixa abrir o expediente" |
 | Salão | (`PF`, `KILO` ou `A_LA_CARTE`) + `orders.view` | idem (PF, Quilo e Comandas; o segmentado continua visível). O "Prepare seu restaurante" só aparece com o módulo `MARMITA` |
-| Delivery | `DELIVERY` + `orders.view` | — (fatia 4; hoje só o estado "Disponível em breve") |
+| Delivery | `DELIVERY` + `orders.view` | idem (card "Abrir expediente" ou "Peça para o caixa"). Ver "Aba Delivery" em §8.9 (EP-003 fatia 4) |
 | Pedidos / Cozinha | `production.view` | "Nenhum expediente aberto" |
 | Fechamento | `closing.view` | Histórico de fechamentos + "Abrir expediente" |
 
@@ -432,14 +432,37 @@ Formulário de uma página, **marmita primeiro** (`docs/10-ux.md` D5). O rascunh
 3. **Cliente:**
    - `CustomerPicker`: busca por telefone ou nome (`/customers?search=`), mostra as pendências do cliente ("Deve R$ 35,00");
    - com cliente salvo escolhido: **"Repetir último pedido"** — `GET /orders?customerId=&allDays=true&orderType=MARMITA&limit=1` e `GET /orders/{id}`; as marmitas e bebidas viram linhas do formulário, sem o que não está no cardápio de hoje ou não existe mais (avisa o que ficou de fora). Os preços são os de hoje;
-   - ou nome e telefone livres + "Salvar cliente" (`saveCustomer`).
+   - ou nome e telefone livres + "Salvar cliente" (`saveCustomer`). Com o telefone completo (E.164) e nenhum cadastro escolhido, `GET /customers/by-phone` (`['customers', 'byPhone', e164]`) oferece "Este telefone é de um cliente cadastrado · Usar este cliente" (escolhe o cadastro e os endereços salvos, Q-313; nada muda sozinho); telefone novo: "o cliente é cadastrado pelo telefone ao registrar, sem endereço salvo" (o servidor vincula ou cria pelo telefone, ADR-0059 item 14);
+   - **na entrega (marmita por telefone, Q-312)** o telefone é obrigatório ("Informe o telefone da entrega."); na retirada (balcão) continua "Telefone (opcional)".
 4. **Atendimento:** Retirada / Entrega. Na entrega:
-   - escolher um endereço salvo ou digitar um;
-   - taxa de entrega pré-preenchida com o padrão, editável só com `orders.delivery-fee.edit`.
+   - escolher um endereço salvo ou digitar um (rua, número, bairro, complemento, referência; os endereços salvos continuam, Q-313);
+   - **taxa de entrega** (`DeliveryFeeField`): começa com a padrão de `['settings']` e **quem cria pode digitar outra** (Q-315; antes exigia `orders.delivery-fee.edit`). Igual à padrão vai `deliveryFee: null`; diferente, o valor ("Taxa digitada (a padrão é R$ 4,00). Depois de registrar, só gerente ou dono muda.").
+4a. **Pagamento** (`ExpectedPaymentFields`, ADR-0059 item 5): forma prevista em chips, só as habilitadas (`enabledPaymentMethods`). **Obrigatória na entrega** ("Escolha a forma de pagamento prevista da entrega."), opcional na retirada (chip "Não informar"). Com dinheiro, "Troco para quanto?": "Sem troco", as três próximas cédulas e o `MoneyInput` "Troco para (opcional)", com "Levar troco: R$ 43,00"; abaixo da prévia → "O troco precisa ser para pelo menos R$ 57,00 (o total)." e não confirma. "É só para o entregador: nada fica pago." O corpo leva `expectedPaymentMethod` e `changeFor` (este só com `CASH` e valor; zero vira `null`). Rascunho antigo sem os campos é completado com `null` ao continuar.
 5. **Observações do pedido.**
 6. **Resumo fixo no rodapé:** "Prévia: R$ 55,00", calculada em centavos com os preços do cache, e o botão "Registrar R$ 55,00" → Confirma → `POST /orders` [I].
 
 Sucesso → vai para `orders/[id]`, com o toast "Pedido #12 registrado".
+
+Os problemas aparecem depois do primeiro "Registrar" e são recalculados a cada mudança (somem ao corrigir). O Confirma mostra a taxa ("(digitada)"), a forma prevista e o troco. `422 ValidationFailed` do servidor aparece no campo (`customerName`, `customerPhone`, `deliveryAddress`, `deliveryFee`, `expectedPaymentMethod`, `changeFor`); `422 PaymentMethodDisabled` → "Essa forma de pagamento está desabilitada." e as formas (`['settings']`) recarregam.
+
+### Aba Delivery — `(tabs)/delivery` (EP-003 fatia 4, ADR-0059 itens 10 a 12, RF-315)
+
+- **Dados:** `GET /orders?orderType=A_LA_CARTE&fulfillmentType=DELIVERY&fulfillmentType=PICKUP` do expediente aberto (o `qs` repete o parâmetro de lista), com `fulfillmentType` de um só valor no filtro *Entrega*/*Retirada* e `fulfillmentStatus` nos chips (*Todos / Pendentes / Saiu para entrega / Entregues / Retirados*; o status que não existe no atendimento escolhido some e o filtro volta a *Todos*). Telefone (`origin: APP`) e site aceitos (`WEB`, selo "Site") na mesma lista.
+- **"Novos do site"** no topo: o mesmo `NewWebOrdersSection` do EP-002, com `filters` = o escopo da aba (`['orders', 'list', 'awaiting', filtros]`, `acceptanceStatus=AWAITING_ACCEPTANCE`). A aba Marmitas passa `orderType=MARMITA`; a cozinha e o título da aba do navegador continuam com todos.
+- **Card:** o `OrderCard` (número, cliente, total, `PaymentBadge`, `ProductionBadge`, `FulfillmentBadge`, o próximo passo do atendimento de `fulfillment.ts`) mais a linha da forma prevista `ExpectedPaymentLine`: "Paga com dinheiro · Levar troco para R$ 100,00 → troco R$ 43,00" (`changeFor − balance`; o troco some com o pedido quitado). A linha vale para toda entrega/retirada, inclusive na aba Marmitas.
+- **FAB "Novo pedido"** (`orders.create`) → `orders/new/delivery`.
+
+### Pedido por telefone — `orders/new/delivery` (EP-003 fatia 4, ADR-0059)
+
+Lógica em `features/orders/delivery.ts` (sem plataforma), peças em `deliveryComponents.tsx`; itens com o mesmo cardápio e a mesma folha de montagem da comanda à la carte (`FixedMenuPicker`, `ALaCarteLineSheet`, `ALaCarteLineCard`).
+
+1. **Telefone primeiro** (máscara BR). Completo → `GET /customers/by-phone?phoneNumber=%2B55…`: com cadastro, "Cliente cadastrado: Carla Souza" (e "Deve R$ X" se houver), e o **nome é preenchido uma vez, só se o campo estiver vazio**; nome digitado diferente → "O pedido vai com o nome digitado. O cadastro continua "Carla Souza" (muda só em Clientes)." (Q-314). Sem cadastro: "Telefone novo: o cliente é cadastrado ao registrar o pedido."
+2. **Nome** (obrigatório).
+3. **Entrega / Retirada.** Entrega: card "Endereço do último pedido" com "Usar endereço do último pedido" (`lastDeliveryAddress`, Q-313), os campos do endereço (rua obrigatória) e a taxa (`DeliveryFeeField`, como na marmita). Retirada: "sem endereço e sem taxa".
+4. **Itens** do cardápio fixo, preço de balcão.
+5. **Pagamento** (`ExpectedPaymentFields`, como na marmita): forma obrigatória na entrega, opcional na retirada; troco ≥ total.
+6. **Observações.** Rodapé "Registrar R$ 57,00" → Confirma (cliente e telefone, atendimento, endereço, itens, taxa, forma prevista, troco, prévia; "A forma prevista não registra pagamento.") → `POST /orders` [I] com `orderType: A_LA_CARTE`, `customerId: null`, `saveCustomer: false`, `customerAddressId: null`, `deliveryAddress` (só na entrega), `deliveryFee` (`null` = padrão; `null` na retirada), `expectedPaymentMethod` e `changeFor`. O pedido nasce aceito, com número, e vai para a cozinha.
+- **Rascunho e idempotência:** rascunho `NEW_ORDER_DELIVERY` ("Novo pedido por telefone" em Rascunhos) e `useCreateOrder` (chave, pendência, resultado desconhecido por `/operations` antes de reenviar). Erros como na marmita, mais os da comanda (`ProductUnavailable`, `ModuleNotEnabled` com `DELIVERY`).
 
 ### Aba Salão — `(tabs)/salao`
 
@@ -499,6 +522,7 @@ Segue o fluxo do PF (ADR-0058 item 5), com itens **só do cardápio fixo** e pre
   - "Editar dados" → `orders/[id]/edit` (`PATCH /orders/{id}` [M]);
   - "Histórico" → `orders/[id]/history`;
   - menu ⋯: "Cancelar pedido" (`orders.cancel`, motivo obrigatório; com pagamentos, explica que é preciso estornar antes).
+- **Delivery por telefone (EP-003 fatia 4):** o cabeçalho mostra a forma prevista de qualquer pedido ("Vai pagar em dinheiro, troco para R$ 100,00", agora também nos do app) e, com dinheiro e saldo, "Levar troco para R$ 100,00 → troco R$ 43,00" (`changeFor − balance`). No bloco financeiro, "Entrega (taxa digitada)" quando `deliveryFeeSource = MANUAL`. "Editar dados" vale também para o à la carte de entrega/retirada (cliente, telefone, entrega ↔ retirada, endereço). A **taxa depois de registrado** só fica editável com `orders.delivery-fee.edit` (Q-315) e só vai no `PATCH` quando muda (o Confirma mostra "R$ 5,00 → R$ 7,00"); sem a permissão, "Taxa de entrega: R$ 5,00. Depois de registrado, só gerente ou dono muda a taxa." e o campo não vai. `403 PermissionDenied` → "Você não tem permissão para isso. Peça a um gerente."
 - **Pedido pago:** itens e valores ficam em modo leitura, com a faixa "Pedido quitado. Para corrigir, estorne um pagamento."
 - **Alertas:** com `pendingAlertCount > 0`, a faixa "Este pedido mudou" leva a `orders/[id]/alerts`, que mostra as mudanças (`summary`/`details`) e o botão "Ciente" (`POST …/alerts/acknowledge`).
 
@@ -513,6 +537,7 @@ Segue o fluxo do PF (ADR-0058 item 5), com itens **só do cardápio fixo** e pre
 
   Cada parcela vira um pagamento separado com `label` "Pessoa N", confirmado um a um. Cada um é uma `useCriticalMutation` própria e usa a versão devolvida pelo anterior.
 - "Confirmar recebimento" → Confirma ("Receber R$ 35,00 em dinheiro do pedido #12? Troco R$ 15,00") → `POST /orders/{id}/payments` [I][M].
+- **Forma prevista** (site ou telefone, ADR-0059 item 8): vem **pré-selecionada** como sugestão, se estiver habilitada, com "Forma prevista: Dinheiro, troco para R$ 100,00. Confira o que chegou antes de confirmar."; o "troco para" vira mais um atalho de "Cliente deu". Nada é registrado sem o Confirma: a forma prevista nunca cria pagamento.
 - **Pedido de outro dia** (fiado, RF-011): a confirmação avisa "Pedido de 26/10. O recebimento entra no caixa de hoje."
 - **Estornar** (lista de pagamentos, `payments.reverse`): motivo → Confirma → `POST /payments/{id}/reverse` [I][M].
 
@@ -697,6 +722,7 @@ Segue o fluxo do PF (ADR-0058 item 5), com itens **só do cardápio fixo** e pre
 | Pedido à la carte (EP-003 fatia 3) | `aLaCarte.test.tsx` (fetch simulado; ids do exemplo literal do `Order` à la carte do 06 §6.9, preços do `GET /fixed-menu` do 06 §6.5): Açaí 500 ml + Granola = R$ 20,00 e o `FIXED_DISH` do contrato; tamanho obrigatório e um só tamanho à venda já escolhido; bebida com acréscimo e sabor obrigatório; 2 combos com bacon e Coca Zero = R$ 73,00 com só as partes com escolha em `parts`; corpo `A_LA_CARTE`/`DINE_IN` e mesa ou comanda obrigatória; motivo do combo fora de venda; alvos do adicional depois (prato e parte de prato) com o multiplicador. Telas: abrir comanda montando prato (tamanho + adicional + observação), bebida (sabor, pausado desabilitado) e combo (adicional e observação no prato, sabor na bebida, quantidade) → `POST /orders` com `Idempotency-Key` e o corpo inteiro; prato, tamanho e combo indisponíveis desabilitados com o motivo; `422 ProductUnavailable` com o `detail`, cardápio recarregado e sem pendência; `403 ModuleNotEnabled`; detalhe com a árvore (partes, adicionais, acréscimo, R$ 73,00), parte de bebida sem ação; "Remover combo" → `DELETE` do `COMBO` com `If-Match`; parte de prato só com observação; `GROUP_ADDON` numa parte de combo (R$ 8,00) com `If-Match` + `Idempotency-Key`; `409` com o `current` e sem reenvio; card da cozinha do exemplo do 06; fechamento com "À la carte" e "Vendido pelo site", e o restaurante sem a linha zerada |
 | Comportamento e módulos (EP-003 fatia 1) | `establishment.test.tsx`: abas do restaurante, da lanchonete, dos dois e de quem só tem `production.view` ("Cozinha"/"Pedidos"); `me` antigo sem `modules`; sub-abas do Salão e o Salão da lanchonete com as comandas à la carte (`orderType=A_LA_CARTE`), sem sub-abas e com "Abrir comanda"; última aba que deixou de existir; menu sem os cadastros do restaurante e com "Cardápio" na lanchonete; lista fixa de rótulos e a validação; cadastro sem tipo, sem rótulo, só os rótulos do tipo, troca de tipo limpa, corpo com `behavior` e `labels`; "Dados do estabelecimento" com o tipo só leitura, troca de rótulos com `If-Match`, sem rótulo não salva, leitura sem `settings.manage`, `409` sem reenvio; `TenantModulesChanged` → `GET /auth/me` → abas novas; entrada `TENANT` no feed; mensagem do `ModuleNotEnabled` e o aviso do cliente |
 | Push dos pedidos do site (EP-002 F-209) | `push.test.tsx` (`expo-notifications` e `expo-constants` simulados, exemplo literal do 06 §6.3): leitura do `data` (só `kind` conhecido e `orderId` UUID); decisão do toque (sem sessão espera, outro tenant descarta, toque velho descarta); corpo do `PUT` e resposta sem token; sem repetir com os mesmos dados e de novo com outro funcionário (PIN) ou token novo; sem permissão não registra e apaga o registro anterior; sem `projectId` não pede token, avisa uma vez e a tela diz o motivo; chave "Avisar pedidos do site" no `PUT`; `receivesWebOrders = false`; registro ao entrar e na troca de token; `DELETE` no "Encerrar sessão"; explicação antes do pedido do sistema, "Agora não", negada com atalho para as configurações, sem `orders.accept` não aparece; primeiro plano suprimido e canal `web-orders` com o som; toque abre o pedido, outro tenant ignorado, app fechado sem sessão abre depois do login, a mesma notificação uma vez só; `notifications.web.ts` no-op. **O push de verdade não foi testado** (exige `eas init`, credenciais FCM/APNs e o build novo) |
+| Delivery por telefone (EP-003 fatia 4) | `delivery.test.tsx` (fetch simulado; exemplo "À la carte, entrega por telefone" do 06 §6.9, R$ 57,00 com troco para R$ 100,00): troco ≥ total (igual vale, só com dinheiro); forma obrigatória na entrega, opcional na retirada, dentro das habilitadas; "Levar troco para R$ 100,00 → troco R$ 43,00"; erro de campo do servidor; corpo do contrato (sem `customerId`/`saveCustomer`, endereço só no pedido) e da retirada; `qs` com `fulfillmentType` repetido e `fulfillmentStatus`; marmita: entrega exige telefone e forma, retirada não, corpo com forma e troco. Telas: telefone → `by-phone` (`%2B`) preenche o nome, "usar endereço do último pedido", taxa padrão → digitada, troco abaixo do total recusado e corrigido, Confirma, `POST` com `Idempotency-Key` e o corpo inteiro; nome digitado não é sobrescrito; sem telefone não confirma; telefone novo; retirada sem endereço; `422 PaymentMethodDisabled` recarrega as formas, sem pendência; `422` em `customerPhone` no campo; aba Delivery com selo "Site" só no do site, troco no card, "Novos do site" com o escopo da aba, filtros na query e FAB; marmita entrega (telefone, Pix, taxa digitada sem a permissão) e retirada (opcionais); detalhe com o troco e "Entrega (taxa digitada)"; edição sem `orders.delivery-fee.edit` (sem o campo e sem `deliveryFee` no `PATCH`, com `If-Match`) e com ela (`deliveryFee` e `403 PermissionDenied`); Receber com a forma prevista pré-selecionada, sem escrita |
 | E2E (Maestro, emulador Android de entrada) | 1) cadastro → abrir expediente → marmita com bebida → receber em dinheiro com troco → fechar com diferença e justificativa; 2) desligar a rede no meio do "Receber" → religar → app resolve sem duplicar; 3) PIN no aparelho compartilhado + inatividade |
 
 Critério de pronto do mobile (`docs/02-padroes.md` §2.6): fluxos E2E 1 e 2 passando em homolog antes de cada release para as lojas.

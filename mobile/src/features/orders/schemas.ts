@@ -20,6 +20,8 @@ export const marmitaFormSchema = z
     addressId: z.string().nullable(),
     address: address.nullable(),
     deliveryFee: z.string().nullable(),
+    expectedPaymentMethod: z.enum(['CASH', 'PIX', 'CARD']).nullish(),
+    changeFor: z.string().nullish(),
     lines: z.array(
       z.object({
         key: z.string(),
@@ -50,6 +52,10 @@ export const marmitaFormSchema = z
     }
     if (f.fulfillmentType === 'DELIVERY') {
       if (f.customer.name.trim() === '') ctx.addIssue({ code: 'custom', path: ['customer', 'name'], message: 'Informe o cliente da entrega.' });
+      // Q-312: na entrega de marmita (o "por telefone"), o telefone é obrigatório; na retirada (balcão), não.
+      if (f.customer.phone.trim() === '') ctx.addIssue({ code: 'custom', path: ['customer', 'phone'], message: 'Informe o telefone da entrega.' });
+      // Q-316: forma prevista obrigatória na entrega.
+      if (f.expectedPaymentMethod == null) ctx.addIssue({ code: 'custom', path: ['expectedPaymentMethod'], message: 'Escolha a forma de pagamento prevista da entrega.' });
       if (!f.addressId && (!f.address || f.address.street.trim() === '')) {
         ctx.addIssue({ code: 'custom', path: ['address'], message: 'Informe o endereço de entrega.' });
       }

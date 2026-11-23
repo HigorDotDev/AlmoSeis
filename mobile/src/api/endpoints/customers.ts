@@ -1,9 +1,11 @@
 import { apiRequest, qs } from '../client';
-import type { CreateCustomerBody, Customer, CustomerAddressInput, Page, PendingOrders, Uuid } from '../types';
+import type { CreateCustomerBody, Customer, CustomerAddressInput, CustomerByPhone, Page, PendingOrders, Uuid } from '../types';
 
 /** 06 §6.8. */
 export const customersApi = {
   search: (f: { search?: string; limit?: number; cursor?: string }) => apiRequest<Page<Customer>>('GET', `/customers${qs(f)}`),
+  /** Telefone em E.164; `qs` codifica o `+` como `%2B` (EP-003 fatia 4). */
+  byPhone: (phoneNumber: string) => apiRequest<CustomerByPhone>('GET', `/customers/by-phone${qs({ phoneNumber })}`),
   get: (id: Uuid) => apiRequest<Customer>('GET', `/customers/${id}`),
   create: (body: CreateCustomerBody) => apiRequest<Customer>('POST', '/customers', { body }),
   update: (id: Uuid, body: { name?: string; phoneNumber?: string | null; notes?: string | null }, version: number) =>

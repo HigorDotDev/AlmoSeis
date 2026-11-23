@@ -73,10 +73,10 @@ export function useOrderHistory(id: string) {
  * Fica sob `['orders', 'list']`: `OrderAwaitingAcceptance`/`OrderAccepted`/`OrderRejected` (entityType `ORDER`) e o
  * sync a invalidam. O intervalo é só uma rede de segurança para a expiração feita pelo job.
  */
-export function useAwaitingOrders(enabled = true) {
+export function useAwaitingOrders(enabled = true, filters: OrderFilters = {}) {
   return useQuery({
-    queryKey: qk.awaitingOrders,
-    queryFn: async () => (await ordersApi.list({ acceptanceStatus: 'AWAITING_ACCEPTANCE', limit: 50 })).data.items,
+    queryKey: qk.awaitingOrders(filters),
+    queryFn: async () => (await ordersApi.list({ ...filters, acceptanceStatus: 'AWAITING_ACCEPTANCE', limit: 50 })).data.items,
     enabled,
     staleTime: 15_000,
     refetchInterval: 30_000,
@@ -123,7 +123,14 @@ export function applyOrderBalance(client: QueryClient, balance: OrderBalance): v
 
 export function describeOrder(body: CreateOrderBody, previewCents: number | null): string {
   const who = body.customerName ?? (body.tableLabel ? `Mesa ${body.tableLabel}` : body.tabNumber ? `Comanda ${body.tabNumber}` : null);
-  const what = body.orderType === 'A_LA_CARTE' ? 'Comanda à la carte' : `Pedido de ${orderTypeNames[body.orderType].toLowerCase()}`;
+  const what =
+    body.orderType !== 'A_LA_CARTE'
+      ? `Pedido de ${orderTypeNames[body.orderType].toLowerCase()}`
+      : body.fulfillmentType === 'DINE_IN'
+        ? 'Comanda à la carte'
+        : body.fulfillmentType === 'DELIVERY'
+          ? 'Entrega à la carte'
+          : 'Retirada à la carte';
   return [what, who, previewCents !== null ? formatBRL(previewCents) : null].filter(Boolean).join(' — ');
 }
 
@@ -150,6 +157,8 @@ export function useCreateOrder(options: { draftId: string | null; previewCents: 
     },
     onRejected: (error) => {
       refreshMenusOnUnavailable(client, error);
+      // A forma prevista saiu das habilitadas enquanto a tela estava aberta: recarrega as formas (06 §6.9).
+      if (error.is('PaymentMethodDisabled')) void client.invalidateQueries({ queryKey: qk.settings });
     },
     successMessage: (order) => `Pedido #${order.orderNumber} registrado`,
   });

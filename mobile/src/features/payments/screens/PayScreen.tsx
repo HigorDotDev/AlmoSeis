@@ -60,7 +60,9 @@ function PayForm({ order: o }: { order: Order }) {
   const methods = settings.data?.enabledPaymentMethods ?? ['CASH', 'PIX', 'CARD'];
   const balanceCents = toCents(o.balance);
 
-  const [method, setMethod] = useState<PaymentMethod>(methods[0] ?? 'CASH');
+  // A forma prevista (site ou telefone, ADR-0059 item 8) vem pré-selecionada como sugestão; nada é pago sem o Confirma.
+  const expected = o.expectedPaymentMethod && methods.includes(o.expectedPaymentMethod) ? o.expectedPaymentMethod : null;
+  const [method, setMethod] = useState<PaymentMethod>(expected ?? methods[0] ?? 'CASH');
   const [typedAmount, setAmount] = useState<string | null>(null);
   const [received, setReceived] = useState<string | null>(null);
   const [split, setSplit] = useState<SplitMode>('NONE');
@@ -135,6 +137,12 @@ function PayForm({ order: o }: { order: Order }) {
       {!o.isPaid && o.cancellationStatus === 'ACTIVE' ? (
         <>
           <Section title="Forma de pagamento">
+            {o.expectedPaymentMethod ? (
+              <Text variant="small" muted testID="expected-payment-hint">
+                Forma prevista: {paymentMethodNames[o.expectedPaymentMethod]}
+                {o.expectedPaymentMethod === 'CASH' && o.changeFor ? `, troco para ${formatBRL(o.changeFor)}` : ''}. Confira o que chegou antes de confirmar.
+              </Text>
+            ) : null}
             <Row>
               {methods.map((m) => (
                 <Pressable
@@ -198,6 +206,10 @@ function PayForm({ order: o }: { order: Order }) {
               </Text>
               <Row style={{ flexWrap: 'wrap' }}>
                 <Chip label="Exato" selected={received !== null && toCents(received) === amountCents} onPress={() => setReceived(amount)} />
+                {/* O "troco para" informado no pedido vira um atalho (sem preencher sozinho). */}
+                {o.changeFor && toCents(o.changeFor) > amountCents && !cashSuggestions(amountCents).includes(toCents(o.changeFor)) ? (
+                  <Chip label={formatBRL(o.changeFor).replace(',00', '')} selected={received !== null && toCents(received) === toCents(o.changeFor)} onPress={() => setReceived(o.changeFor)} />
+                ) : null}
                 {cashSuggestions(amountCents).map((n) => (
                   <Chip key={n} label={formatBRL(n).replace(',00', '')} selected={received !== null && toCents(received) === n} onPress={() => setReceived(fromCents(n))} />
                 ))}

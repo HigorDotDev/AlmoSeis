@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { errorMessage, isApiError } from '@/api/errors';
-import type { EstimatedReadyMinutes, Order, OrderSummary } from '@/api/types';
+import type { EstimatedReadyMinutes, Order, OrderFilters, OrderSummary } from '@/api/types';
 import {
   Banner,
   Button,
@@ -62,13 +62,15 @@ export function useNow(intervalMs = 1000): number {
 
 /**
  * Faixa "Novos do site (n)" (ADR-0046 item 21): para quem tem `orders.view`; os botões só para `orders.accept`.
- * Sem pedidos aguardando, não ocupa espaço. `collapsible` (cozinha): começa recolhida, só com a contagem.
+ * Sem pedidos aguardando, não ocupa espaço. `collapsible` (cozinha): começa recolhida, só com a contagem. Sem
+ * `filters` (cozinha), todos os pedidos do site aguardando.
  */
-export function NewWebOrdersSection({ collapsible = false, style }: { collapsible?: boolean; style?: StyleProp<ViewStyle> }) {
+export function NewWebOrdersSection({ collapsible = false, style, filters }: { collapsible?: boolean; style?: StyleProp<ViewStyle>; filters?: OrderFilters }) {
   const c = useColors();
   const canView = usePermission('orders.view');
   const day = useCurrentBusinessDay();
-  const awaiting = useAwaitingOrders(canView && !!day.data);
+  // `filters`: a aba Delivery só mostra o à la carte de entrega/retirada, e a aba Marmitas, a marmita (ADR-0059 item 10).
+  const awaiting = useAwaitingOrders(canView && !!day.data, filters);
   const [expanded, setExpanded] = useState(!collapsible);
   const items = awaiting.data ?? [];
   if (items.length === 0) return null;

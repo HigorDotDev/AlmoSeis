@@ -18,6 +18,19 @@ export function useCustomerSearch(term: string, enabled = true) {
   });
 }
 
+/**
+ * Cliente do telefone (06 §6.8 `GET /customers/by-phone`, ADR-0059 item 14): só com o telefone completo em E.164
+ * (`null` não busca). Telefone sem cadastro devolve `{ customer: null, lastDeliveryAddress: null }`.
+ */
+export function useCustomerByPhone(phoneE164: string | null) {
+  return useQuery({
+    queryKey: qk.customerByPhone(phoneE164 ?? ''),
+    queryFn: async () => (await customersApi.byPhone(phoneE164!)).data,
+    enabled: !!phoneE164,
+    staleTime: STALE,
+  });
+}
+
 export function useCustomer(id: string | undefined) {
   return useQuery({ queryKey: qk.customer(id ?? ''), queryFn: async () => (await customersApi.get(id!)).data, enabled: !!id, staleTime: STALE });
 }

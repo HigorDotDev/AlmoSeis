@@ -5,10 +5,10 @@ import { Pressable, Switch, View } from 'react-native';
 import type { Customer } from '@/api/types';
 import { Button, Card, Row, Text, TextField, space, useColors } from '@/components/ui';
 import { formatBRL, toCents } from '@/lib/money';
-import { formatPhone, maskBR } from '@/lib/phone';
+import { formatPhone, maskBR, toE164 } from '@/lib/phone';
 import { usePermission } from '@/stores/session';
 
-import { useCustomerSearch } from './hooks';
+import { useCustomerByPhone, useCustomerSearch } from './hooks';
 
 export interface PickedCustomer {
   id: string | null;
@@ -31,12 +31,15 @@ export function CustomerPicker({
   onChange,
   onSelectCustomer,
   errors,
+  phoneRequired = false,
 }: {
   value: PickedCustomer;
   onChange: (v: PickedCustomer) => void;
   /** Cliente cadastrado escolhido: a tela usa os endereços dele. */
   onSelectCustomer: (c: Customer | null) => void;
-  errors?: { name?: string; phone?: string };
+  errors?: { name?: string | null; phone?: string | null };
+  /** Entrega de marmita (Q-312): telefone obrigatório; na retirada (balcão), opcional. */
+  phoneRequired?: boolean;
 }) {
   const c = useColors();
   const canSave = usePermission('customers.manage');
@@ -44,6 +47,16 @@ export function CustomerPicker({
   const debounced = useDebounced(term.trim(), 350);
   const results = useCustomerSearch(debounced, debounced.length >= 2 && value.id === null);
   const items = results.data?.pages.flatMap((p) => p.items).slice(0, 6) ?? [];
+  // Telefone digitado sem escolher cadastro: procura pelo número exato (06 §6.8 `by-phone`) e oferece o cliente,
+  // com os endereços salvos (Q-313). Nada muda sozinho: a pessoa toca para usar.
+  const typedE164 = value.id === null ? toE164(value.phone) : null;
+  const byPhone = useCustomerByPhone(typedE164);
+  const phoneMatch = typedE164 ? (byPhone.data?.customer ?? null) : null;
+  const pick = (cust: Customer) => {
+    onChange({ id: cust.id, name: cust.name, phone: cust.phoneNumber ?? '', saveCustomer: false });
+    onSelectCustomer(cust);
+    setTerm('');
+  };
 
   if (value.id) {
     return (
@@ -73,11 +86,7 @@ export function CustomerPicker({
         <Pressable
           key={cust.id}
           accessibilityRole="button"
-          onPress={() => {
-            onChange({ id: cust.id, name: cust.name, phone: cust.phoneNumber ?? '', saveCustomer: false });
-            onSelectCustomer(cust);
-            setTerm('');
-          }}
+          onPress={() => pick(cust)}
           style={({ pressed }) => ({ padding: space.md, borderRadius: 8, backgroundColor: c.surface, opacity: pressed ? 0.6 : 1, borderWidth: 1, borderColor: c.border })}
         >
           <Text>{cust.name}</Text>
@@ -91,7 +100,24 @@ export function CustomerPicker({
         Ou informe sem cadastro:
       </Text>
       <TextField label="Nome" value={value.name} onChangeText={(name) => onChange({ ...value, name })} error={errors?.name} autoCapitalize="words" />
-      <TextField label="Telefone (opcional)" value={value.phone} onChangeText={(t) => onChange({ ...value, phone: maskBR(t) })} keyboardType="phone-pad" error={errors?.phone} />
+      <TextField label={phoneRequired ? 'Telefone' : 'Telefone (opcional)'} value={value.phone} onChangeText={(t) => onChange({ ...value, phone: maskBR(t) })} keyboardType="phone-pad" error={errors?.phone} />
+      {phoneMatch ? (
+        <Card>
+          <Text variant="small" muted>
+            Este telefone é de um cliente cadastrado
+          </Text>
+          <Text style={{ fontWeight: '700' }}>
+            {phoneMatch.name}
+            {toCents(phoneMatch.pendingAmount) > 0 ? ` · Deve ${formatBRL(phoneMatch.pendingAmount)}` : ''}
+          </Text>
+          <Button title="Usar este cliente" variant="secondary" onPress={() => pick(phoneMatch)} />
+        </Card>
+      ) : null}
+      {!phoneMatch && typedE164 && byPhone.data && !value.saveCustomer ? (
+        <Text variant="small" muted>
+          Telefone novo: o cliente é cadastrado pelo telefone ao registrar, sem endereço salvo.
+        </Text>
+      ) : null}
       {canSave ? (
         <Row style={{ justifyContent: 'space-between' }}>
           <Text style={{ flex: 1 }}>Salvar cliente</Text>

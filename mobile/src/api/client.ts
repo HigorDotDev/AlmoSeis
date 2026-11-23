@@ -201,7 +201,10 @@ export function parseETag(etag: string | null): number | null {
 
 /** Query string sem os campos vazios. */
 export function qs(params: object): string {
-  const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '');
+  // Lista vira parâmetro repetido (`fulfillmentType=DELIVERY&fulfillmentType=PICKUP`, 06 §6.9).
+  const entries = Object.entries(params)
+    .flatMap(([k, v]) => (Array.isArray(v) ? v.map((item) => [k, item] as const) : [[k, v] as const]))
+    .filter(([, v]) => v !== undefined && v !== null && v !== '');
   if (entries.length === 0) return '';
   return `?${entries.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join('&')}`;
 }

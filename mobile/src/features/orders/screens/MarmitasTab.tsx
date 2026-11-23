@@ -16,6 +16,8 @@ import { NewWebOrdersSection } from '../webOrderComponents';
 
 type Filter = 'ALL' | 'UNPAID' | 'DELIVERY' | 'PICKUP';
 
+const MARMITA_SCOPE = { orderType: 'MARMITA' } as const;
+
 /** 08 §8.9 Aba Marmitas: faixa "Novos do site" no topo e a lista dos pedidos aceitos. */
 export default function MarmitasTab() {
   const c = useColors();
@@ -54,8 +56,8 @@ export default function MarmitasTab() {
           onEndReached={() => orders.hasNextPage && !orders.isFetchingNextPage && void orders.fetchNextPage()}
           ListHeaderComponent={
             <View style={{ gap: space.md, marginBottom: space.md }}>
-              {/* ADR-0046 item 21: pedidos do site aguardando aceite, no topo. */}
-              <NewWebOrdersSection />
+              {/* ADR-0046 item 21: pedidos do site aguardando aceite, no topo; os do cardápio fixo ficam na aba Delivery. */}
+              <NewWebOrdersSection filters={MARMITA_SCOPE} />
               {menu.data?.missing ? <MenuMissingCard menuType="MARMITA" sources={menu.data.missing.sources} businessDate={menu.data.missing.businessDate} /> : null}
               <SegmentedControl
                 value={filter}

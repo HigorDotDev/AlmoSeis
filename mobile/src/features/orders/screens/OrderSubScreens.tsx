@@ -389,18 +389,25 @@ function EditOrder({ order: o }: { order: Order }) {
   const [confirm, setConfirm] = useState(false);
   const [conflict, setConflict] = useState<Order | null>(null);
   const update = useUpdateOrder(o.id);
-  const marmita = o.orderType === 'MARMITA';
+  // Marmita e o delivery por telefone à la carte (entrega/retirada) editam cliente, atendimento e endereço; a comanda
+  // do salão, mesa e comanda (06 §6.9 `PATCH /orders/{id}`).
+  const phoneOrder = o.orderType === 'MARMITA' || (o.orderType === 'A_LA_CARTE' && o.fulfillmentType !== 'DINE_IN');
+  const feeChanged = toCents(fee) !== toCents(o.deliveryFee);
+
+  // Q-315: a taxa depois da criação só muda com `orders.delivery-fee.edit` (sem ela o campo nem vai; o servidor
+  // responderia `403 PermissionDenied`). Só vai quando muda.
+  const sentFee: string | undefined = !canEditFee || o.isPaid || !phoneOrder ? undefined : fulfillment === 'DELIVERY' ? (feeChanged ? fee : undefined) : o.fulfillmentType === 'DELIVERY' ? '0.00' : undefined;
 
   const body = {
     ...(o.isPaid
       ? {}
-      : marmita
+      : phoneOrder
         ? {
             customerName: name.trim() || null,
             customerPhone: phone ? toE164(phone) : null,
             fulfillmentType: fulfillment,
             deliveryAddress: fulfillment === 'DELIVERY' ? { street, number: number || null, complement: o.deliveryAddress?.complement ?? null, neighborhood: neighborhood || null, reference: o.deliveryAddress?.reference ?? null } : null,
-            ...(canEditFee ? { deliveryFee: fulfillment === 'DELIVERY' ? fee : '0.00' } : {}),
+            ...(sentFee !== undefined ? { deliveryFee: sentFee } : {}),
           }
         : {}),
     tableLabel: table.trim() || null,
@@ -412,7 +419,7 @@ function EditOrder({ order: o }: { order: Order }) {
     <Screen>
       <Stack.Screen options={{ title: `Editar · #${o.orderNumber}` }} />
       {o.isPaid ? <Banner tone="info" text="Pedido quitado: só observação, mesa e comanda podem mudar." /> : null}
-      {marmita && !o.isPaid ? (
+      {phoneOrder && !o.isPaid ? (
         <>
           <TextField label="Cliente" value={name} onChangeText={setName} />
           <TextField label="Telefone" value={phone} onChangeText={(t) => setPhone(maskBR(t))} keyboardType="phone-pad" />
@@ -440,12 +447,18 @@ function EditOrder({ order: o }: { order: Order }) {
                   <TextField label="Bairro" value={neighborhood} onChangeText={setNeighborhood} />
                 </View>
               </Row>
-              {canEditFee ? <MoneyInput label="Taxa de entrega" value={fee} onChange={setFee} /> : null}
+              {canEditFee ? (
+                <MoneyInput label="Taxa de entrega" value={fee} onChange={setFee} />
+              ) : (
+                <Text muted testID="fee-locked">
+                  Taxa de entrega: {formatBRL(o.deliveryFee)}. Depois de registrado, só gerente ou dono muda a taxa.
+                </Text>
+              )}
             </>
           ) : null}
         </>
       ) : null}
-      {o.orderType !== 'MARMITA' ? (
+      {!phoneOrder ? (
         <Row>
           <View style={{ flex: 1 }}>
             <TextField label="Mesa" value={table} onChangeText={setTable} />
@@ -461,7 +474,10 @@ function EditOrder({ order: o }: { order: Order }) {
       <ConfirmDialog
         visible={confirm}
         title="Salvar alterações?"
-        lines={[{ label: 'Pedido', value: `#${o.orderNumber}` }]}
+        lines={[
+          { label: 'Pedido', value: `#${o.orderNumber}` },
+          ...(sentFee !== undefined ? [{ label: 'Taxa de entrega', value: `${formatBRL(o.deliveryFee)} → ${formatBRL(sentFee)}` }] : []),
+        ]}
         confirmLabel="Salvar alterações"
         loading={update.busy}
         onCancel={() => setConfirm(false)}

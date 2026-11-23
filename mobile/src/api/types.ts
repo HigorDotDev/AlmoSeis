@@ -751,6 +751,13 @@ export interface Customer {
   createdAt: Instant;
 }
 
+/** `GET /customers/by-phone` (06 §6.8, EP-003 fatia 4): telefone sem cadastro → os dois `null`, nunca `404`. */
+export interface CustomerByPhone {
+  customer: Customer | null;
+  /** O `deliveryAddress` do pedido mais recente do cliente que tinha endereço ("usar o endereço do último pedido"). */
+  lastDeliveryAddress: Address | null;
+}
+
 export type CustomerAddressInput = Address & { label: string | null; isDefault: boolean };
 
 export interface CreateCustomerBody {
@@ -891,9 +898,12 @@ export interface Order {
   tableLabel: string | null;
   tabNumber: string | null;
   notes: string | null;
-  /** Só em pedido `WEB` (`null` nos do app): a forma que o cliente pretende usar. **Não** cria pagamento (ADR-0044 item 19). */
+  /**
+   * Forma que o cliente pretende usar: no pedido do site (ADR-0044 item 19) e, desde o EP-003 fatia 4, no delivery
+   * por telefone do app (ADR-0059 item 5). **Não** cria pagamento nem marca nada como pago.
+   */
   expectedPaymentMethod: PaymentMethod | null;
-  /** "Troco para R$ X", só com `CASH`. */
+  /** "Troco para R$ X", só com `CASH`: o motoboy leva `changeFor − balance`. */
   changeFor: MoneyString | null;
   /** `CAPTCHA_UNAVAILABLE`: o anti-robô não respondeu no envio (ADR-0045 item 12). */
   riskFlag: WebOrderRiskFlag | null;
@@ -966,6 +976,9 @@ export interface OrderSummary {
   acceptanceDeadline: Instant | null;
   fulfillmentStatus: FulfillmentStatus | null;
   isReadyForPickup: boolean;
+  /** EP-003 fatia 4: também no resumo, para o card do delivery. Uma API anterior pode não mandar. */
+  expectedPaymentMethod?: PaymentMethod | null;
+  changeFor?: MoneyString | null;
   itemCount: number;
   pendingAlertCount: number;
   createdAt: Instant;
@@ -980,6 +993,10 @@ export interface OrderFilters {
   productionStatus?: ProductionStatus;
   /** Padrão no servidor: `ACCEPTED`. `AWAITING_ACCEPTANCE` é a faixa "Novos do site". */
   acceptanceStatus?: AcceptanceStatus;
+  /** EP-003 fatia 4: repetível (`fulfillmentType=DELIVERY&fulfillmentType=PICKUP`). */
+  fulfillmentType?: FulfillmentType | FulfillmentType[];
+  /** EP-003 fatia 4: `PENDING` inclui as entregas/retiradas sem marcação; o salão nunca entra. */
+  fulfillmentStatus?: FulfillmentStatus;
   customerId?: Uuid;
   search?: string;
   limit?: number;
@@ -1041,6 +1058,13 @@ export interface CreateOrderBody {
   tableLabel: string | null;
   tabNumber: string | null;
   notes: string | null;
+  /**
+   * EP-003 fatia 4 (ADR-0059 item 5, Q-316): obrigatória na entrega, opcional na retirada, proibida no salão (o app
+   * nem manda o campo no salão). Só formas habilitadas (`422 PaymentMethodDisabled`). Não cria pagamento.
+   */
+  expectedPaymentMethod?: PaymentMethod | null;
+  /** Só com `CASH`, de pelo menos o total (`422` em `changeFor`). */
+  changeFor?: MoneyString | null;
   items: NewItemInput[];
   weighings: { weightGrams: number }[];
 }

@@ -22,8 +22,11 @@ export const qk = {
   menuList: (f: object) => ['menus', 'list', f] as const,
   orders: (f: OrderFilters) => ['orders', 'list', f] as const,
   order: (id: string) => ['orders', id] as const,
-  /** Faixa "Novos do site" (`acceptanceStatus=AWAITING_ACCEPTANCE`): sob `['orders', 'list']`, invalidada junto. */
-  awaitingOrders: ['orders', 'list', 'awaiting'] as const,
+  /**
+   * Faixa "Novos do site" (`acceptanceStatus=AWAITING_ACCEPTANCE`): sob `['orders', 'list']`, invalidada junto. Com
+   * filtro (aba Delivery: à la carte de entrega/retirada; aba Marmitas: marmita), uma entrada por filtro.
+   */
+  awaitingOrders: (f: OrderFilters = {}) => ['orders', 'list', 'awaiting', f] as const,
   lastMarmitaOrder: (customerId: string | null) => ['orders', 'lastMarmita', customerId] as const,
   orderAlerts: (id: string) => ['orders', id, 'alerts'] as const,
   orderHistory: (id: string) => ['orders', id, 'history'] as const,
@@ -31,6 +34,8 @@ export const qk = {
   production: (businessDayId: string | undefined) => ['production', businessDayId ?? 'current'] as const,
   customerSearch: (term: string) => ['customers', 'search', term] as const,
   customer: (id: string) => ['customers', id] as const,
+  /** `GET /customers/by-phone` (EP-003 fatia 4); sob `['customers']`, invalidada pelo feed `CUSTOMER`/`ORDER`. */
+  customerByPhone: (phoneE164: string) => ['customers', 'byPhone', phoneE164] as const,
   customerPending: (id: string) => ['customers', id, 'pending'] as const,
   closingSummary: (businessDayId?: string) => ['closing', 'summary', businessDayId ?? 'current'] as const,
   closingHistory: (f: object) => ['closing', 'history', f] as const,
