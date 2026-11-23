@@ -26,7 +26,7 @@ import {
   radius,
   space,
 } from '@/components/ui';
-import { formatBRL, toCents } from '@/lib/money';
+import { formatBRL, toCents, type MoneyString } from '@/lib/money';
 import { NO_SITE_SIZE_TEXT, siteBodyPrice, siteSaleFrom, siteSummary, type SiteSale } from '@/lib/sitePrice';
 import { productKindNames, productKindSingular } from '@/lib/strings';
 import { serverFieldError } from '@/components/form';
@@ -120,8 +120,10 @@ function ProductForm({ product, initialKind, returnTo }: { product: Product | nu
   const [price, setPrice] = useState<string>(product?.defaultPrice ?? '0.00');
   const [kitchen, setKitchen] = useState(product?.requiresPreparation ?? (initialKind === 'MAIN_DISH' || initialKind === 'SIDE_DISH'));
   const [onPage, setOnPage] = useState(product?.isVisibleOnPage ?? true);
-  // Bebida (ADR-0057 item 5, Q-307): `isVisibleOnPage` é o "vende no site", com o preço de site.
-  const [sitePrice, setSitePrice] = useState<string>(product?.sitePrice ?? '0.00');
+  // Bebida (ADR-0057 item 5, Q-307): `isVisibleOnPage` é o "vende no site", com o preço de site `>= 0` (item 2
+  // complementado em 2026-11-23: `0,00` vale). `null` = não mexeu: o campo mostra o de balcão e o servidor grava ele.
+  const [sitePrice, setSitePrice] = useState<MoneyString | null>(product?.sitePrice ?? null);
+  const shownSitePrice = sitePrice ?? price;
   // ADR-0044 item 5: só bebidas e adicionais têm a chave; pratos e acompanhamentos seguem o cardápio do dia.
   const pageToggle = kind === 'BEVERAGE' || kind === 'ADDON';
   const [deactivate, setDeactivate] = useState(false);
@@ -143,8 +145,9 @@ function ProductForm({ product, initialKind, returnTo }: { product: Product | nu
             requiresPreparation: kitchen,
             ...(kind !== product.kind ? { kind } : {}),
             ...(pageToggle && onPage !== product.isVisibleOnPage ? { isVisibleOnPage: onPage } : {}),
-            // Vazio: o servidor grava o preço de balcão ao tornar a bebida visível (06 §6.5).
-            ...(kind === 'BEVERAGE' && onPage && toCents(sitePrice) > 0 ? { sitePrice } : {}),
+            // Sem mexer, não vai: o servidor grava o preço de balcão ao tornar a bebida visível (06 §6.5). Mexido, vai
+            // como está, também `0.00`.
+            ...(kind === 'BEVERAGE' && onPage && sitePrice !== null && (product.sitePrice === null || toCents(sitePrice) !== toCents(product.sitePrice)) ? { sitePrice } : {}),
           },
         },
         { onSuccess: () => router.back() },
@@ -158,8 +161,8 @@ function ProductForm({ product, initialKind, returnTo }: { product: Product | nu
           category: category.trim() || null,
           defaultPrice,
           requiresPreparation: kitchen,
-          // Só bebida; ausente = o preço de balcão (06 §6.5).
-          ...(kind === 'BEVERAGE' && toCents(sitePrice) > 0 ? { sitePrice } : {}),
+          // Só bebida; ausente = o preço de balcão, mesmo `0.00` (06 §6.5). Digitado, vai como está, também `0.00`.
+          ...(kind === 'BEVERAGE' && sitePrice !== null ? { sitePrice } : {}),
         },
         {
           // "+ Novo prato" do cardápio volta com o prato já incluído (RN-002.4/3.7).
@@ -203,19 +206,20 @@ function ProductForm({ product, initialKind, returnTo }: { product: Product | nu
       {kind === 'BEVERAGE' ? (
         product ? (
           <SiteSaleField
-            value={{ sellsOnSite: onPage, sitePrice }}
+            value={{ sellsOnSite: onPage, sitePrice: shownSitePrice }}
             counterPrice={price}
             editable={canManage}
+            allowZero
             onChange={(v) => {
               setOnPage(v.sellsOnSite);
-              setSitePrice(v.sitePrice);
+              if (v.sitePrice !== shownSitePrice) setSitePrice(v.sitePrice);
             }}
           />
         ) : (
           <>
-            <MoneyInput label="Preço no site (opcional)" value={sitePrice} editable={canManage} onChange={setSitePrice} />
+            <MoneyInput label="Preço no site" value={shownSitePrice} editable={canManage} onChange={setSitePrice} />
             <Text variant="small" muted>
-              A bebida nasce vendendo no site. Vazio, vale o preço do balcão.
+              A bebida nasce vendendo no site, pelo preço do balcão se você não mudar. Pode ser R$ 0,00 (cortesia no site).
             </Text>
           </>
         )

@@ -9,6 +9,21 @@ import { formatBRL, toCents, type MoneyString } from '@/lib/money';
 import { orderTypeNames, paymentMethodNames } from '@/lib/strings';
 import { useSession } from '@/stores/session';
 
+/**
+ * "Vendido pelo site" e "Taxa de entrega do site" (ADR-0057 item 12, complementado em 2026-11-23, M1): o primeiro é
+ * só os itens a preço de site (sem a taxa); a taxa dos pedidos do site vem à parte, já contida nas taxas de entrega.
+ * Os dois já estão no vendido. Informativos (a cobrança da plataforma e a base dela estão em aberto, Q-310). Resumo,
+ * fechamento e mensal; ausentes numa resposta guardada por um app anterior.
+ */
+export function SiteSalesLines({ siteSoldTotal, siteDeliveryFeeTotal }: { siteSoldTotal?: MoneyString; siteDeliveryFeeTotal?: MoneyString }) {
+  return (
+    <>
+      {siteSoldTotal !== undefined ? <KeyValue label="Vendido pelo site (já no total)" value={formatBRL(siteSoldTotal)} /> : null}
+      {siteDeliveryFeeTotal !== undefined ? <KeyValue label="Taxa de entrega do site (já no total)" value={formatBRL(siteDeliveryFeeTotal)} /> : null}
+    </>
+  );
+}
+
 export function differenceText(diff: string | null): string | null {
   if (diff === null) return null;
   const cents = toCents(diff);
@@ -113,8 +128,7 @@ export function ClosingSummaryView({ summary: s }: { summary: ClosingSummary }) 
         <Text variant="small" muted>
           Inclui {formatBRL(s.deliveryFeesTotal)} de taxas de entrega.
         </Text>
-        {/* ADR-0057 item 12: informativo, já contido no vendido (a cobrança da plataforma está em aberto, Q-310). */}
-        {s.siteSoldTotal !== undefined ? <KeyValue label="Vendido pelo site (já no total)" value={formatBRL(s.siteSoldTotal)} /> : null}
+        <SiteSalesLines siteSoldTotal={s.siteSoldTotal} siteDeliveryFeeTotal={s.siteDeliveryFeeTotal} />
       </Card>
 
       <Card>

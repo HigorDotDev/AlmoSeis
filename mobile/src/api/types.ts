@@ -903,8 +903,14 @@ export interface Order {
    * por telefone do app (ADR-0059 item 5). **Não** cria pagamento nem marca nada como pago.
    */
   expectedPaymentMethod: PaymentMethod | null;
-  /** "Troco para R$ X", só com `CASH`: o motoboy leva `changeFor − balance`. */
+  /** "Troco para R$ X", só com `CASH`: o motoboy leva `changeFor − balance`. Editável até a quitação (`PATCH`). */
   changeFor: MoneyString | null;
+  /**
+   * Derivado no servidor (ADR-0059 complementado em 2026-11-23, I2): `true` quando há `changeFor` e ele ficou abaixo
+   * do `totalAmount` (item, quantidade ou taxa incluídos depois). O app mostra o alerta em vez de um troco negativo.
+   * Um pedido guardado no cache por um app anterior pode vir sem o campo (o app trata como ausente).
+   */
+  changeForBelowTotal: boolean;
   /** `CAPTCHA_UNAVAILABLE`: o anti-robô não respondeu no envio (ADR-0045 item 12). */
   riskFlag: WebOrderRiskFlag | null;
   deliveryFee: MoneyString;
@@ -979,6 +985,8 @@ export interface OrderSummary {
   /** EP-003 fatia 4: também no resumo, para o card do delivery. Uma API anterior pode não mandar. */
   expectedPaymentMethod?: PaymentMethod | null;
   changeFor?: MoneyString | null;
+  /** 2026-11-23 (I2): mesma regra do `Order`. */
+  changeForBelowTotal: boolean;
   itemCount: number;
   pendingAlertCount: number;
   createdAt: Instant;
@@ -1078,6 +1086,13 @@ export type UpdateOrderBody = Partial<{
   tableLabel: string | null;
   tabNumber: string | null;
   notes: string | null;
+  /**
+   * Desde 2026-11-23 (ADR-0059 complementado, I1): mudam até a quitação (`409 OrderAlreadyPaid`). Virar entrega exige
+   * a forma no mesmo `PATCH`; a forma que deixa de ser `CASH` sem `changeFor` no corpo apaga o "troco para".
+   */
+  expectedPaymentMethod: PaymentMethod | null;
+  /** Só com `CASH`; editado, de pelo menos o total resultante (`422` em `changeFor`); `null` apaga. */
+  changeFor: MoneyString | null;
 }>;
 
 export interface OrderHistoryEntry {
@@ -1220,8 +1235,13 @@ export interface ClosingSummary {
   orderCount: number;
   totalSold: MoneyString;
   deliveryFeesTotal: MoneyString;
-  /** "Vendido pelo site" (ADR-0057 item 12), já contido no `totalSold`; ausente num resumo guardado por um app anterior. */
+  /**
+   * "Vendido pelo site" (ADR-0057 item 12, complementado em 2026-11-23, M1): Σ (total − taxa) dos pedidos do site,
+   * **sem** a taxa de entrega; já contido no `totalSold`. Ausente num resumo guardado por um app anterior.
+   */
   siteSoldTotal?: MoneyString;
+  /** "Taxa de entrega do site" (M1): Σ `deliveryFee` dos pedidos do site, já contida no `deliveryFeesTotal`. */
+  siteDeliveryFeeTotal?: MoneyString;
   totalReceived: MoneyString;
   receivedFromPreviousDays: MoneyString;
   totalPending: MoneyString;
@@ -1269,6 +1289,9 @@ export interface MonthlyClosing {
   totalReceived: MoneyString;
   totalPendingAtClosings: MoneyString;
   cashDifferenceTotal: MoneyString;
+  /** Somas dos snapshots do mês (2026-11-23, M1), como gravados. Uma API anterior pode não mandar. */
+  siteSoldTotal?: MoneyString;
+  siteDeliveryFeeTotal?: MoneyString;
   byOrderType: { orderType: OrderType; sold: MoneyString; received: MoneyString }[];
   byPaymentMethod: { paymentMethod: PaymentMethod; received: MoneyString }[];
   days: { businessDate: BusinessDate; dailyClosingIds: Uuid[]; totalSold: MoneyString; totalReceived: MoneyString }[];

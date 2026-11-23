@@ -42,6 +42,7 @@ import { useCanWrite, useSession } from '@/stores/session';
 import { itemWithChildrenCents } from '../aLaCarte';
 import { orderLabel } from '../components';
 import { changeToCarryText } from '../delivery';
+import { ChangeBelowTotalAlert } from '../deliveryComponents';
 import { isDispatched } from '../fulfillment';
 import { summarizeOrder, useCancelOrder, useOrder, useRemoveItem, useRemoveWeighing, useUpdateItem } from '../hooks';
 import { AcceptanceCountdown, acceptanceOutcomeText, AcceptRejectActions, DistanceFeeLine, FulfillmentActions, PhoneLine, WebOrderPaymentInfo } from '../webOrderComponents';
@@ -114,14 +115,18 @@ function OrderHeader({ order: o, pending }: { order: Order; pending: boolean }) 
   );
 }
 
-/** "Levar troco para R$ 100,00 → troco R$ 43,00" (ADR-0059 item 12): `changeFor − balance`, só sem quitação. */
+/**
+ * "Levar troco para R$ 100,00 → troco R$ 43,00" (ADR-0059 item 12): `changeFor − balance`, só sem quitação. Com o
+ * "troco para" abaixo do total (I2), o alerta com o atalho para editar, no lugar do troco.
+ */
 function ChangeToCarry({ order: o }: { order: Order }) {
   const text = o.cancellationStatus === 'ACTIVE' ? changeToCarryText(o) : null;
-  return text ? (
+  if (!text) return <ChangeBelowTotalAlert order={o} />;
+  return (
     <Text testID="change-to-carry" style={{ fontWeight: '700' }}>
       {text}
     </Text>
-  ) : null;
+  );
 }
 
 /**

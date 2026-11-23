@@ -16,6 +16,7 @@ export function SiteSaleField({
   editable = true,
   error,
   name,
+  allowZero = false,
 }: {
   value: SiteSale;
   counterPrice: MoneyString;
@@ -24,6 +25,11 @@ export function SiteSaleField({
   error?: string | null;
   /** Para o rótulo acessível quando há vários na tela ("Vende no site: 300 ml"). */
   name?: string;
+  /**
+   * Bebida do restaurante (`Product` `BEVERAGE`, ADR-0057 item 2 complementado em 2026-11-23): o preço de site
+   * `0,00` vale (cortesia no site). Ligar a chave não troca o valor, e não existe "vazio" (quem usa mostra o de balcão).
+   */
+  allowZero?: boolean;
 }) {
   const label = name ? `Vende no site: ${name}` : 'Vende no site';
   return (
@@ -35,7 +41,7 @@ export function SiteSaleField({
             {value.sellsOnSite ? 'Aparece na página de pedidos pelo preço de site.' : 'Não aparece na página de pedidos.'}
           </Text>
         </View>
-        <Switch value={value.sellsOnSite} disabled={!editable} accessibilityLabel={label} onValueChange={(on) => onChange(toggleSiteSale(value, on, counterPrice))} />
+        <Switch value={value.sellsOnSite} disabled={!editable} accessibilityLabel={label} onValueChange={(on) => onChange(allowZero ? { ...value, sellsOnSite: on } : toggleSiteSale(value, on, counterPrice))} />
       </Row>
       {value.sellsOnSite ? (
         <>
@@ -47,7 +53,7 @@ export function SiteSaleField({
             error={error}
           />
           <Text variant="small" muted>
-            Pode ser maior, menor ou igual ao do balcão. Vazio, vale o preço do balcão.
+            {allowZero ? 'Pode ser maior, menor ou igual ao do balcão, ou R$ 0,00 (cortesia no site).' : 'Pode ser maior, menor ou igual ao do balcão. Vazio, vale o preço do balcão.'}
           </Text>
         </>
       ) : null}

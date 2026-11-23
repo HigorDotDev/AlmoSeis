@@ -5,7 +5,7 @@
  * A forma prevista é só informação para o entregador: **não** cria pagamento nem marca nada como pago (ADR-0059
  * item 8). A conferência do "troco para" usa a prévia do app; quem decide é o servidor (`422` em `changeFor`).
  */
-import type { Address, CreateOrderBody, PaymentMethod } from '@/api/types';
+import type { Address, CreateOrderBody, FulfillmentType, PaymentMethod } from '@/api/types';
 import { formatBRL, toCents, type MoneyString } from '@/lib/money';
 import { toE164 } from '@/lib/phone';
 import { paymentMethodNames } from '@/lib/strings';
@@ -41,17 +41,124 @@ export function expectedPaymentBody(p: ExpectedPayment): { expectedPaymentMethod
   return { expectedPaymentMethod: method, changeFor: method === 'CASH' && hasValue(p.changeFor) ? p.changeFor : null };
 }
 
-/** Troco que o motoboy leva: `changeFor − balance` (ADR-0059 item 12). `null` sem troco ou com o pedido quitado. */
-export function changeToCarryCents(o: { expectedPaymentMethod?: PaymentMethod | null; changeFor?: MoneyString | null; balance: MoneyString; isPaid: boolean }): number | null {
-  if (o.expectedPaymentMethod !== 'CASH' || !hasValue(o.changeFor) || o.isPaid) return null;
-  return Math.max(0, toCents(o.changeFor) - toCents(o.balance));
+/** O que o card e o detalhe usam para o troco. `changeForBelowTotal` vem do servidor (ausente num cache antigo). */
+export interface ChangeInfo {
+  expectedPaymentMethod?: PaymentMethod | null;
+  changeFor?: MoneyString | null;
+  balance: MoneyString;
+  isPaid: boolean;
+  totalAmount?: MoneyString;
+  changeForBelowTotal?: boolean;
+}
+
+/**
+ * "Troco para" abaixo do total (ADR-0059 complementado em 2026-11-23, I2): um item, quantidade ou taxa incluído
+ * depois passou o total. Vale o `changeForBelowTotal` do servidor; só sem ele (pedido guardado por um app anterior)
+ * o app compara o "troco para" com o total. Quitado, não há troco a conferir.
+ */
+export function changeBelowTotal(o: ChangeInfo): boolean {
+  if (o.expectedPaymentMethod !== 'CASH' || !hasValue(o.changeFor) || o.isPaid) return false;
+  if (o.changeForBelowTotal !== undefined) return o.changeForBelowTotal;
+  return toCents(o.changeFor) < toCents(o.totalAmount ?? o.balance);
+}
+
+/**
+ * Troco que o motoboy leva: `changeFor − balance` (ADR-0059 item 12). `null` sem troco, com o pedido quitado ou com
+ * o "troco para" abaixo do total (aí o app mostra o alerta, nunca um troco negativo ou zerado).
+ */
+export function changeToCarryCents(o: ChangeInfo): number | null {
+  if (o.expectedPaymentMethod !== 'CASH' || !hasValue(o.changeFor) || o.isPaid || changeBelowTotal(o)) return null;
+  return toCents(o.changeFor) - toCents(o.balance);
 }
 
 /** "Levar troco para R$ 100,00 → troco R$ 43,00" (card do delivery e detalhe). */
-export function changeToCarryText(o: { expectedPaymentMethod?: PaymentMethod | null; changeFor?: MoneyString | null; balance: MoneyString; isPaid: boolean }): string | null {
+export function changeToCarryText(o: ChangeInfo): string | null {
   const carry = changeToCarryCents(o);
   if (carry === null) return null;
   return `Levar troco para ${formatBRL(o.changeFor!)} → troco ${formatBRL(carry)}`;
+}
+
+/** Alerta do I2: "O troco para R$ 60,00 não cobre o total R$ 61,00 — confirme com o cliente". */
+export function changeBelowTotalText(o: ChangeInfo & { totalAmount: MoneyString }): string | null {
+  if (!changeBelowTotal(o)) return null;
+  return `O troco para ${formatBRL(o.changeFor!)} não cobre o total ${formatBRL(o.totalAmount)} — confirme com o cliente`;
+}
+
+// ---------------------------------------------------------------- Edição da forma prevista e do troco (PATCH)
+
+/** O que o pedido tem gravado: a base da comparação na edição. */
+export interface ExpectedPaymentOriginal extends ExpectedPayment {
+  fulfillmentType: FulfillmentType;
+}
+
+const centsOrZero = (m: MoneyString | null | undefined) => (hasValue(m) ? toCents(m) : 0);
+
+/**
+ * Campos da forma prevista e do troco no `PATCH /orders/{id}` (06 §6.9, ADR-0059 complementado em 2026-11-23, I1).
+ * Só vai o que mudou: a forma quando muda ou quando o pedido vira entrega (Q-316: a forma vai no mesmo `PATCH`); o
+ * "troco para" só com dinheiro e quando muda (`null` apaga). Saindo de dinheiro, o troco **não vai**: o servidor
+ * apaga o gravado. No salão, nada (a forma e o troco são proibidos lá).
+ */
+export function expectedPaymentPatch(original: ExpectedPaymentOriginal, next: ExpectedPayment, fulfillmentType: FulfillmentType): { expectedPaymentMethod?: PaymentMethod | null; changeFor?: MoneyString | null } {
+  if (fulfillmentType === 'DINE_IN') return {};
+  const body: { expectedPaymentMethod?: PaymentMethod | null; changeFor?: MoneyString | null } = {};
+  const becameDelivery = fulfillmentType === 'DELIVERY' && original.fulfillmentType !== 'DELIVERY';
+  if (next.expectedPaymentMethod !== original.expectedPaymentMethod || becameDelivery) body.expectedPaymentMethod = next.expectedPaymentMethod;
+  if (next.expectedPaymentMethod === 'CASH') {
+    const before = original.expectedPaymentMethod === 'CASH' ? centsOrZero(original.changeFor) : 0;
+    if (centsOrZero(next.changeFor) !== before) body.changeFor = hasValue(next.changeFor) ? next.changeFor : null;
+  }
+  return body;
+}
+
+/**
+ * Conferência antes do Confirma da edição, com as regras do servidor: entrega exige a forma quando ela vai no corpo
+ * (virou entrega ou a pessoa mexeu; uma entrega antiga sem forma continua editável nos outros campos); a forma nova
+ * precisa estar habilitada; o "troco para" editado, de pelo menos o total resultante (prévia; quem decide é o
+ * servidor, `422` em `changeFor`).
+ */
+export function expectedPaymentEditIssues(
+  original: ExpectedPaymentOriginal,
+  next: ExpectedPayment,
+  fulfillmentType: FulfillmentType,
+  totalCents: number,
+  enabled?: readonly PaymentMethod[],
+): { method?: string; changeFor?: string } {
+  if (fulfillmentType === 'DINE_IN') return {};
+  const patch = expectedPaymentPatch(original, next, fulfillmentType);
+  const issues: { method?: string; changeFor?: string } = {};
+  if ('expectedPaymentMethod' in patch) {
+    const method = expectedPaymentIssue(fulfillmentType, next, enabled);
+    if (method) issues.method = method;
+  }
+  if (patch.changeFor) {
+    const change = changeForIssue(next, totalCents);
+    if (change) issues.changeFor = change;
+  }
+  return issues;
+}
+
+/**
+ * Prévia do total depois do `PATCH` (para conferir o "troco para" editado): itens e pesagens + a taxa que fica. Sem
+ * mexer na taxa, a entrega continua com a gravada; a retirada que vira entrega, com a padrão.
+ */
+export function editedTotalCents(o: { totalAmount: MoneyString; deliveryFee: MoneyString; fulfillmentType: FulfillmentType }, fulfillmentType: FulfillmentType, sentFee: MoneyString | undefined, defaultFee: MoneyString | null | undefined): number {
+  const base = toCents(o.totalAmount) - toCents(o.deliveryFee);
+  if (fulfillmentType !== 'DELIVERY') return base;
+  const fee = sentFee ?? (o.fulfillmentType === 'DELIVERY' ? o.deliveryFee : (defaultFee ?? '0.00'));
+  return base + toCents(fee);
+}
+
+/** Linha do Confirma: "Dinheiro → Pix", "Não informada → Pix". */
+export function expectedPaymentChangeText(before: PaymentMethod | null, after: PaymentMethod | null): string {
+  const name = (m: PaymentMethod | null) => (m ? paymentMethodNames[m] : 'Não informada');
+  return `${name(before)} → ${name(after)}`;
+}
+
+/** Linha do Confirma: "R$ 60,00 → R$ 70,00", "Sem troco → R$ 70,00". */
+export function changeForChangeText(before: MoneyString | null, after: MoneyString | null): string {
+  const text = (m: MoneyString | null) => (hasValue(m) ? formatBRL(m) : 'Sem troco');
+  return `${text(before)} → ${text(after)}`;
 }
 
 /** Linha curta da forma prevista para o card: "Dinheiro", "Pix", "Cartão" (com "prevista"). */

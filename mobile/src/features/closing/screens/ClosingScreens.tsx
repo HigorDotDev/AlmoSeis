@@ -32,7 +32,7 @@ import { orderTypeNames, paymentMethodNames } from '@/lib/strings';
 import { useIsOnline } from '@/stores/connectivity';
 import { useCanWrite, useSession } from '@/stores/session';
 
-import { autoRejectWarning, ClosingSummaryView, differenceText, visibleOrderTypeRows } from '../components';
+import { autoRejectWarning, ClosingSummaryView, differenceText, SiteSalesLines, visibleOrderTypeRows } from '../components';
 import { useAddAdjustment, useAddCashMovement, useCashMovements, useClosing, useClosingHistory, useClosingSummary, useFinalizeClosing, useMonthlyClosing } from '../hooks';
 
 export function CashMovementScreen() {
@@ -336,6 +336,7 @@ export function MonthlyScreen() {
             <KeyValue label="Recebido" value={formatBRL(m.totalReceived)} />
             <KeyValue label="Pendente nos fechamentos" value={formatBRL(m.totalPendingAtClosings)} />
             <KeyValue label="Diferenças de caixa" value={formatBRL(m.cashDifferenceTotal)} />
+            <SiteSalesLines siteSoldTotal={m.siteSoldTotal} siteDeliveryFeeTotal={m.siteDeliveryFeeTotal} />
           </Card>
           <Card>
             {visibleOrderTypeRows(m.byOrderType, me).map((t) => (

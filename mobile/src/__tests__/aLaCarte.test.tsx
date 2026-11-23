@@ -283,6 +283,7 @@ const ORDER: Order = {
   notes: null,
   expectedPaymentMethod: null,
   changeFor: null,
+  changeForBelowTotal: false,
   riskFlag: null,
   deliveryFee: '0.00',
   deliveryFeeSource: null,

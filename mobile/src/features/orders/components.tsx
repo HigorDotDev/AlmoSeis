@@ -30,7 +30,7 @@ import { formatTime } from '@/lib/dates';
 import { useBlockedBy } from '@/stores/pendingOps';
 import { usePermission, useSession } from '@/stores/session';
 
-import { ExpectedPaymentLine } from './deliveryComponents';
+import { ChangeBelowTotalAlert, ExpectedPaymentLine } from './deliveryComponents';
 import { FulfillmentActions } from './webOrderComponents';
 import { orderNumberLabel } from './webOrders';
 
@@ -73,6 +73,8 @@ export function OrderCard({ order }: { order: OrderSummary }) {
       </Row>
       {/* ADR-0059 item 12: forma prevista e o troco que o motoboy leva. Não é pagamento: o selo financeiro não muda. */}
       {!canceled && order.fulfillmentType !== 'DINE_IN' ? <ExpectedPaymentLine order={order} /> : null}
+      {/* I2 (2026-11-23): "troco para" abaixo do total → alerta, nunca troco negativo. */}
+      {order.fulfillmentType !== 'DINE_IN' ? <ChangeBelowTotalAlert order={order} /> : null}
       <FulfillmentActions order={order} compact />
     </Card>
   );

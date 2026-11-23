@@ -21,10 +21,17 @@ import { useCustomerByPhone } from '@/features/customers/hooks';
 import DeliveryTab, { deliveryFilters } from '@/features/delivery/screens/DeliveryTab';
 import { fixedMenuBook, newComboLine, newDishLine } from '@/features/orders/aLaCarte';
 import { buildMarmitaBody, emptyMarmitaForm } from '@/features/orders/compose';
+import { OrderCard } from '@/features/orders/components';
 import {
   buildDeliveryBody,
+  changeBelowTotal,
+  changeBelowTotalText,
   changeForIssue,
+  changeToCarryCents,
   changeToCarryText,
+  editedTotalCents,
+  expectedPaymentEditIssues,
+  expectedPaymentPatch,
   deliveryFormIssues,
   emptyDeliveryForm,
   expectedPaymentIssue,
@@ -200,6 +207,7 @@ const ORDER: Order = {
   notes: null,
   expectedPaymentMethod: 'CASH',
   changeFor: '100.00',
+  changeForBelowTotal: false,
   riskFlag: null,
   deliveryFee: '5.00',
   deliveryFeeSource: 'MANUAL',
@@ -260,6 +268,7 @@ const summary = (over: Partial<OrderSummary>): OrderSummary => ({
   isReadyForPickup: false,
   expectedPaymentMethod: 'CASH',
   changeFor: '100.00',
+  changeForBelowTotal: false,
   itemCount: 2,
   pendingAlertCount: 0,
   createdAt: '2026-11-22T19:10:00Z',
@@ -971,5 +980,198 @@ describe('pedido do site da lanchonete (EP-003 fatia 5, 06 §6.19 "Pedido da lan
     expect(screen.getByText('+ 1× Bacon (R$ 4,00)')).toBeTruthy();
     expect(screen.getByText('Aceitar')).toBeTruthy();
     expect(screen.getByText('Recusar')).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------- 2026-11-23: forma prevista e troco editáveis (I1, I2)
+
+describe('"troco para" abaixo do total (ADR-0059 complementado, I2)', () => {
+  // Exemplo do ADR: pedido de R$ 55,00 com troco para R$ 60,00; uma Coca de R$ 6,00 depois → total R$ 61,00.
+  const below = { expectedPaymentMethod: 'CASH' as const, changeFor: '60.00', totalAmount: '61.00', balance: '61.00', isPaid: false, changeForBelowTotal: true };
+
+  it('com o indicador do servidor: alerta, nunca troco negativo ou zerado', () => {
+    expect(changeBelowTotal(below)).toBe(true);
+    expect(changeToCarryCents(below)).toBeNull();
+    expect(changeToCarryText(below)).toBeNull();
+    expect(changeBelowTotalText(below)).toBe('O troco para R$ 60,00 não cobre o total R$ 61,00 — confirme com o cliente');
+  });
+
+  it('sem o indicador (cache de um app anterior), compara com o total; quitado ou sem dinheiro, nada', () => {
+    const { changeForBelowTotal: _flag, ...old } = below;
+    expect(changeBelowTotal(old)).toBe(true);
+    expect(changeBelowTotal({ ...old, changeFor: '70.00' })).toBe(false);
+    expect(changeBelowTotal({ ...below, isPaid: true })).toBe(false);
+    expect(changeBelowTotal({ ...below, expectedPaymentMethod: 'PIX', changeFor: null })).toBe(false);
+    expect(changeBelowTotalText({ ...below, changeForBelowTotal: false, changeFor: '70.00' })).toBeNull();
+  });
+
+  it('o troco do motoboy é changeFor − balance, sem o Math.max: com pagamento parcial, o saldo é a base', () => {
+    expect(changeToCarryCents({ ...below, changeFor: '70.00', changeForBelowTotal: false, balance: '41.00' })).toBe(2900);
+  });
+});
+
+describe('edição da forma prevista e do troco (06 §6.9 PATCH, I1)', () => {
+  const original = { fulfillmentType: 'DELIVERY' as const, expectedPaymentMethod: 'CASH' as const, changeFor: '100.00' };
+
+  it('só vai o que mudou; saindo de dinheiro, o troco não vai (o servidor apaga)', () => {
+    expect(expectedPaymentPatch(original, { expectedPaymentMethod: 'CASH', changeFor: '100.00' }, 'DELIVERY')).toEqual({});
+    expect(expectedPaymentPatch(original, { expectedPaymentMethod: 'PIX', changeFor: null }, 'DELIVERY')).toEqual({ expectedPaymentMethod: 'PIX' });
+    expect(expectedPaymentPatch(original, { expectedPaymentMethod: 'CASH', changeFor: '120.00' }, 'DELIVERY')).toEqual({ changeFor: '120.00' });
+    // "Sem troco" apaga.
+    expect(expectedPaymentPatch(original, { expectedPaymentMethod: 'CASH', changeFor: null }, 'DELIVERY')).toEqual({ changeFor: null });
+    // De Pix para dinheiro com troco: os dois.
+    expect(expectedPaymentPatch({ ...original, expectedPaymentMethod: 'PIX', changeFor: null }, { expectedPaymentMethod: 'CASH', changeFor: '100.00' }, 'DELIVERY')).toEqual({
+      expectedPaymentMethod: 'CASH',
+      changeFor: '100.00',
+    });
+    expect(expectedPaymentPatch(original, { expectedPaymentMethod: 'PIX', changeFor: null }, 'DINE_IN')).toEqual({});
+  });
+
+  it('virar entrega leva a forma no mesmo PATCH e exige uma; entrega antiga sem forma continua editável', () => {
+    const pickup = { fulfillmentType: 'PICKUP' as const, expectedPaymentMethod: null, changeFor: null };
+    expect(expectedPaymentPatch(pickup, { expectedPaymentMethod: null, changeFor: null }, 'DELIVERY')).toEqual({ expectedPaymentMethod: null });
+    expect(expectedPaymentEditIssues(pickup, { expectedPaymentMethod: null, changeFor: null }, 'DELIVERY', 5200)).toEqual({ method: 'Escolha a forma de pagamento prevista da entrega.' });
+    expect(expectedPaymentEditIssues(pickup, { expectedPaymentMethod: 'PIX', changeFor: null }, 'DELIVERY', 5200)).toEqual({});
+    const oldDelivery = { fulfillmentType: 'DELIVERY' as const, expectedPaymentMethod: null, changeFor: null };
+    expect(expectedPaymentEditIssues(oldDelivery, { expectedPaymentMethod: null, changeFor: null }, 'DELIVERY', 5200)).toEqual({});
+    expect(expectedPaymentEditIssues(original, { expectedPaymentMethod: 'CARD', changeFor: null }, 'DELIVERY', 5700, ['CASH', 'PIX'])).toEqual({ method: 'Cartão está desabilitado. Escolha outra forma.' });
+  });
+
+  it('o troco editado precisa cobrir o total resultante; o gravado abaixo do total não trava a edição', () => {
+    expect(expectedPaymentEditIssues(original, { expectedPaymentMethod: 'CASH', changeFor: '50.00' }, 'DELIVERY', 5700)).toEqual({ changeFor: 'O troco precisa ser para pelo menos R$ 57,00 (o total).' });
+    expect(expectedPaymentEditIssues({ ...original, changeFor: '60.00' }, { expectedPaymentMethod: 'CASH', changeFor: '60.00' }, 'DELIVERY', 6100)).toEqual({});
+  });
+
+  it('total do PATCH: itens + a taxa que fica (gravada, digitada, padrão ao virar entrega, zero na retirada)', () => {
+    const o = { totalAmount: '57.00', deliveryFee: '5.00', fulfillmentType: 'DELIVERY' as const };
+    expect(editedTotalCents(o, 'DELIVERY', undefined, '4.00')).toBe(5700);
+    expect(editedTotalCents(o, 'DELIVERY', '7.00', '4.00')).toBe(5900);
+    expect(editedTotalCents(o, 'PICKUP', '0.00', '4.00')).toBe(5200);
+    expect(editedTotalCents({ totalAmount: '52.00', deliveryFee: '0.00', fulfillmentType: 'PICKUP' }, 'DELIVERY', undefined, '4.00')).toBe(5600);
+  });
+});
+
+describe('tela de edição: forma prevista e troco (orders/[id]/edit)', () => {
+  const patched = (over: Partial<Order>) => json(200, { ...ORDER, version: 2, ...over }, { ETag: '"2"' });
+
+  it('dinheiro → Pix: o troco some, o Confirma mostra a troca e o PATCH vai sem changeFor, com If-Match', async () => {
+    writeHandler = (method) => (method === 'PATCH' ? patched({ expectedPaymentMethod: 'PIX', changeFor: null }) : undefined);
+    await renderWith(<EditOrderScreen />);
+    expect(await screen.findByLabelText('Troco para (opcional)')).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Pix'));
+    expect(screen.queryByLabelText('Troco para (opcional)')).toBeNull();
+    await fireEvent.press(screen.getByLabelText('Salvar'));
+    expect(screen.getByText('Dinheiro → Pix')).toBeTruthy();
+    expect(screen.getByText('R$ 100,00 → Sem troco')).toBeTruthy();
+    await confirm();
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toMatchObject({ method: 'PATCH', path: `/orders/${ORDER_ID}` });
+    expect(writes[0]!.headers['If-Match']).toBe('"1"');
+    expect(writes[0]!.body).toMatchObject({ expectedPaymentMethod: 'PIX' });
+    expect(writes[0]!.body).not.toHaveProperty('changeFor');
+  });
+
+  it('troco editado abaixo do total não confirma; acima vai só o changeFor', async () => {
+    writeHandler = (method) => (method === 'PATCH' ? patched({ changeFor: '120.00' }) : undefined);
+    await renderWith(<EditOrderScreen />);
+    await fireEvent.changeText(await screen.findByLabelText('Troco para (opcional)'), '5000');
+    await fireEvent.press(screen.getByLabelText('Salvar'));
+    expect(screen.getByText('O troco precisa ser para pelo menos R$ 57,00 (o total).')).toBeTruthy();
+    expect(screen.queryByText('Salvar alterações?')).toBeNull();
+    await fireEvent.changeText(screen.getByLabelText('Troco para (opcional)'), '12000');
+    await fireEvent.press(screen.getByLabelText('Salvar'));
+    expect(screen.getByText('R$ 100,00 → R$ 120,00')).toBeTruthy();
+    await confirm();
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]!.body).toMatchObject({ changeFor: '120.00' });
+    expect(writes[0]!.body).not.toHaveProperty('expectedPaymentMethod');
+  });
+
+  it('retirada que vira entrega exige a forma no mesmo PATCH', async () => {
+    orderResponse = { ...ORDER, fulfillmentType: 'PICKUP', deliveryAddress: null, deliveryFee: '0.00', deliveryFeeSource: null, expectedPaymentMethod: null, changeFor: null, totalAmount: '52.00', balance: '52.00' };
+    writeHandler = (method) => (method === 'PATCH' ? patched({ expectedPaymentMethod: 'PIX', changeFor: null }) : undefined);
+    await renderWith(<EditOrderScreen />);
+    expect(await screen.findByText('Forma de pagamento prevista (opcional)')).toBeTruthy();
+    await fireEvent.press(screen.getByRole('tab', { name: 'Entrega' }));
+    expect(screen.getByText('Forma de pagamento prevista')).toBeTruthy();
+    await fireEvent.changeText(screen.getByLabelText('Rua'), 'Rua das Flores');
+    await fireEvent.press(screen.getByLabelText('Salvar'));
+    expect(screen.getByText('Escolha a forma de pagamento prevista da entrega.')).toBeTruthy();
+    expect(screen.queryByText('Salvar alterações?')).toBeNull();
+    await fireEvent.press(screen.getByLabelText('Pix'));
+    await fireEvent.press(screen.getByLabelText('Salvar'));
+    expect(screen.getByText('Não informada → Pix')).toBeTruthy();
+    await confirm();
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]!.body).toMatchObject({ fulfillmentType: 'DELIVERY', expectedPaymentMethod: 'PIX' });
+    expect(writes[0]!.body).not.toHaveProperty('changeFor');
+  });
+
+  it('422 em changeFor aparece no campo; 422 PaymentMethodDisabled recarrega as formas', async () => {
+    writeHandler = () => problem(422, 'ValidationFailed', { errors: { changeFor: ['O troco precisa ser para pelo menos R$ 61,00 (o total).'] } });
+    await renderWith(<EditOrderScreen />);
+    await fireEvent.changeText(await screen.findByLabelText('Troco para (opcional)'), '6000');
+    await fireEvent.press(screen.getByLabelText('Salvar'));
+    await confirm();
+    expect((await screen.findAllByText('O troco precisa ser para pelo menos R$ 61,00 (o total).')).length).toBeGreaterThan(0);
+
+    writeHandler = () => problem(422, 'PaymentMethodDisabled');
+    const settingsReads = reads.filter((r) => r === '/tenant/settings').length;
+    await fireEvent.press(screen.getByLabelText('Cartão'));
+    await fireEvent.press(screen.getByLabelText('Salvar'));
+    await confirm();
+    expect(await screen.findByText('Essa forma de pagamento está desabilitada.')).toBeTruthy();
+    await waitFor(() => expect(reads.filter((r) => r === '/tenant/settings').length).toBeGreaterThan(settingsReads));
+  });
+
+  it('409 OrderAlreadyPaid: mostra a mensagem e recarrega o pedido (quitado, só observação, mesa e comanda)', async () => {
+    writeHandler = () => problem(409, 'OrderAlreadyPaid');
+    await renderWith(<EditOrderScreen />);
+    await fireEvent.press(await screen.findByLabelText('Pix'));
+    orderResponse = { ...ORDER, version: 2, paidAmount: '57.00', balance: '0.00', isPaid: true };
+    await fireEvent.press(screen.getByLabelText('Salvar'));
+    await confirm();
+    expect(await screen.findByText('Este pedido já foi quitado. Para corrigir, estorne um pagamento.')).toBeTruthy();
+    expect(await screen.findByText('Pedido quitado: só observação, mesa e comanda podem mudar.')).toBeTruthy();
+    expect(screen.queryByLabelText('Pix')).toBeNull();
+  });
+});
+
+describe('alerta do troco abaixo do total no detalhe e no card (I2)', () => {
+  const belowOrder = { changeFor: '60.00', totalAmount: '61.00', balance: '61.00', changeForBelowTotal: true };
+  const ALERT = 'O troco para R$ 60,00 não cobre o total R$ 61,00 — confirme com o cliente';
+
+  it('detalhe: o alerta no lugar do troco do motoboy, com o atalho para editar', async () => {
+    orderResponse = { ...ORDER, ...belowOrder };
+    await renderWith(<OrderDetailScreen />);
+    expect(await screen.findByText(ALERT)).toBeTruthy();
+    expect(screen.getByTestId('change-below-total')).toBeTruthy();
+    expect(screen.queryByTestId('change-to-carry')).toBeNull();
+    await fireEvent.press(screen.getByText('Editar troco'));
+    expect(router.push).toHaveBeenCalledWith(`/orders/${ORDER_ID}/edit`);
+  });
+
+  it('card da aba Delivery: "Paga com dinheiro" e o alerta, sem troco negativo', async () => {
+    listItems = [summary(belowOrder)];
+    await renderWith(<DeliveryTab />);
+    expect(await screen.findByText(ALERT)).toBeTruthy();
+    expect(screen.getByText('Paga com dinheiro')).toBeTruthy();
+    expect(screen.queryByText(/→ troco/)).toBeNull();
+    await fireEvent.press(screen.getByText('Editar troco'));
+    expect(router.push).toHaveBeenCalledWith(`/orders/${ORDER_ID}/edit`);
+  });
+
+  it('card da marmita (aba Marmitas): o mesmo alerta; sem orders.edit, sem o atalho', async () => {
+    const me = useSession.getState().me!;
+    useSession.setState({ me: { ...me, permissions: me.permissions.filter((x) => x !== 'orders.edit') } as unknown as Me });
+    await renderWith(<OrderCard order={summary({ ...belowOrder, orderType: 'MARMITA' })} />);
+    expect(screen.getByText(ALERT)).toBeTruthy();
+    expect(screen.queryByText('Editar troco')).toBeNull();
+  });
+
+  it('troco que cobre o total: sem alerta', async () => {
+    await renderWith(<OrderCard order={summary({})} />);
+    expect(screen.getByText('Paga com dinheiro · Levar troco para R$ 100,00 → troco R$ 43,00')).toBeTruthy();
+    expect(screen.queryByTestId('change-below-total')).toBeNull();
   });
 });

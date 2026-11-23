@@ -3,15 +3,18 @@
  * criação, endereço e a linha do troco no card/detalhe. Usadas no `NewDeliveryScreen` e no `NewMarmitaScreen`.
  */
 import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
 import { View } from 'react-native';
 
-import type { Address, PaymentMethod } from '@/api/types';
-import { Chip, MoneyInput, Row, Text, TextField, space, useColors } from '@/components/ui';
+import type { AcceptanceStatus, Address, CancellationStatus, PaymentMethod } from '@/api/types';
+import { Banner, Chip, MoneyInput, Row, Text, TextField, space, useColors } from '@/components/ui';
 import { formatBRL, fromCents, toCents, type MoneyString } from '@/lib/money';
 import { paymentMethodNames } from '@/lib/strings';
+import { useIsOnline } from '@/stores/connectivity';
+import { useCanWrite } from '@/stores/session';
 
 import { cashSuggestions } from './compose';
-import { changeToCarryCents, changeToCarryText, expectedPaymentShort, type ExpectedPayment } from './delivery';
+import { changeBelowTotalText, changeToCarryCents, changeToCarryText, expectedPaymentShort, type ChangeInfo, type ExpectedPayment } from './delivery';
 
 const ALL_METHODS: PaymentMethod[] = ['CASH', 'PIX', 'CARD'];
 
@@ -125,7 +128,7 @@ export function AddressFields({ value, onChange, streetError }: { value: Address
  * Forma prevista e troco do card e do detalhe: "Paga com dinheiro · Levar troco para R$ 100,00 → troco R$ 43,00".
  * Não é pagamento: o selo financeiro continua com o saldo.
  */
-export function ExpectedPaymentLine({ order: o }: { order: { expectedPaymentMethod?: PaymentMethod | null; changeFor?: MoneyString | null; balance: MoneyString; isPaid: boolean } }) {
+export function ExpectedPaymentLine({ order: o }: { order: ChangeInfo }) {
   const c = useColors();
   const method = expectedPaymentShort(o.expectedPaymentMethod);
   if (!method) return null;
@@ -137,5 +140,27 @@ export function ExpectedPaymentLine({ order: o }: { order: { expectedPaymentMeth
         {change ? `${method} · ${change}` : method}
       </Text>
     </Row>
+  );
+}
+
+/**
+ * "Troco para" abaixo do total (ADR-0059 complementado em 2026-11-23, I2), no card (abas Delivery e Marmitas) e no
+ * detalhe: alerta para o atendente conferir com o cliente, no lugar de um troco negativo ou zerado, com o atalho
+ * "Editar troco" (`orders/[id]/edit`) para quem pode editar o pedido.
+ */
+export function ChangeBelowTotalAlert({
+  order: o,
+}: {
+  order: ChangeInfo & { id: string; totalAmount: MoneyString; cancellationStatus: CancellationStatus; acceptanceStatus: AcceptanceStatus };
+}) {
+  const canEdit = useCanWrite('orders.edit');
+  const online = useIsOnline();
+  const text = o.cancellationStatus === 'ACTIVE' ? changeBelowTotalText(o) : null;
+  if (!text) return null;
+  const editable = canEdit && online && o.acceptanceStatus === 'ACCEPTED';
+  return (
+    <View testID="change-below-total">
+      <Banner tone="warning" text={text} action={editable ? { label: 'Editar troco', onPress: () => router.push(`/orders/${o.id}/edit`) } : undefined} />
+    </View>
   );
 }

@@ -201,13 +201,20 @@ export function useAddWeighings(order: Order | undefined, onDone: () => void) {
 }
 
 /** Escritas só [M] no pedido: If-Match protege contra aplicar duas vezes. */
-function useOrderVersioned<TVars>(orderId: string, build: (v: TVars) => ReturnType<typeof versioned.setStatus>, describe: (v: TVars) => string, success?: string) {
+function useOrderVersioned<TVars>(
+  orderId: string,
+  build: (v: TVars) => ReturnType<typeof versioned.setStatus>,
+  describe: (v: TVars) => string,
+  success?: string,
+  onRejected?: (error: ApiError) => void,
+) {
   const client = useQueryClient();
   return useCriticalMutation<TVars, Order>({
     request: build,
     describe,
     idempotent: false,
     onConfirmed: (o) => setOrderInCache(client, o),
+    onRejected: onRejected ? (error) => void onRejected(error) : undefined,
     onConflict: (current) => {
       if (current) client.setQueryData(qk.order(orderId), current as Order);
       void client.invalidateQueries({ queryKey: ['production'] });
@@ -224,8 +231,23 @@ export function useSetProductionStatus(orderId: string) {
   );
 }
 
+/**
+ * `PATCH /orders/{id}` [M]. Desde 2026-11-23 também a forma prevista e o "troco para" (I1): `PaymentMethodDisabled`
+ * recarrega as formas habilitadas; `OrderAlreadyPaid` (alguém quitou com a tela aberta) recarrega o pedido, e a tela
+ * passa a mostrar só observação, mesa e comanda.
+ */
 export function useUpdateOrder(orderId: string) {
-  return useOrderVersioned<{ body: UpdateOrderBody; version: number }>(orderId, (v) => versioned.updateOrder(orderId, v.body, v.version), () => 'Editar pedido', 'Pedido atualizado');
+  const client = useQueryClient();
+  return useOrderVersioned<{ body: UpdateOrderBody; version: number }>(
+    orderId,
+    (v) => versioned.updateOrder(orderId, v.body, v.version),
+    () => 'Editar pedido',
+    'Pedido atualizado',
+    (error) => {
+      if (error.is('PaymentMethodDisabled')) void client.invalidateQueries({ queryKey: qk.settings });
+      if (error.is('OrderAlreadyPaid')) void client.invalidateQueries({ queryKey: qk.order(orderId) });
+    },
+  );
 }
 
 export function useUpdateItem(orderId: string) {

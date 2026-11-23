@@ -50,6 +50,16 @@ import {
   type MarmitaLine,
   type PfLine,
 } from '../compose';
+import {
+  changeForChangeText,
+  editedTotalCents,
+  expectedPaymentChangeText,
+  expectedPaymentEditIssues,
+  expectedPaymentPatch,
+  fieldMessage,
+  type ExpectedPayment,
+} from '../delivery';
+import { ExpectedPaymentFields } from '../deliveryComponents';
 import { AddonPicker, BeverageGrid } from '../formParts';
 import { summarizeOrder, useAcknowledgeAlerts, useAddItems, useAddWeighings, useOrder, useOrderAlerts, useOrderHistory, useUpdateOrder } from '../hooks';
 import { isDispatched } from '../fulfillment';
@@ -368,7 +378,10 @@ export function AlertsScreen() {
   );
 }
 
-/** `PATCH /orders/{id}`: dados do pedido, não itens. Pago: só observação, mesa e comanda. */
+/**
+ * `PATCH /orders/{id}`: dados do pedido, não itens. Pago: só observação, mesa e comanda. Na entrega e na retirada,
+ * também a forma prevista e o "troco para" até a quitação (ADR-0059 complementado em 2026-11-23, I1).
+ */
 export function EditOrderScreen() {
   const order = useLoadedOrder();
   if (!order.data) return <Loading query={order} />;
@@ -387,9 +400,12 @@ function EditOrder({ order: o }: { order: Order }) {
   const [street, setStreet] = useState(o.deliveryAddress?.street ?? '');
   const [number, setNumber] = useState(o.deliveryAddress?.number ?? '');
   const [neighborhood, setNeighborhood] = useState(o.deliveryAddress?.neighborhood ?? '');
+  const [payment, setPayment] = useState<ExpectedPayment>({ expectedPaymentMethod: o.expectedPaymentMethod, changeFor: o.changeFor });
+  const [tried, setTried] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [conflict, setConflict] = useState<Order | null>(null);
   const update = useUpdateOrder(o.id);
+  const settings = useSettings();
   // Marmita e o delivery por telefone à la carte (entrega/retirada) editam cliente, atendimento e endereço; a comanda
   // do salão, mesa e comanda (06 §6.9 `PATCH /orders/{id}`).
   const phoneOrder = o.orderType === 'MARMITA' || (o.orderType === 'A_LA_CARTE' && o.fulfillmentType !== 'DINE_IN');
@@ -402,6 +418,13 @@ function EditOrder({ order: o }: { order: Order }) {
   // responderia `403 PermissionDenied`). Só vai quando muda.
   const sentFee: string | undefined = !canEditFee || o.isPaid || !phoneOrder ? undefined : fulfillment === 'DELIVERY' ? (feeChanged ? fee : undefined) : o.fulfillmentType === 'DELIVERY' ? '0.00' : undefined;
 
+  // Forma prevista e troco (I1): só na entrega/retirada não quitada; só vai o que mudou (`expectedPaymentPatch`).
+  const paymentEditable = phoneOrder && !o.isPaid && fulfillment !== 'DINE_IN';
+  const totalCents = editedTotalCents(o, fulfillment, sentFee, settings.data?.defaultDeliveryFee);
+  const paymentBody = paymentEditable ? expectedPaymentPatch(o, payment, fulfillment) : {};
+  const localIssues = paymentEditable ? expectedPaymentEditIssues(o, payment, fulfillment, totalCents, settings.data?.enabledPaymentMethods) : {};
+  const shownIssues = tried ? localIssues : {};
+
   const body = {
     ...(o.isPaid
       ? {}
@@ -412,6 +435,7 @@ function EditOrder({ order: o }: { order: Order }) {
             fulfillmentType: fulfillment,
             deliveryAddress: fulfillment === 'DELIVERY' ? { street, number: number || null, complement: o.deliveryAddress?.complement ?? null, neighborhood: neighborhood || null, reference: o.deliveryAddress?.reference ?? null } : null,
             ...(sentFee !== undefined ? { deliveryFee: sentFee } : {}),
+            ...paymentBody,
           }
         : {}),
     tableLabel: table.trim() || null,
@@ -464,6 +488,19 @@ function EditOrder({ order: o }: { order: Order }) {
               )}
             </>
           ) : null}
+          {paymentEditable ? (
+            <ExpectedPaymentFields
+              fulfillmentType={fulfillment === 'DELIVERY' ? 'DELIVERY' : 'PICKUP'}
+              value={payment}
+              onChange={setPayment}
+              totalCents={totalCents}
+              methods={settings.data?.enabledPaymentMethods}
+              errors={{
+                method: shownIssues.method ?? fieldMessage(update.fieldErrors, 'expectedPaymentMethod'),
+                changeFor: shownIssues.changeFor ?? fieldMessage(update.fieldErrors, 'changeFor'),
+              }}
+            />
+          ) : null}
         </>
       ) : null}
       {!phoneOrder ? (
@@ -478,13 +515,25 @@ function EditOrder({ order: o }: { order: Order }) {
       ) : null}
       <TextField label="Observações" value={notes} onChangeText={setNotes} multiline />
       {update.error ? <Banner tone="danger" text={update.error} /> : null}
-      <Button title="Salvar" onPress={() => setConfirm(true)} />
+      <Button
+        title="Salvar"
+        onPress={() => {
+          setTried(true);
+          if (!localIssues.method && !localIssues.changeFor) setConfirm(true);
+        }}
+      />
       <ConfirmDialog
         visible={confirm}
         title="Salvar alterações?"
         lines={[
           { label: 'Pedido', value: `#${o.orderNumber}` },
           ...(sentFee !== undefined ? [{ label: 'Taxa de entrega', value: `${formatBRL(o.deliveryFee)} → ${formatBRL(sentFee)}` }] : []),
+          ...('expectedPaymentMethod' in paymentBody && paymentBody.expectedPaymentMethod !== o.expectedPaymentMethod
+            ? [{ label: 'Forma prevista', value: expectedPaymentChangeText(o.expectedPaymentMethod, paymentBody.expectedPaymentMethod ?? null) }]
+            : []),
+          ...('changeFor' in paymentBody ? [{ label: 'Troco para', value: changeForChangeText(o.changeFor, paymentBody.changeFor ?? null) }] : []),
+          // Saindo de dinheiro, o servidor apaga o "troco para" gravado (06 §6.9).
+          ...(o.changeFor && paymentBody.expectedPaymentMethod !== undefined && paymentBody.expectedPaymentMethod !== 'CASH' ? [{ label: 'Troco para', value: changeForChangeText(o.changeFor, null) }] : []),
         ]}
         confirmLabel="Salvar alterações"
         loading={update.busy}

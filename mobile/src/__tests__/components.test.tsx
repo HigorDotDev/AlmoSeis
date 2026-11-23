@@ -138,6 +138,7 @@ describe('selos (RNF-001)', () => {
       acceptanceDeadline: null,
       fulfillmentStatus: 'PENDING',
       isReadyForPickup: false,
+      changeForBelowTotal: false,
       itemCount: 3,
       pendingAlertCount: 1,
       createdAt: '2026-10-27T14:30:00Z',
