@@ -343,6 +343,14 @@ describe('produto: "Vende no site" da bebida (ADR-0044 item 5, ADR-0057 item 5)'
     expect(writes[0]).toMatchObject({ method: 'PATCH', path: '/products/p1', body: { sitePrice: '7.00' } });
     expect(writes[0]!.body).not.toHaveProperty('isVisibleOnPage');
   });
+
+  it('lanchonete pura (sem MARMITA/PF/KILO/DAILY_MENU): o produto fica só leitura, sem Salvar (403 ModuleNotEnabled)', async () => {
+    signIn(['orders.view', 'catalog.manage'], ['A_LA_CARTE', 'DELIVERY', 'FIXED_MENU']);
+    await renderWith(<ProductFormScreen />);
+    expect((await screen.findByLabelText('Nome')).props.editable).toBe(false);
+    expect(screen.queryByText('Salvar')).toBeNull();
+    expect(writes).toHaveLength(0);
+  });
 });
 
 describe('pedido do site: forma de pagamento esperada e riskFlag', () => {

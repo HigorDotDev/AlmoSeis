@@ -34,7 +34,10 @@ export const qk = {
   production: (businessDayId: string | undefined) => ['production', businessDayId ?? 'current'] as const,
   customerSearch: (term: string) => ['customers', 'search', term] as const,
   customer: (id: string) => ['customers', id] as const,
-  /** `GET /customers/by-phone` (EP-003 fatia 4); sob `['customers']`, invalidada pelo feed `CUSTOMER`/`ORDER`. */
+  /**
+   * `POST /customers/lookup` (EP-003 fatia 4, leitura com o telefone no corpo); sob `['customers']`, invalidada pelo
+   * feed `CUSTOMER`/`ORDER`. O telefone fica só na chave do cache em memória (o cache não é persistido).
+   */
   customerByPhone: (phoneE164: string) => ['customers', 'byPhone', phoneE164] as const,
   customerPending: (id: string) => ['customers', id, 'pending'] as const,
   closingSummary: (businessDayId?: string) => ['closing', 'summary', businessDayId ?? 'current'] as const,

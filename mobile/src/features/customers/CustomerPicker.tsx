@@ -47,7 +47,7 @@ export function CustomerPicker({
   const debounced = useDebounced(term.trim(), 350);
   const results = useCustomerSearch(debounced, debounced.length >= 2 && value.id === null);
   const items = results.data?.pages.flatMap((p) => p.items).slice(0, 6) ?? [];
-  // Telefone digitado sem escolher cadastro: procura pelo número exato (06 §6.8 `by-phone`) e oferece o cliente,
+  // Telefone digitado sem escolher cadastro: procura pelo número exato (06 §6.8 `POST /customers/lookup`) e oferece o cliente,
   // com os endereços salvos (Q-313). Nada muda sozinho: a pessoa toca para usar.
   const typedE164 = value.id === null ? toE164(value.phone) : null;
   const byPhone = useCustomerByPhone(typedE164);

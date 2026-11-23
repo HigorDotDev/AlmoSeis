@@ -37,7 +37,7 @@ import { useCreateOrder } from '../hooks';
 
 /**
  * 08 §8.9 `orders/new/delivery`: pedido por telefone da lanchonete (EP-003 fatia 4, ADR-0059). Telefone primeiro
- * (`GET /customers/by-phone` preenche o nome), entrega ou retirada, endereço e taxa digitada na criação, forma
+ * (`POST /customers/lookup` preenche o nome), entrega ou retirada, endereço e taxa digitada na criação, forma
  * prevista e "troco para", e os itens com o mesmo montador da comanda à la carte. Entra aceito, com número e na
  * cozinha. A forma prevista não registra pagamento.
  */

@@ -751,7 +751,7 @@ export interface Customer {
   createdAt: Instant;
 }
 
-/** `GET /customers/by-phone` (06 §6.8, EP-003 fatia 4): telefone sem cadastro → os dois `null`, nunca `404`. */
+/** `POST /customers/lookup` (06 §6.8, EP-003 fatia 4): telefone sem cadastro → os dois `null`, nunca `404`. */
 export interface CustomerByPhone {
   customer: Customer | null;
   /** O `deliveryAddress` do pedido mais recente do cliente que tinha endereço ("usar o endereço do último pedido"). */

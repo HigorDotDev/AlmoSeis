@@ -1,5 +1,5 @@
 /**
- * EP-003 fatia 4 (ADR-0059, 06 §6.8 `by-phone` e §6.9 `POST /orders`): delivery por telefone da lanchonete e
+ * EP-003 fatia 4 (ADR-0059, 06 §6.8 `POST /customers/lookup` e §6.9 `POST /orders`): delivery por telefone da lanchonete e
  * marmita por telefone. Telefone preenche o nome (sem sobrescrever o que foi digitado); "usar o endereço do último
  * pedido"; taxa digitada na criação; forma prevista e "troco para" (>= total); o corpo do contrato; aba Delivery com
  * os filtros (`fulfillmentType` repetível, `fulfillmentStatus`) e "Novos do site"; marmita na entrega exige telefone
@@ -13,9 +13,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { router } from 'expo-router';
 import type { ReactElement } from 'react';
+import { Text } from 'react-native';
 
 import { configureApiClient, qs } from '@/api/client';
 import type { Customer, FixedMenu, Me, Order, OrderSummary, Product } from '@/api/types';
+import { useCustomerByPhone } from '@/features/customers/hooks';
 import DeliveryTab, { deliveryFilters } from '@/features/delivery/screens/DeliveryTab';
 import { fixedMenuBook, newComboLine, newDishLine } from '@/features/orders/aLaCarte';
 import { buildMarmitaBody, emptyMarmitaForm } from '@/features/orders/compose';
@@ -296,6 +298,7 @@ let listItems: OrderSummary[];
 let awaitingItems: OrderSummary[];
 const writes: { method: string; path: string; headers: Record<string, string>; body: unknown }[] = [];
 const reads: string[] = [];
+const lookupHeaders: Record<string, string>[] = [];
 
 function signIn(extra: string[] = []) {
   useSession.setState({
@@ -317,6 +320,7 @@ beforeEach(() => {
   useConnectivity.setState({ online: true });
   writes.length = 0;
   reads.length = 0;
+  lookupHeaders.length = 0;
   writeHandler = () => undefined;
   orderResponse = ORDER;
   listItems = [];
@@ -328,6 +332,14 @@ beforeEach(() => {
   global.fetch = jest.fn(async (url: string, init: RequestInit = {}) => {
     const path = url.replace(/^https?:\/\/[^/]+(\/api\/v1)?/, '');
     const method = init.method ?? 'GET';
+    // `POST /customers/lookup` é leitura (telefone no corpo, sem `Idempotency-Key` nem `If-Match`): conta como leitura.
+    if (method === 'POST' && path === '/customers/lookup') {
+      const body = JSON.parse(init.body as string) as { phoneNumber: string };
+      const headers = init.headers as Record<string, string>;
+      reads.push(`lookup:${body.phoneNumber}`);
+      lookupHeaders.push(headers);
+      return body.phoneNumber === PHONE ? json(200, { customer: CARLA, lastDeliveryAddress: LAST_ADDRESS }) : json(200, { customer: null, lastDeliveryAddress: null });
+    }
     if (method !== 'GET') {
       writes.push({ method, path, headers: init.headers as Record<string, string>, body: init.body ? JSON.parse(init.body as string) : undefined });
       return writeHandler(method, path) ?? json(500, { errorCode: 'Unexpected' });
@@ -336,11 +348,6 @@ beforeEach(() => {
     if (path.startsWith('/fixed-menu')) return json(200, MENU);
     if (path === '/tenant/settings') return json(200, SETTINGS);
     if (path.startsWith('/business-days/current')) return json(200, { id: id('401'), version: 1, businessDate: '2026-11-22', status: 'OPEN' });
-    if (path.startsWith('/customers/by-phone')) {
-      return path === `/customers/by-phone?phoneNumber=${encodeURIComponent(PHONE)}`
-        ? json(200, { customer: CARLA, lastDeliveryAddress: LAST_ADDRESS })
-        : json(200, { customer: null, lastDeliveryAddress: null });
-    }
     if (path.startsWith('/products')) return json(200, { items: [COCA] });
     if (path.startsWith('/marmita-sizes')) return json(200, { items: [] });
     if (path.startsWith('/orders?')) {
@@ -491,7 +498,10 @@ describe('pedido por telefone (08 §8.9 orders/new/delivery)', () => {
 
     await fireEvent.changeText(screen.getByLabelText('Telefone'), '34988887777');
     await waitFor(() => expect(screen.getByLabelText('Nome').props.value).toBe('Carla Souza'));
-    expect(reads).toContain(`/customers/by-phone?phoneNumber=%2B5534988887777`);
+    expect(reads).toContain('lookup:+5534988887777');
+    expect(reads.some((r) => r.includes('5534988887777') && !r.startsWith('lookup:'))).toBe(false);
+    expect(lookupHeaders[0]!['Idempotency-Key']).toBeUndefined();
+    expect(lookupHeaders[0]!['If-Match']).toBeUndefined();
     expect(screen.getByTestId('phone-customer')).toBeTruthy();
 
     await fireEvent.press(screen.getByLabelText('Usar endereço do último pedido'));
@@ -598,6 +608,34 @@ describe('pedido por telefone (08 §8.9 orders/new/delivery)', () => {
     await fireEvent.press(screen.getByLabelText('Registrar R$ 4,00'));
     await confirm();
     expect((await screen.findAllByText('Telefone fora do formato.')).length).toBeGreaterThan(0);
+  });
+});
+
+describe('busca do cliente pelo telefone (06 §6.8 `POST /customers/lookup`)', () => {
+  function Probe() {
+    const q = useCustomerByPhone(PHONE);
+    return <Text testID="lookup-status">{q.data?.customer?.name ?? q.fetchStatus}</Text>;
+  }
+
+  it('com orders.create: POST com o telefone no corpo, nunca na URL', async () => {
+    await renderWith(<Probe />);
+    await waitFor(() => expect(screen.getByTestId('lookup-status').props.children).toBe('Carla Souza'));
+    expect(reads).toEqual(['lookup:+5534988887777']);
+    expect(writes).toHaveLength(0);
+  });
+
+  it.each([
+    ['KITCHEN', ['orders.view', 'production.view']],
+    ['CASHIER', ['orders.view', 'payments.register', 'closing.view']],
+  ])('sem orders.create (%s) não pergunta ao servidor', async (role, permissions) => {
+    const me = useSession.getState().me!;
+    useSession.setState({ me: { ...me, employee: { ...me.employee, roles: [role] }, permissions } as unknown as Me });
+    await renderWith(<Probe />);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(screen.getByTestId('lookup-status').props.children).toBe('idle');
+    expect(reads.filter((r) => r.startsWith('lookup:'))).toHaveLength(0);
   });
 });
 
@@ -712,6 +750,24 @@ describe('detalhe, taxa depois e pagamento', () => {
     await waitFor(() => expect(writes).toHaveLength(1));
     expect(writes[0]!.headers['If-Match']).toBe('"1"');
     expect(writes[0]!.body).not.toHaveProperty('deliveryFee');
+  });
+
+  it('troca de atendimento só com o módulo do novo atendimento; 403 ModuleNotEnabled mostra a mensagem', async () => {
+    writeHandler = (method) => (method === 'PATCH' ? problem(403, 'ModuleNotEnabled', { module: 'DELIVERY' }) : undefined);
+    await renderWith(<EditOrderScreen />);
+    await screen.findByLabelText('Cliente');
+    expect(screen.getByRole('tab', { name: 'Retirada' })).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Salvar'));
+    await confirm();
+    expect((await screen.findAllByText('Delivery não está habilitado neste estabelecimento.')).length).toBeGreaterThan(0);
+  });
+
+  it('sem o módulo DELIVERY, a edição não oferece trocar entrega e retirada', async () => {
+    const me = useSession.getState().me!;
+    useSession.setState({ me: { ...me, tenant: { ...me.tenant, modules: ['A_LA_CARTE', 'FIXED_MENU'] } } as unknown as Me });
+    await renderWith(<EditOrderScreen />);
+    expect(await screen.findByTestId('fulfillment-locked')).toHaveTextContent('Entrega: este estabelecimento não troca o atendimento deste pedido.');
+    expect(screen.queryByRole('tab', { name: 'Retirada' })).toBeNull();
   });
 
   it('com a permissão, a taxa mudada vai no PATCH; 403 PermissionDenied mostra a mensagem', async () => {

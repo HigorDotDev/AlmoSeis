@@ -56,6 +56,7 @@ import { isDispatched } from '../fulfillment';
 import { MarmitaBuilderSheet } from '../MarmitaBuilderSheet';
 import { AddALaCarteItems } from './AddALaCarteItems';
 import { newKey } from '@/lib/ids';
+import { hasModule } from '@/features/tenant/establishment';
 
 function useLoadedOrder() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -393,6 +394,9 @@ function EditOrder({ order: o }: { order: Order }) {
   // do salão, mesa e comanda (06 §6.9 `PATCH /orders/{id}`).
   const phoneOrder = o.orderType === 'MARMITA' || (o.orderType === 'A_LA_CARTE' && o.fulfillmentType !== 'DINE_IN');
   const feeChanged = toCents(fee) !== toCents(o.deliveryFee);
+  // Trocar o atendimento exige o módulo do novo atendimento (06 §6.9, ADR-0054 item 14): marmita → `MARMITA`; à la
+  // carte em entrega/retirada → `DELIVERY`. Sem ele, a troca nem é oferecida (o servidor daria `403 ModuleNotEnabled`).
+  const canSwitchFulfillment = useSession((s) => hasModule(s.me, o.orderType === 'MARMITA' ? 'MARMITA' : 'DELIVERY'));
 
   // Q-315: a taxa depois da criação só muda com `orders.delivery-fee.edit` (sem ela o campo nem vai; o servidor
   // responderia `403 PermissionDenied`). Só vai quando muda.
@@ -426,6 +430,10 @@ function EditOrder({ order: o }: { order: Order }) {
           {isDispatched(o.fulfillmentStatus) ? (
             // ADR-0046 item 19: trocar entrega ↔ retirada depois da saída → `409 OrderAlreadyDispatched`.
             <Banner tone="info" text={`${fulfillment === 'DELIVERY' ? 'Entrega' : 'Retirada'}: não muda depois que o pedido saiu.`} />
+          ) : !canSwitchFulfillment ? (
+            <Text muted testID="fulfillment-locked">
+              {fulfillment === 'DELIVERY' ? 'Entrega' : 'Retirada'}: este estabelecimento não troca o atendimento deste pedido.
+            </Text>
           ) : (
             <SegmentedControl
               value={fulfillment === 'DELIVERY' ? 'DELIVERY' : 'PICKUP'}

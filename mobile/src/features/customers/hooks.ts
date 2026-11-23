@@ -4,6 +4,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { customersApi } from '@/api/endpoints/customers';
 import { qk } from '@/api/queryKeys';
 import type { CreateCustomerBody, Customer, CustomerAddressInput } from '@/api/types';
+import { usePermission } from '@/stores/session';
 
 const STALE = 60_000;
 
@@ -19,14 +20,16 @@ export function useCustomerSearch(term: string, enabled = true) {
 }
 
 /**
- * Cliente do telefone (06 §6.8 `GET /customers/by-phone`, ADR-0059 item 14): só com o telefone completo em E.164
- * (`null` não busca). Telefone sem cadastro devolve `{ customer: null, lastDeliveryAddress: null }`.
+ * Cliente do telefone (06 §6.8 `POST /customers/lookup`, ADR-0059 item 14): só com o telefone completo em E.164
+ * (`null` não busca) e só para quem tem `orders.create` (a cozinha e o caixa recebem `403`, então nem perguntam).
+ * Telefone sem cadastro devolve `{ customer: null, lastDeliveryAddress: null }`.
  */
 export function useCustomerByPhone(phoneE164: string | null) {
+  const canLookup = usePermission('orders.create');
   return useQuery({
     queryKey: qk.customerByPhone(phoneE164 ?? ''),
-    queryFn: async () => (await customersApi.byPhone(phoneE164!)).data,
-    enabled: !!phoneE164,
+    queryFn: async () => (await customersApi.lookupByPhone(phoneE164!)).data,
+    enabled: !!phoneE164 && canLookup,
     staleTime: STALE,
   });
 }

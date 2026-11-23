@@ -30,9 +30,20 @@ import { formatBRL, toCents } from '@/lib/money';
 import { NO_SITE_SIZE_TEXT, siteBodyPrice, siteSaleFrom, siteSummary, type SiteSale } from '@/lib/sitePrice';
 import { productKindNames, productKindSingular } from '@/lib/strings';
 import { serverFieldError } from '@/components/form';
-import { useCanWrite } from '@/stores/session';
+import { PRODUCT_CATALOG_MODULES, hasAnyModule } from '@/features/tenant/establishment';
+import { useCanWrite, useSession } from '@/stores/session';
 
 import { useCreateProduct, useMarmitaSizes, useProduct, useProducts, useSaveSize, useUpdateProduct, useUploadProductImage } from '../hooks';
+
+/**
+ * Cadastro de produto: `catalog.manage` **e** um módulo do catálogo (06 §6.5). A lanchonete pura não chega aqui pelo
+ * menu; por link direto, a tela fica só leitura em vez de oferecer um `POST`/`PATCH` que daria `403 ModuleNotEnabled`.
+ */
+function useCanManageProducts(): boolean {
+  const canWrite = useCanWrite('catalog.manage');
+  const hasCatalog = useSession((s) => hasAnyModule(s.me, PRODUCT_CATALOG_MODULES));
+  return canWrite && hasCatalog;
+}
 
 const KINDS: ProductKind[] = ['MAIN_DISH', 'SIDE_DISH', 'BEVERAGE', 'ADDON'];
 
@@ -41,7 +52,7 @@ export function ProductsScreen() {
   const [search, setSearch] = useState('');
   const [inactive, setInactive] = useState(false);
   const products = useProducts({ kind, includeInactive: inactive });
-  const canManage = useCanWrite('catalog.manage');
+  const canManage = useCanManageProducts();
   const update = useUpdateProduct();
   const items = (products.data ?? []).filter((p) => p.name.toLowerCase().includes(search.trim().toLowerCase()));
 
@@ -98,7 +109,7 @@ export function ProductFormScreen() {
 
 /** Preço por tipo (ADR-0020): bebida e adicional exigem preço; prato pode ter (usado no PF); acompanhamento não precisa. */
 function ProductForm({ product, initialKind, returnTo }: { product: Product | null; initialKind: ProductKind; returnTo?: string }) {
-  const canManage = useCanWrite('catalog.manage');
+  const canManage = useCanManageProducts();
   const create = useCreateProduct();
   const update = useUpdateProduct();
   const upload = useUploadProductImage();

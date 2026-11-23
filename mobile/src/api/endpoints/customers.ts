@@ -4,8 +4,11 @@ import type { CreateCustomerBody, Customer, CustomerAddressInput, CustomerByPhon
 /** 06 §6.8. */
 export const customersApi = {
   search: (f: { search?: string; limit?: number; cursor?: string }) => apiRequest<Page<Customer>>('GET', `/customers${qs(f)}`),
-  /** Telefone em E.164; `qs` codifica o `+` como `%2B` (EP-003 fatia 4). */
-  byPhone: (phoneNumber: string) => apiRequest<CustomerByPhone>('GET', `/customers/by-phone${qs({ phoneNumber })}`),
+  /**
+   * Cliente do telefone (`POST /customers/lookup`, EP-003 fatia 4): leitura com o telefone no corpo, nunca na URL
+   * (ADR-0024), sem `Idempotency-Key` nem `If-Match`. Permissão `orders.create`.
+   */
+  lookupByPhone: (phoneNumber: string) => apiRequest<CustomerByPhone>('POST', '/customers/lookup', { body: { phoneNumber } }),
   get: (id: Uuid) => apiRequest<Customer>('GET', `/customers/${id}`),
   create: (body: CreateCustomerBody) => apiRequest<Customer>('POST', '/customers', { body }),
   update: (id: Uuid, body: { name?: string; phoneNumber?: string | null; notes?: string | null }, version: number) =>

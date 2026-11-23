@@ -86,6 +86,12 @@ export function hasModule(me: Me | null, module: TenantModule): boolean {
   return tenantModules(me).includes(module);
 }
 
+/**
+ * Módulos do catálogo de produtos (`/products`, 06 §6.5): basta um deles. Sem nenhum (a lanchonete pura, que cadastra
+ * pelo cardápio fixo), `POST`/`PATCH /products` e o `image-upload` dão `403 ModuleNotEnabled` (ADR-0054 item 14).
+ */
+export const PRODUCT_CATALOG_MODULES: readonly TenantModule[] = ['MARMITA', 'PF', 'KILO', 'DAILY_MENU'];
+
 export function hasAnyModule(me: Me | null, modules: readonly TenantModule[]): boolean {
   const own = tenantModules(me);
   return modules.some((m) => own.includes(m));

@@ -330,6 +330,13 @@ export function useAcknowledgeAlerts(orderId: string) {
       void client.invalidateQueries({ queryKey: ['orders'] });
       void client.invalidateQueries({ queryKey: ['production'] });
     },
+    // `404 NotFound` (06 §6.9): o pedido não existe mais para este estabelecimento. A mensagem é a genérica do `errorMessage`
+    // ("Não encontrado."), e as listas recarregam para o card sumir.
+    onError: (e: unknown) => {
+      if ((e as Partial<ApiError>)?.status !== 404) return;
+      void client.invalidateQueries({ queryKey: ['orders'] });
+      void client.invalidateQueries({ queryKey: ['production'] });
+    },
   });
 }
 

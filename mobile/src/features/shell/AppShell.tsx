@@ -13,7 +13,7 @@ import { draftsRepo } from '@/db/draftsRepo';
 import { pendingOpsRepo } from '@/db/pendingOpsRepo';
 import { unregisterPush } from '@/features/push/registration';
 import { confirmAction } from '@/lib/confirm';
-import { hasAnyModule, storefrontSections } from '@/features/tenant/establishment';
+import { PRODUCT_CATALOG_MODULES, hasAnyModule, storefrontSections } from '@/features/tenant/establishment';
 import { formatBusinessDate } from '@/lib/dates';
 import { usePendingOps } from '@/stores/pendingOps';
 import { usePreferences } from '@/stores/preferences';
@@ -97,13 +97,13 @@ interface MenuEntry {
   href: string;
   permission?: Permission;
   /** Aparece se o estabelecimento tiver **algum** destes módulos (ADR-0055 item 6). Sem a chave, sempre. */
-  modules?: TenantModule[];
+  modules?: readonly TenantModule[];
   /** Regra além de permissão e módulos (ex.: a página de pedidos, que depende de uma combinação de módulos). */
   visible?: (me: Parameters<typeof hasPermission>[0]) => boolean;
 }
 
 /** O catálogo de `Product` (pratos, acompanhamentos, bebidas, adicionais) é o da marmita, do PF e do quilo (ADR-0056 item 4). */
-const RESTAURANT_CATALOG: TenantModule[] = ['MARMITA', 'PF', 'KILO', 'DAILY_MENU'];
+const RESTAURANT_CATALOG = PRODUCT_CATALOG_MODULES;
 
 /** Itens do épico §2.1 agrupados por frequência de uso (docs/10-ux.md D10). */
 const GROUPS: { title: string; entries: MenuEntry[] }[] = [
