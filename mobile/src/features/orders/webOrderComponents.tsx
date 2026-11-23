@@ -166,6 +166,20 @@ export function WebOrderDetails({ order: o }: { order: Order }) {
             </Text>
           ))}
           {i.notes ? <Text variant="small">Obs.: {i.notes}</Text> : null}
+          {/* Combo do site da lanchonete (EP-003 fatia 5): as partes recuadas, com sabor, adicionais e observação. */}
+          {(i.parts ?? []).map((p) => (
+            <View key={p.id} testID="web-combo-part" style={{ paddingLeft: space.md, borderLeftWidth: 2, borderLeftColor: c.border, marginLeft: space.xs }}>
+              <Text variant="small" style={{ fontWeight: '600' }}>
+                {p.quantity}× {p.name}
+              </Text>
+              {p.addons.map((a) => (
+                <Text key={a.id} variant="small" muted>
+                  + {a.quantity}× {a.name}
+                </Text>
+              ))}
+              {p.notes ? <Text variant="small">Obs.: {p.notes}</Text> : null}
+            </View>
+          ))}
         </View>
       ))}
       {o.deliveryAddress ? (

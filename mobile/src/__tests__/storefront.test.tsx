@@ -5,29 +5,38 @@
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { router } from 'expo-router';
 import type { ReactElement } from 'react';
 import { Linking } from 'react-native';
 
 import { configureApiClient } from '@/api/client';
-import type { Me, Product, Storefront } from '@/api/types';
+import type { Dish, FixedMenu, MarmitaSize, Me, Product, Storefront, TenantModule } from '@/api/types';
 import { ProductFormScreen } from '@/features/catalog/screens/CatalogScreens';
 import { distanceFeeText, expectedPaymentText } from '@/features/orders/webOrders';
 import { WebOrderPaymentInfo } from '@/features/orders/webOrderComponents';
 import { qrMatrix } from '@/features/storefront/qrMatrix';
+import { menuGroups } from '@/features/shell/AppShell';
 import { CONFLICT_TEXT, StorefrontScreen } from '@/features/storefront/screens/StorefrontScreen';
 import {
+  aLaCarteSectionReady,
   formErrors,
   formFromStorefront,
   mapsUrl,
+  marmitaSectionReady,
   normalizeSlugInput,
   pageDeliveryText,
+  pageMenuWord,
   parseCoordinate,
   parseKm,
+  siteSaleWarnings,
   slugProblem,
   storeStatusInfo,
   toUpdateBody,
 } from '@/features/storefront/storefront';
+import { storefrontSections } from '@/features/tenant/establishment';
+import { confirmAction } from '@/lib/confirm';
 import { shareLink as shareLinkWeb } from '@/lib/share.web';
+import { NO_SITE_DISH_TEXT, NO_SITE_SIZE_TEXT } from '@/lib/sitePrice';
 import { useConnectivity } from '@/stores/connectivity';
 import { useSession } from '@/stores/session';
 import { useToast } from '@/stores/toast';
@@ -85,19 +94,22 @@ const problem = (status: number, errorCode: string, ext: Record<string, unknown>
   new Response(JSON.stringify({ status, errorCode, title: errorCode, ...ext }), { status, headers: { 'Content-Type': 'application/problem+json' } });
 
 let current: Storefront;
+/** Leituras extras por caminho (sem a query): `/fixed-menu`, `/marmita-sizes`. */
+let extraGet: Record<string, () => Response>;
 let writeHandler: (body: unknown) => Response;
 const writes: { method: string; path: string; headers: Record<string, string>; body: unknown }[] = [];
 
-function signIn(permissions: Me['permissions']) {
+function signIn(permissions: Me['permissions'], modules?: TenantModule[]) {
   useSession.setState({
     status: 'signedIn',
     readOnly: false,
-    me: { tenant: { id: 't1', name: 'Marmitaria', timeZone: 'America/Sao_Paulo' }, employee: { id: 'e1', displayName: 'Ana', roles: ['OWNER'] }, permissions } as unknown as Me,
+    me: { tenant: { id: 't1', name: 'Marmitaria', timeZone: 'America/Sao_Paulo', ...(modules ? { modules } : {}) }, employee: { id: 'e1', displayName: 'Ana', roles: ['OWNER'] }, permissions } as unknown as Me,
   });
 }
 
 beforeEach(() => {
   current = base;
+  extraGet = {};
   writes.length = 0;
   writeHandler = () => json(200, current);
   useToast.setState({ toasts: [] });
@@ -112,6 +124,8 @@ beforeEach(() => {
       return writeHandler(body);
     }
     if (path === '/storefront') return json(200, current, { ETag: `"${current.version}"` });
+    const extra = extraGet[path.split('?')[0]!];
+    if (extra) return extra();
     if (path === '/products/p1') return json(200, product, { ETag: '"2"' });
     if (path === '/tenant/settings') return json(200, { version: 1, defaultDeliveryFee: '5.00', kiloPricePerKg: null, enabledPaymentMethods: ['CASH'], sharedDeviceIdleSeconds: 300 });
     return json(404, { errorCode: 'NotFound' });
@@ -469,5 +483,236 @@ describe('fatia 4: entrega por distância e ponto do restaurante (06 §6.18, ADR
     expect(distanceFeeText({ fulfillmentType: 'DELIVERY', deliveryFeeSource: 'DISTANCE', deliveryDistanceKm: '4.5', deliveryFee: '3.60' })).toBe('Entrega · 4,5 km · taxa R$ 3,60');
     expect(distanceFeeText({ fulfillmentType: 'DELIVERY', deliveryFeeSource: 'MANUAL', deliveryDistanceKm: null, deliveryFee: '5.00' })).toBeNull();
     expect(distanceFeeText({ fulfillmentType: 'PICKUP', deliveryFeeSource: null, deliveryDistanceKm: null, deliveryFee: '0.00' })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------- EP-003 fatia 5: página da lanchonete
+
+const SNACK_BAR: TenantModule[] = ['A_LA_CARTE', 'DELIVERY', 'FIXED_MENU'];
+const RESTAURANT: TenantModule[] = ['MARMITA', 'PF', 'KILO', 'DAILY_MENU'];
+const T = '2026-11-22T10:00:00Z';
+
+const dish = (over: Partial<Dish>): Dish => ({
+  id: 'd01',
+  version: 1,
+  dishCategoryId: 'a01',
+  name: 'X-Burguer',
+  description: null,
+  imageUrl: null,
+  requiresPreparation: true,
+  hasSizes: false,
+  price: '22.00',
+  sellsOnSite: false,
+  sitePrice: null,
+  sortOrder: 1,
+  isActive: true,
+  isPaused: false,
+  isSellable: true,
+  sizes: [],
+  addonGroupIds: [],
+  createdAt: T,
+  updatedAt: T,
+  ...over,
+});
+
+const dishSize = (over: Partial<Dish['sizes'][number]>): Dish['sizes'][number] => ({
+  id: 'd31',
+  name: '500 ml',
+  price: '18.00',
+  sellsOnSite: false,
+  sitePrice: null,
+  sortOrder: 1,
+  isActive: true,
+  isPaused: false,
+  isSellable: true,
+  ...over,
+});
+
+const combo = (over: Partial<FixedMenu['combos'][number]>): FixedMenu['combos'][number] => ({
+  id: 'c01',
+  version: 1,
+  name: 'X-Burguer + batata + refri',
+  description: null,
+  imageUrl: null,
+  price: '32.00',
+  sellsOnSite: false,
+  sitePrice: null,
+  sortOrder: 1,
+  isActive: true,
+  isPaused: false,
+  isSellable: true,
+  components: [],
+  createdAt: T,
+  updatedAt: T,
+  ...over,
+});
+
+/** Cardápio fixo em que só a bebida vende no site (o tamanho e o combo que vendem estão inativos): não basta (Q-318). */
+const menuOnlyBeverageOnSite: FixedMenu = {
+  categories: [],
+  dishes: [
+    dish({}),
+    dish({ id: 'd03', name: 'Açaí', hasSizes: true, price: null, sizes: [dishSize({ sellsOnSite: false }), dishSize({ id: 'd32', isActive: false, sellsOnSite: true })] }),
+  ],
+  beverageTypes: [
+    {
+      id: 'b01',
+      version: 1,
+      name: 'Refrigerante',
+      sortOrder: 1,
+      isActive: true,
+      sizes: [{ id: 'f11', name: 'Lata 350 ml', price: '6.00', sellsOnSite: true, sitePrice: '6.50', sortOrder: 1, isActive: true, isPaused: false, isSellable: true, flavors: [] }],
+      createdAt: T,
+      updatedAt: T,
+    },
+  ],
+  combos: [combo({ isActive: false, sellsOnSite: true })],
+  addonGroups: [],
+};
+
+const size = (over: Partial<MarmitaSize>): MarmitaSize => ({ id: 's1', version: 1, name: 'M', price: '20.00', sortOrder: 2, isActive: true, sellsOnSite: false, sitePrice: null, ...over });
+
+describe('seções da página pelos módulos (06 §6.19 `sections`)', () => {
+  const me = (modules: TenantModule[] | undefined) => ({ tenant: { modules } }) as unknown as Me;
+
+  it('restaurante: MARMITA; lanchonete: A_LA_CARTE; os dois: as duas, nessa ordem', () => {
+    expect(storefrontSections(me(RESTAURANT))).toEqual(['MARMITA']);
+    expect(storefrontSections(me(SNACK_BAR))).toEqual(['A_LA_CARTE']);
+    expect(storefrontSections(me([...SNACK_BAR, ...RESTAURANT]))).toEqual(['MARMITA', 'A_LA_CARTE']);
+    // `me` antigo, sem `modules`, é restaurante.
+    expect(storefrontSections(me(undefined))).toEqual(['MARMITA']);
+  });
+
+  it('A_LA_CARTE precisa de FIXED_MENU e DELIVERY', () => {
+    expect(storefrontSections(me(['FIXED_MENU', 'A_LA_CARTE']))).toEqual([]);
+    expect(storefrontSections(me(['DELIVERY']))).toEqual([]);
+  });
+
+  it('menu: "Página de pedidos" também na lanchonete; sem seção, some', () => {
+    const labels = (modules: TenantModule[]) =>
+      menuGroups({ tenant: { modules }, permissions: ['orders.view'] } as unknown as Me).flatMap((g) => g.entries.map((e) => e.label));
+    expect(labels(SNACK_BAR)).toContain('Página de pedidos');
+    expect(labels(RESTAURANT)).toContain('Página de pedidos');
+    expect(labels(['A_LA_CARTE', 'FIXED_MENU'])).not.toContain('Página de pedidos');
+  });
+});
+
+describe('o que vende no site, por seção (06 §6.18 `isPageActive`)', () => {
+  it('marmita: tamanho ativo com sellsOnSite', () => {
+    expect(marmitaSectionReady([size({ sellsOnSite: true, isActive: false }), size({})])).toBe(false);
+    expect(marmitaSectionReady([size({ sellsOnSite: true })])).toBe(true);
+  });
+
+  it('lanchonete: só bebida, tamanho inativo ou combo inativo não bastam', () => {
+    expect(aLaCarteSectionReady(menuOnlyBeverageOnSite)).toBe(false);
+  });
+
+  it('lanchonete: prato sem tamanho, tamanho ativo de prato ou combo ativo; a pausa não conta', () => {
+    expect(aLaCarteSectionReady({ dishes: [dish({ sellsOnSite: true, isPaused: true, isSellable: false })], combos: [] })).toBe(true);
+    expect(aLaCarteSectionReady({ dishes: [dish({ hasSizes: true, price: null, sizes: [dishSize({ sellsOnSite: true, isPaused: true })] })], combos: [] })).toBe(true);
+    expect(aLaCarteSectionReady({ dishes: [], combos: [combo({ sellsOnSite: true, isPaused: true })] })).toBe(true);
+    // Prato inativo não conta, mesmo vendendo no site; no prato com tamanho, vale a chave de cada tamanho.
+    expect(aLaCarteSectionReady({ dishes: [dish({ sellsOnSite: true, isActive: false })], combos: [] })).toBe(false);
+    expect(aLaCarteSectionReady({ dishes: [dish({ hasSizes: true, sellsOnSite: true, sizes: [] })], combos: [] })).toBe(false);
+  });
+
+  it('avisos: bloqueia só quando nenhuma seção tem o que vender; carregando, sem aviso', () => {
+    expect(siteSaleWarnings(['A_LA_CARTE'], { A_LA_CARTE: false })).toEqual([{ section: 'A_LA_CARTE', blocking: true }]);
+    expect(siteSaleWarnings(['A_LA_CARTE'], {})).toEqual([]);
+    expect(siteSaleWarnings(['MARMITA', 'A_LA_CARTE'], { MARMITA: true, A_LA_CARTE: false })).toEqual([{ section: 'A_LA_CARTE', blocking: false }]);
+    expect(siteSaleWarnings(['MARMITA', 'A_LA_CARTE'], { MARMITA: false, A_LA_CARTE: false })).toEqual([
+      { section: 'MARMITA', blocking: true },
+      { section: 'A_LA_CARTE', blocking: true },
+    ]);
+    expect(pageMenuWord(['A_LA_CARTE'])).toBe('o cardápio');
+    expect(pageMenuWord(['MARMITA', 'A_LA_CARTE'])).toBe('o cardápio do dia');
+  });
+});
+
+describe('tela "Página de pedidos" da lanchonete', () => {
+  const lanches: Storefront = { ...base, slug: 'lanches-do-beto', previousSlugs: [], publicName: 'Lanches do Beto' };
+
+  beforeEach(() => {
+    (router.push as jest.Mock).mockClear();
+    (confirmAction as jest.Mock).mockClear();
+    current = lanches;
+  });
+
+  it('nenhum prato ou combo vende no site: avisa, leva ao Cardápio e não lê os tamanhos de marmita', async () => {
+    const reads: string[] = [];
+    extraGet['/fixed-menu'] = () => {
+      reads.push('/fixed-menu');
+      return json(200, menuOnlyBeverageOnSite);
+    };
+    extraGet['/marmita-sizes'] = () => {
+      reads.push('/marmita-sizes');
+      return json(200, { items: [size({})] });
+    };
+    signIn(['orders.view', 'storefront.manage', 'catalog.manage'], SNACK_BAR);
+    await renderWith(<StorefrontScreen />);
+    expect(await screen.findByText(NO_SITE_DISH_TEXT)).toBeTruthy();
+    expect(screen.queryByText(NO_SITE_SIZE_TEXT)).toBeNull();
+    await fireEvent.press(screen.getByText('Abrir o Cardápio'));
+    expect(router.push).toHaveBeenCalledWith('/menu/fixed-menu');
+    expect(reads).toEqual(['/fixed-menu']);
+  });
+
+  it('com um prato que vende no site, sem aviso', async () => {
+    const reads: string[] = [];
+    extraGet['/fixed-menu'] = () => {
+      reads.push('/fixed-menu');
+      return json(200, { ...menuOnlyBeverageOnSite, dishes: [dish({ sellsOnSite: true, sitePrice: '23.90' })] });
+    };
+    signIn(['orders.view', 'storefront.manage', 'catalog.manage'], SNACK_BAR);
+    await renderWith(<StorefrontScreen />);
+    await screen.findByText(/Sua página está/);
+    await waitFor(() => expect(reads).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByText(NO_SITE_DISH_TEXT)).toBeNull());
+    expect(screen.queryByText('Abrir o Cardápio')).toBeNull();
+  });
+
+  it('ativar: confirmação com "o cardápio", PUT com If-Match e o 422 do servidor em isPageActive aparece', async () => {
+    extraGet['/fixed-menu'] = () => json(200, menuOnlyBeverageOnSite);
+    writeHandler = () => problem(422, 'ValidationFailed', { errors: { isPageActive: ['Para ativar a página, cadastre um prato ou combo ativo que vende no site.'] } });
+    signIn(['orders.view', 'storefront.manage'], SNACK_BAR);
+    await renderWith(<StorefrontScreen />);
+    await screen.findByText(NO_SITE_DISH_TEXT);
+    // Sem catalog.manage: o aviso aparece, sem o atalho.
+    expect(screen.queryByText('Abrir o Cardápio')).toBeNull();
+    await act(async () => {
+      await fireEvent(screen.getByLabelText('Página ativa'), 'valueChange', true);
+    });
+    expect((confirmAction as jest.Mock).mock.calls[0]![0].message).toBe('Quem abrir o link verá o cardápio e poderá enviar pedidos para você aceitar no app.');
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toMatchObject({ method: 'PUT', path: '/storefront', body: { ...toUpdateBody(lanches), isPageActive: true } });
+    expect(writes[0]!.headers['If-Match']).toBe('"3"');
+    expect(await screen.findByText(/cadastre um prato ou combo ativo que vende no site/)).toBeTruthy();
+  });
+
+  it('restaurante: o aviso dos tamanhos de marmita, sem ler o cardápio fixo', async () => {
+    current = base;
+    const reads: string[] = [];
+    extraGet['/marmita-sizes'] = () => json(200, { items: [size({})] });
+    extraGet['/fixed-menu'] = () => {
+      reads.push('/fixed-menu');
+      return json(200, menuOnlyBeverageOnSite);
+    };
+    signIn(['orders.view', 'storefront.manage', 'catalog.manage'], RESTAURANT);
+    await renderWith(<StorefrontScreen />);
+    expect(await screen.findByText(NO_SITE_SIZE_TEXT)).toBeTruthy();
+    expect(screen.queryByText(NO_SITE_DISH_TEXT)).toBeNull();
+    await fireEvent.press(screen.getByText('Abrir tamanhos de marmita'));
+    expect(router.push).toHaveBeenCalledWith('/menu/sizes');
+    expect(reads).toEqual([]);
+  });
+
+  it('os dois comportamentos: marmita no site e nenhum prato → aviso informativo do cardápio fixo', async () => {
+    extraGet['/marmita-sizes'] = () => json(200, { items: [size({ sellsOnSite: true })] });
+    extraGet['/fixed-menu'] = () => json(200, menuOnlyBeverageOnSite);
+    signIn(['orders.view', 'storefront.manage'], [...RESTAURANT, ...SNACK_BAR]);
+    await renderWith(<StorefrontScreen />);
+    expect(await screen.findByText(/O cardápio fixo não aparece na página/)).toBeTruthy();
+    expect(screen.queryByText(NO_SITE_DISH_TEXT)).toBeNull();
+    expect(screen.queryByText(NO_SITE_SIZE_TEXT)).toBeNull();
   });
 });

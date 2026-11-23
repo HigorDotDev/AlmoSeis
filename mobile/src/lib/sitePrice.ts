@@ -40,3 +40,10 @@ export function siteSummary(sellsOnSite: boolean, sitePrice: MoneyString | null,
 /** A página de pedidos do restaurante só ativa com um tamanho de marmita ativo que vende no site (06 §6.18). */
 export const NO_SITE_SIZE_TEXT =
   'Nenhum tamanho de marmita vende no site. Para ativar a página de pedidos, ligue “Vende no site” em pelo menos um tamanho ativo.';
+
+/**
+ * A página da lanchonete só ativa com um prato (ou tamanho de prato) ou combo ativo que vende no site; só bebida não
+ * basta (06 §6.18, EP-003 RN-316.5, Q-318).
+ */
+export const NO_SITE_DISH_TEXT =
+  'Nenhum prato ou combo vende no site. Para ativar a página de pedidos, ligue “Vende no site” em pelo menos um prato (ou tamanho de prato) ou combo ativo. Só bebida não basta.';

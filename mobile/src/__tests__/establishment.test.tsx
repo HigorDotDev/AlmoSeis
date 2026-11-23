@@ -209,10 +209,12 @@ describe('menu lateral pelos módulos (ADR-0055 item 6)', () => {
 
   it('lanchonete: sem cadastros do restaurante, com "Cardápio"', () => {
     const l = labels(makeMe(SNACK_BAR));
-    for (const hidden of ['Cardápio do dia', 'Cardápio semanal', 'Histórico de cardápios', 'Tamanhos de marmita', 'Configuração de preços', 'Pratos e bebidas', 'Página de pedidos']) {
+    for (const hidden of ['Cardápio do dia', 'Cardápio semanal', 'Histórico de cardápios', 'Tamanhos de marmita', 'Configuração de preços', 'Pratos e bebidas']) {
       expect(l).not.toContain(hidden);
     }
     expect(l).toContain('Cardápio');
+    // EP-003 fatia 5: a lanchonete também tem página de pedidos (seção A_LA_CARTE).
+    expect(l).toContain('Página de pedidos');
     expect(l).toContain('Clientes');
     expect(l).toContain('Dados do estabelecimento');
   });

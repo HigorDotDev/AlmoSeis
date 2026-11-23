@@ -13,7 +13,7 @@ import { draftsRepo } from '@/db/draftsRepo';
 import { pendingOpsRepo } from '@/db/pendingOpsRepo';
 import { unregisterPush } from '@/features/push/registration';
 import { confirmAction } from '@/lib/confirm';
-import { hasAnyModule } from '@/features/tenant/establishment';
+import { hasAnyModule, storefrontSections } from '@/features/tenant/establishment';
 import { formatBusinessDate } from '@/lib/dates';
 import { usePendingOps } from '@/stores/pendingOps';
 import { usePreferences } from '@/stores/preferences';
@@ -98,6 +98,8 @@ interface MenuEntry {
   permission?: Permission;
   /** Aparece se o estabelecimento tiver **algum** destes módulos (ADR-0055 item 6). Sem a chave, sempre. */
   modules?: TenantModule[];
+  /** Regra além de permissão e módulos (ex.: a página de pedidos, que depende de uma combinação de módulos). */
+  visible?: (me: Parameters<typeof hasPermission>[0]) => boolean;
 }
 
 /** O catálogo de `Product` (pratos, acompanhamentos, bebidas, adicionais) é o da marmita, do PF e do quilo (ADR-0056 item 4). */
@@ -110,9 +112,9 @@ const GROUPS: { title: string; entries: MenuEntry[] }[] = [
     entries: [
       { label: 'Cardápio do dia', icon: 'today-outline', href: '/menu/menus/today', permission: 'menu.manage', modules: ['DAILY_MENU'] },
       { label: 'Clientes', icon: 'person-circle-outline', href: '/menu/customers', permission: 'orders.view' },
-      // EP-002 F-210: ver e compartilhar com `orders.view`; alterar com `storefront.manage`. Hoje a página vende
-      // marmita; a página da lanchonete é a fatia 5 do EP-003.
-      { label: 'Página de pedidos', icon: 'globe-outline', href: '/menu/storefront', permission: 'orders.view', modules: ['MARMITA'] },
+      // EP-002 F-210: ver e compartilhar com `orders.view`; alterar com `storefront.manage`. A página vende marmita
+      // (módulo MARMITA) e, desde a fatia 5 do EP-003, o cardápio fixo da lanchonete (FIXED_MENU + DELIVERY).
+      { label: 'Página de pedidos', icon: 'globe-outline', href: '/menu/storefront', permission: 'orders.view', visible: (me) => storefrontSections(me).length > 0 },
       { label: 'Rascunhos e pendências', icon: 'document-text-outline', href: '/menu/drafts' },
     ],
   },
@@ -160,7 +162,7 @@ const GROUPS: { title: string; entries: MenuEntry[] }[] = [
 export function menuGroups(me: Parameters<typeof hasPermission>[0]) {
   return GROUPS.map((g) => ({
     ...g,
-    entries: g.entries.filter((e) => (!e.permission || hasPermission(me, e.permission)) && (!e.modules || hasAnyModule(me, e.modules))),
+    entries: g.entries.filter((e) => (!e.permission || hasPermission(me, e.permission)) && (!e.modules || hasAnyModule(me, e.modules)) && (!e.visible || e.visible(me))),
   })).filter((g) => g.entries.length > 0);
 }
 

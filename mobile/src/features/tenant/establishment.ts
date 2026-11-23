@@ -91,6 +91,21 @@ export function hasAnyModule(me: Me | null, modules: readonly TenantModule[]): b
   return modules.some((m) => own.includes(m));
 }
 
+/** Seções da página de pedidos (06 §6.19 `sections`, EP-003 Q-317): o `orderType` que o envio do site usa. */
+export type StorefrontSection = 'MARMITA' | 'A_LA_CARTE';
+
+/**
+ * As seções que a página deste estabelecimento vende, pelos módulos e na ordem do servidor (06 §6.19): `MARMITA` com
+ * o módulo `MARMITA` (restaurante); `A_LA_CARTE` com `FIXED_MENU` **e** `DELIVERY` (lanchonete). Vazia = sem página.
+ */
+export function storefrontSections(me: Me | null): StorefrontSection[] {
+  const own = tenantModules(me);
+  const sections: StorefrontSection[] = [];
+  if (own.includes('MARMITA')) sections.push('MARMITA');
+  if (own.includes('FIXED_MENU') && own.includes('DELIVERY')) sections.push('A_LA_CARTE');
+  return sections;
+}
+
 export interface TabSpec {
   name: TabName;
   title: string;

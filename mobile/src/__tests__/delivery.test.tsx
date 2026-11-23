@@ -736,3 +736,184 @@ describe('detalhe, taxa depois e pagamento', () => {
     expect(writes).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------- Fatia 5: pedido do site da lanchonete
+
+describe('pedido do site da lanchonete (EP-003 fatia 5, 06 §6.19 "Pedido da lanchonete")', () => {
+  const at = '2026-11-22T19:20:00Z';
+  const line = (over: Partial<Order['items'][number]>): Order['items'][number] => ({
+    id: id('641'),
+    itemKind: 'FIXED_DISH',
+    marmitaSizeId: null,
+    productId: null,
+    dishId: null,
+    dishSizeId: null,
+    beverageSizeId: null,
+    beverageFlavorId: null,
+    comboId: null,
+    name: '',
+    sizeName: null,
+    flavorName: null,
+    composition: null,
+    components: [],
+    quantity: 1,
+    unitPrice: '0.00',
+    lineTotal: '0.00',
+    requiresPreparation: true,
+    notes: null,
+    addons: [],
+    parts: [],
+    createdAt: at,
+    createdBy: null,
+    ...over,
+  });
+
+  /** O `201` do exemplo (69,80 pelo preço de site), aguardando aceite: combo com bacon e Coca-Cola Zero, X-Burguer e lata. */
+  const WEB_ORDER: Order = {
+    ...ORDER,
+    orderNumber: null,
+    origin: 'WEB',
+    priceList: 'SITE',
+    fulfillmentType: 'PICKUP',
+    customer: { id: null, name: 'Carla Souza', phoneNumber: PHONE },
+    deliveryAddress: null,
+    notes: 'Sem talher',
+    expectedPaymentMethod: 'PIX',
+    changeFor: null,
+    deliveryFee: '0.00',
+    deliveryFeeSource: null,
+    itemsTotal: '69.80',
+    totalAmount: '69.80',
+    balance: '69.80',
+    productionStatus: null,
+    productionStatusChangedAt: null,
+    acceptanceStatus: 'AWAITING_ACCEPTANCE',
+    acceptanceDeadline: new Date(Date.now() + 9 * 60_000).toISOString(),
+    acceptedAt: null,
+    acceptedBy: null,
+    fulfillmentStatus: null,
+    fulfillmentStatusChangedAt: null,
+    createdBy: null,
+    items: [
+      line({
+        id: id('644'),
+        itemKind: 'COMBO',
+        comboId: id('c01'),
+        name: 'X-Burguer + batata + refri',
+        unitPrice: '34.90',
+        lineTotal: '34.90',
+        requiresPreparation: false,
+        parts: [
+          line({
+            id: id('645'),
+            itemKind: 'COMBO_PART',
+            dishId: id('d01'),
+            name: 'X-Burguer',
+            notes: 'Sem cebola',
+            addons: [
+              {
+                id: id('646'),
+                itemKind: 'GROUP_ADDON',
+                productId: null,
+                addonOptionId: id('e11'),
+                name: 'Bacon',
+                quantity: 1,
+                unitPrice: '4.00',
+                lineTotal: '4.00',
+                requiresPreparation: true,
+                notes: null,
+                createdAt: at,
+                createdBy: null,
+              } as Order['items'][number]['addons'][number],
+            ],
+          }),
+          line({ id: id('647'), itemKind: 'COMBO_PART', beverageSizeId: id('f11'), beverageFlavorId: id('f13'), name: 'Refrigerante Lata 350 ml · Coca-Cola Zero', unitPrice: '0.50', lineTotal: '0.50', requiresPreparation: false }),
+        ],
+      }),
+      line({ id: id('648'), dishId: id('d01'), name: 'X-Burguer', unitPrice: '23.90', lineTotal: '23.90' }),
+      line({ id: id('649'), itemKind: 'FIXED_BEVERAGE', beverageSizeId: id('f11'), beverageFlavorId: id('f12'), name: 'Refrigerante Lata 350 ml · Coca-Cola', unitPrice: '6.50', lineTotal: '6.50', requiresPreparation: false }),
+    ],
+  } as Order;
+
+  const awaitingSummary = () =>
+    summary({
+      orderNumber: null,
+      origin: 'WEB',
+      fulfillmentType: 'PICKUP',
+      totalAmount: '69.80',
+      balance: '69.80',
+      expectedPaymentMethod: 'PIX',
+      changeFor: null,
+      acceptanceStatus: 'AWAITING_ACCEPTANCE',
+      acceptanceDeadline: WEB_ORDER.acceptanceDeadline,
+      fulfillmentStatus: null,
+      productionStatus: null,
+      itemCount: 6,
+    });
+
+  it('"Novos do site" na aba Delivery: a árvore do combo, o total do site, e o aceite com If-Match', async () => {
+    orderResponse = WEB_ORDER;
+    awaitingItems = [awaitingSummary()];
+    writeHandler = (method, path) =>
+      method === 'POST' && path === `/orders/${ORDER_ID}/accept`
+        ? json(200, { ...WEB_ORDER, version: 2, orderNumber: 15, acceptanceStatus: 'ACCEPTED', acceptedAt: at, acceptedBy: bruno, productionStatus: 'OPEN', fulfillmentStatus: 'PENDING' }, { ETag: '"2"' })
+        : undefined;
+    await renderWith(<DeliveryTab />);
+    expect(await screen.findByText('Novos do site (1)')).toBeTruthy();
+    // O card lê o detalhe: o combo com as partes recuadas (sabor, adicional e observação por prato), o prato e a bebida.
+    expect(await screen.findByText('1× X-Burguer + batata + refri')).toBeTruthy();
+    expect(screen.getAllByTestId('web-combo-part')).toHaveLength(2);
+    expect(screen.getAllByText('1× X-Burguer')).toHaveLength(2);
+    expect(screen.getByText('+ 1× Bacon')).toBeTruthy();
+    expect(screen.getByText('Obs.: Sem cebola')).toBeTruthy();
+    expect(screen.getByText('1× Refrigerante Lata 350 ml · Coca-Cola Zero')).toBeTruthy();
+    expect(screen.getByText('1× Refrigerante Lata 350 ml · Coca-Cola')).toBeTruthy();
+    expect(screen.getAllByText('R$ 69,80').length).toBeGreaterThan(0);
+    expect(screen.getByText('Vai pagar com Pix')).toBeTruthy();
+
+    await fireEvent.press(screen.getByText('Aceitar'));
+    expect(screen.getByText('Aceitar pedido do site?')).toBeTruthy();
+    await act(async () => {
+      await fireEvent.press(screen.getByText('Aceitar pedido'));
+    });
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toMatchObject({ method: 'POST', path: `/orders/${ORDER_ID}/accept`, body: { estimatedReadyMinutes: null } });
+    expect(writes[0]!.headers['If-Match']).toBe('"1"');
+    expect(writes[0]!.headers['Idempotency-Key']).toMatch(/[0-9a-f-]{36}/);
+  });
+
+  it('sem o detalhe carregado, o card mostra o itemCount da lista', async () => {
+    awaitingItems = [{ ...awaitingSummary(), id: id('599') }];
+    await renderWith(<DeliveryTab />);
+    expect(await screen.findByText('Novos do site (1)')).toBeTruthy();
+    expect(await screen.findByText('6 itens')).toBeTruthy();
+  });
+
+  it('recusa: motivo obrigatório e o corpo do contrato', async () => {
+    orderResponse = WEB_ORDER;
+    awaitingItems = [awaitingSummary()];
+    writeHandler = (method, path) =>
+      method === 'POST' && path === `/orders/${ORDER_ID}/reject` ? json(200, { ...WEB_ORDER, version: 2, acceptanceStatus: 'REJECTED' }, { ETag: '"2"' }) : undefined;
+    await renderWith(<DeliveryTab />);
+    await screen.findByText('1× X-Burguer + batata + refri');
+    await fireEvent.press(screen.getByText('Recusar'));
+    await act(async () => {
+      await fireEvent.press(screen.getByText('Recusar pedido'));
+    });
+    expect(screen.getByText('Escolha o motivo.')).toBeTruthy();
+    expect(writes).toHaveLength(0);
+  });
+
+  it('detalhe: aguardando aceite, sem número, com a árvore do combo e "Preços do site"', async () => {
+    orderResponse = WEB_ORDER;
+    await renderWith(<OrderDetailScreen />);
+    expect(await screen.findByText('Aguardando aceite')).toBeTruthy();
+    expect(screen.getByText('Preços do site')).toBeTruthy();
+    expect(screen.getByText('1× X-Burguer + batata + refri')).toBeTruthy();
+    // A linha do combo mostra a árvore inteira: 34,90 + bacon 4,00 + Coca-Cola Zero 0,50 = 39,40 (valores da API).
+    expect(screen.getByText('R$ 39,40')).toBeTruthy();
+    expect(screen.getByText('+ 1× Bacon (R$ 4,00)')).toBeTruthy();
+    expect(screen.getByText('Aceitar')).toBeTruthy();
+    expect(screen.getByText('Recusar')).toBeTruthy();
+  });
+});

@@ -22,10 +22,11 @@ export function useProduct(id: string | undefined) {
   });
 }
 
-export function useMarmitaSizes(includeInactive = false) {
+export function useMarmitaSizes(includeInactive = false, enabled = true) {
   return useQuery({
     queryKey: qk.marmitaSizes(includeInactive),
     queryFn: async () => (await sizesApi.list(includeInactive)).data.items.sort((a, b) => a.sortOrder - b.sortOrder),
+    enabled,
     staleTime: STALE,
   });
 }

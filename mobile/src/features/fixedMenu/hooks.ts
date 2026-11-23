@@ -33,10 +33,11 @@ import { uploadJpeg } from '@/features/catalog/imageUpload';
 
 const STALE = 2 * 60_000;
 
-export function useFixedMenu(includeInactive = true) {
+export function useFixedMenu(includeInactive = true, enabled = true) {
   return useQuery({
     queryKey: qk.fixedMenu(includeInactive),
     queryFn: async () => (await fixedMenuApi.get(includeInactive)).data,
+    enabled,
     staleTime: STALE,
   });
 }

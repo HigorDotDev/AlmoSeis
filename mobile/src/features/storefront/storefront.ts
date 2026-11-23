@@ -2,7 +2,18 @@
  * Regras de tela da página de pedidos (06 §6.18, ADR-0044). O servidor valida tudo de novo; aqui só se evita uma ida
  * à API com um erro óbvio e se monta o corpo do `PUT`, que substitui a configuração inteira.
  */
-import type { DeliveryFeeMode, MoneyString, PageDeliveryMissing, Storefront, StorefrontAddress, StorefrontLocation, UpdateStorefrontBody } from '@/api/types';
+import type {
+  DeliveryFeeMode,
+  FixedMenu,
+  MarmitaSize,
+  MoneyString,
+  PageDeliveryMissing,
+  Storefront,
+  StorefrontAddress,
+  StorefrontLocation,
+  UpdateStorefrontBody,
+} from '@/api/types';
+import type { StorefrontSection } from '@/features/tenant/establishment';
 import { toCents } from '@/lib/money';
 import { formatPhone, toE164 } from '@/lib/phone';
 
@@ -250,4 +261,36 @@ export function storeStatusInfo(s: Pick<Storefront, 'status' | 'isPageActive'>):
 /** Texto do compartilhamento (WhatsApp e afins). */
 export function shareMessage(publicName: string, url: string): string {
   return `Faça seu pedido na ${publicName} pelo site: ${url}`;
+}
+
+/**
+ * Seção `MARMITA` pronta para ativar: um tamanho de marmita ativo que vende no site (06 §6.18, ADR-0057 item 3).
+ */
+export function marmitaSectionReady(sizes: Pick<MarmitaSize, 'isActive' | 'sellsOnSite'>[]): boolean {
+  return sizes.some((z) => z.isActive && z.sellsOnSite);
+}
+
+/**
+ * Seção `A_LA_CARTE` pronta para ativar (06 §6.18, EP-003 RN-316.5): um prato ativo que vende no site (com tamanho:
+ * um tamanho ativo que vende no site) ou um combo ativo que vende no site. A pausa não conta; só bebida não basta.
+ */
+export function aLaCarteSectionReady(menu: Pick<FixedMenu, 'dishes' | 'combos'>): boolean {
+  const dish = menu.dishes.some((d) => d.isActive && (d.hasSizes ? d.sizes.some((z) => z.isActive && z.sellsOnSite) : d.sellsOnSite));
+  return dish || menu.combos.some((c) => c.isActive && c.sellsOnSite);
+}
+
+/**
+ * Avisos de "nada vende no site" por seção, antes do `422` em `isPageActive`. `ready[s]` `undefined` = ainda
+ * carregando (sem aviso). `blocking`: nenhuma seção tem o que vender, a ativação vai ser recusada; senão o aviso só
+ * diz que aquela seção sai vazia na página (estabelecimento com os dois comportamentos).
+ */
+export function siteSaleWarnings(sections: StorefrontSection[], ready: Partial<Record<StorefrontSection, boolean>>): { section: StorefrontSection; blocking: boolean }[] {
+  const missing = sections.filter((s) => ready[s] === false);
+  const blocking = sections.length > 0 && sections.every((s) => ready[s] === false);
+  return missing.map((section) => ({ section, blocking }));
+}
+
+/** "o cardápio do dia" no restaurante; "o cardápio" na lanchonete (o cardápio fixo não é do dia). */
+export function pageMenuWord(sections: StorefrontSection[]): string {
+  return sections.includes('MARMITA') ? 'o cardápio do dia' : 'o cardápio';
 }

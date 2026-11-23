@@ -1,5 +1,6 @@
 /**
  * 08 §8.10 `menu/storefront` — "Página de pedidos" (EP-002 F-210, RF-205, US-208/US-209; ADR-0044, ADR-0048).
+ * Restaurante (seção `MARMITA`) e, desde a fatia 5 do EP-003, lanchonete (seção `A_LA_CARTE`, cardápio fixo).
  * Ler: `orders.view` (atendente compartilha o link e mostra o QR); alterar: `storefront.manage`. Tela de gestão:
  * `PUT /storefront` [M] com `If-Match`, `409` como mensagem e recarga (02 §2.3, exceção das telas de gestão).
  */
@@ -27,35 +28,41 @@ import {
 } from '@/components/ui';
 import { PUBLIC_PAGE_BASE_URL } from '@/config';
 import { useMarmitaSizes } from '@/features/catalog/hooks';
+import { useFixedMenu } from '@/features/fixedMenu/hooks';
 import { WebOrderPushPrompt } from '@/features/push/components';
 import { confirmAction } from '@/lib/confirm';
 import { formatBRL } from '@/lib/money';
-import { NO_SITE_SIZE_TEXT } from '@/lib/sitePrice';
+import { NO_SITE_DISH_TEXT, NO_SITE_SIZE_TEXT } from '@/lib/sitePrice';
 import { maskBR } from '@/lib/phone';
 import { shareLink } from '@/lib/share';
 import { useIsOnline } from '@/stores/connectivity';
 import { useSettings } from '@/features/session/hooks';
-import { useCanWrite, usePermission } from '@/stores/session';
+import { useCanWrite, usePermission, useSession } from '@/stores/session';
+import { storefrontSections, type StorefrontSection } from '@/features/tenant/establishment';
 import { toast } from '@/stores/toast';
 
 import { useStorefront, useUpdateStorefront } from '../hooks';
 import { canPrintQr, printQr } from '../printQr';
 import { QrCode } from '../QrCode';
 import {
+  aLaCarteSectionReady,
   formatCoordinate,
   formErrors,
   formFromStorefront,
   HOURS_TEXT_MAX,
   isFormDirty,
   mapsUrl,
+  marmitaSectionReady,
   maskZipCode,
   normalizeSlugInput,
   pageDeliveryText,
+  pageMenuWord,
   pageUrl,
   parseCoordinate,
   PUBLIC_NAME_MAX,
   SLUG_MAX,
   shareMessage,
+  siteSaleWarnings,
   storeStatusInfo,
   toUpdateBody,
   type StorefrontForm,
@@ -104,10 +111,10 @@ function StorefrontView({ storefront: s, toggle, save }: { storefront: Storefron
   const [tried, setTried] = useState(false);
   const dirty = isFormDirty(s, form);
   const url = pageUrl(PUBLIC_PAGE_BASE_URL, s.slug);
-  // Ativar exige um tamanho de marmita ativo que vende no site (06 §6.18, ADR-0057 item 3): avisa antes do 422.
-  const sizes = useMarmitaSizes();
-  const noSiteSize = !!sizes.data && !sizes.data.some((z) => z.isActive && z.sellsOnSite);
-  const canEditSizes = useCanWrite('catalog.manage');
+  // Seleciona o `me` (referência estável) e deriva: um seletor que monta array novo re-renderiza sem parar.
+  const me = useSession((st) => st.me);
+  const sections = storefrontSections(me);
+  const menuWord = pageMenuWord(sections);
 
   const set = <K extends keyof StorefrontForm>(key: K, value: StorefrontForm[K]) => setForm((f) => ({ ...f, [key]: value }));
 
@@ -121,7 +128,7 @@ function StorefrontView({ storefront: s, toggle, save }: { storefront: Storefron
       active
         ? {
             title: 'Ativar a página de pedidos?',
-            message: 'Quem abrir o link verá o cardápio do dia e poderá enviar pedidos para você aceitar no app.',
+            message: `Quem abrir o link verá ${menuWord} e poderá enviar pedidos para você aceitar no app.`,
             confirmText: 'Ativar',
             onConfirm: () => runToggle({ isPageActive: true }, 'Página ativada'),
           }
@@ -202,7 +209,7 @@ function StorefrontView({ storefront: s, toggle, save }: { storefront: Storefron
         <Card>
           <ToggleRow
             label="Página ativa"
-            hint={s.isPageActive ? 'Ativa: quem abre o link vê o cardápio do dia e pode pedir.' : 'Desativada: o link mostra “indisponível”.'}
+            hint={s.isPageActive ? `Ativa: quem abre o link vê ${menuWord} e pode pedir.` : 'Desativada: o link mostra “indisponível”.'}
             value={s.isPageActive}
             disabled={!canEdit || !online || dirty || toggle.isPending}
             onChange={onToggleActive}
@@ -224,13 +231,7 @@ function StorefrontView({ storefront: s, toggle, save }: { storefront: Storefron
             />
           ) : null}
           {dirty && canEdit ? <Text variant="small" muted>Salve ou desfaça as alterações abaixo antes de ativar ou pausar.</Text> : null}
-          {noSiteSize ? (
-            <Banner
-              tone="warning"
-              text={NO_SITE_SIZE_TEXT}
-              action={canEditSizes ? { label: 'Abrir tamanhos de marmita', onPress: () => router.push('/menu/sizes') } : undefined}
-            />
-          ) : null}
+          <SiteSaleWarnings sections={sections} />
           {toggle.error ? <Banner tone="danger" text={storefrontErrorText(toggle.error)} /> : null}
         </Card>
       ) : null}
@@ -345,6 +346,54 @@ function StorefrontView({ storefront: s, toggle, save }: { storefront: Storefron
         </>
       ) : null}
     </Screen>
+  );
+}
+
+const SECTION_WARNING: Record<StorefrontSection, { text: string; partial: string; action: string; href: string }> = {
+  MARMITA: {
+    text: NO_SITE_SIZE_TEXT,
+    partial: 'As marmitas não aparecem na página: nenhum tamanho de marmita ativo vende no site.',
+    action: 'Abrir tamanhos de marmita',
+    href: '/menu/sizes',
+  },
+  A_LA_CARTE: {
+    text: NO_SITE_DISH_TEXT,
+    partial: 'O cardápio fixo não aparece na página: nenhum prato ou combo ativo vende no site.',
+    action: 'Abrir o Cardápio',
+    href: '/menu/fixed-menu',
+  },
+};
+
+/**
+ * Antes do `422` em `isPageActive` (06 §6.18): ativar exige algo que vende no site numa das seções. `MARMITA`: um
+ * tamanho de marmita ativo (`['marmitaSizes']`, ADR-0057 item 3); `A_LA_CARTE`: um prato (ou tamanho) ou combo ativo
+ * (`['fixedMenu']`, RN-316.5). Cada lista só é lida se a seção existe. Com os dois comportamentos, a seção vazia que
+ * não impede a ativação vira um aviso informativo. O servidor decide: o `422` dele aparece logo abaixo.
+ */
+function SiteSaleWarnings({ sections }: { sections: StorefrontSection[] }) {
+  const canEditCatalog = useCanWrite('catalog.manage');
+  const withMarmita = sections.includes('MARMITA');
+  const withALaCarte = sections.includes('A_LA_CARTE');
+  const sizes = useMarmitaSizes(false, withMarmita);
+  const fixedMenu = useFixedMenu(true, withALaCarte);
+  const warnings = siteSaleWarnings(sections, {
+    MARMITA: withMarmita && sizes.data ? marmitaSectionReady(sizes.data) : undefined,
+    A_LA_CARTE: withALaCarte && fixedMenu.data ? aLaCarteSectionReady(fixedMenu.data) : undefined,
+  });
+  return (
+    <>
+      {warnings.map(({ section, blocking }) => {
+        const w = SECTION_WARNING[section];
+        return (
+          <Banner
+            key={section}
+            tone={blocking ? 'warning' : 'info'}
+            text={blocking ? w.text : w.partial}
+            action={canEditCatalog ? { label: w.action, onPress: () => router.push(w.href as never) } : undefined}
+          />
+        );
+      })}
+    </>
   );
 }
 
