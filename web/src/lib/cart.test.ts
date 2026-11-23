@@ -208,3 +208,55 @@ describe('409 CartChanged', () => {
     expect(previewCart(next, menu).totalCents).toBe(4600);
   });
 });
+
+describe('bebida de preço zero (§6.5: sitePrice >= 0 na bebida do restaurante)', () => {
+  const menuComAgua: PublicMenu = {
+    ...menu,
+    beverages: [
+      ...menu.beverages,
+      { productId: 'agua', name: 'Água da casa', description: null, imageUrl: null, price: '0.00', isAvailable: true },
+    ],
+  };
+  const agua = { kind: 'BEVERAGE', id: 'l3', productId: 'agua', quantity: 2 } as const;
+
+  it('entra no carrinho, soma como linha de R$ 0,00 e não muda o total', () => {
+    const cart = addLine(contractCart, agua);
+    expect(cart.lines).toHaveLength(3);
+    const preview = previewCart(cart, menuComAgua);
+    expect(preview.lines[2]).toMatchObject({ title: 'Água da casa', unitCents: 0, lineCents: 0, unavailable: false });
+    expect(formatBRL(preview.lines[2]!.lineCents)).toBe('R$ 0,00');
+    expect(preview.itemsCents).toBe(5000);
+    expect(preview.totalCents).toBe(5000);
+    expect(expectedTotal(preview)).toBe('50.00');
+    expect(previewCart(cart, menuComAgua, 500).totalCents).toBe(5500);
+  });
+
+  it('a mesma bebida de graça soma a quantidade na linha existente', () => {
+    const cart = addLine(addLine(contractCart, agua), { ...agua, id: 'l4', quantity: 1 });
+    expect(cart.lines.filter((l) => l.kind === 'BEVERAGE' && l.productId === 'agua')).toEqual([{ ...agua, quantity: 3 }]);
+    expect(previewCart(cart, menuComAgua).totalCents).toBe(5000);
+  });
+
+  it('nenhuma validação local recusa a linha de preço zero; vai no envio e sobrevive ao carrinho guardado', () => {
+    const cart = addLine(contractCart, agua);
+    expect(validateCart(cart, menuComAgua)).toEqual([]);
+    expect(toOrderItems(cart)[2]).toMatchObject({ itemKind: 'BEVERAGE', productId: 'agua', quantity: 2 });
+    expect(sanitizeCart(JSON.parse(JSON.stringify(cart)))).toEqual(cart);
+  });
+
+  it('o 409 CartChanged mantém a bebida de graça disponível', () => {
+    const cart = addLine(contractCart, agua);
+    const next = applyCartChanged(cart, {
+      items: [
+        { index: 0, name: 'Marmita M', available: true, unitPrice: '22.00', lineTotal: '44.00' },
+        { index: 1, name: 'Coca-Cola 350ml', available: true, unitPrice: '6.00', lineTotal: '6.00' },
+        { index: 2, name: 'Água da casa', available: true, unitPrice: '0.00', lineTotal: '0.00' },
+      ],
+      unavailableProductIds: [],
+      itemsTotal: '50.00',
+      deliveryFee: '0.00',
+      totalAmount: '50.00',
+    });
+    expect(next).toEqual(cart);
+  });
+});

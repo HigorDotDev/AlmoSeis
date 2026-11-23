@@ -1,11 +1,15 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { PublicStore } from '@/lib/api/types';
 import { DEFAULT_LIMITS } from '@/lib/cart';
 import { pageTabs, type PageTab } from '@/lib/fixed-menu';
 import { fixedMenu } from '@/lib/test-fixtures';
 import { FixedItemBuilder } from './FixedItemBuilder';
 import { FixedMenuPanel } from './FixedMenuPanel';
 import { MenuTabs } from './MenuTabs';
+import { StoreClient } from './StoreClient';
+
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => {}, replace: () => {}, push: () => {} }) }));
 
 const noop = () => {};
 const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
@@ -118,5 +122,43 @@ describe('montagem do item', () => {
 
   it('item que saiu do cardápio', () => {
     expect(render('COMBO', 'sumiu')).toContain('Item indisponível');
+  });
+});
+
+describe('bebida de preço zero na página (§6.5, §6.18)', () => {
+  const store = {
+    slug: 'ana',
+    status: 'OPEN',
+    name: 'Marmitaria da Ana',
+    sections: ['MARMITA'],
+    address: null,
+    contactPhone: null,
+    hoursText: null,
+    pickupAvailable: true,
+    deliveryAvailable: false,
+    deliveryRule: null,
+    privacy: null,
+    businessDate: '2026-11-23',
+    menu: {
+      marmitaSizes: [{ id: 'size-m', name: 'M', price: '20.00' }],
+      mainDishes: [{ productId: 'frango', name: 'Frango grelhado', description: null, imageUrl: null, isAvailable: true }],
+      sideDishes: [],
+      addons: [],
+      beverages: [
+        { productId: 'coca', name: 'Coca-Cola 350ml', description: null, imageUrl: null, price: '6.00', isAvailable: true },
+        { productId: 'agua', name: 'Água da casa', description: null, imageUrl: null, price: '0.00', isAvailable: true },
+      ],
+    },
+    fixedMenu: null,
+    limits: DEFAULT_LIMITS,
+  } as PublicStore;
+
+  it('mostra "R$ 0,00", como os demais preços, e oferece o botão de adicionar', () => {
+    const html = renderToStaticMarkup(<StoreClient initialStore={store} />);
+    const page = text(html);
+    expect(page).toContain('Água da casa R$ 0,00');
+    expect(page).toContain('Coca-Cola 350ml R$ 6,00');
+    expect(page).not.toContain('Grátis');
+    expect(html).toContain('aria-label="Adicionar Água da casa"');
   });
 });
