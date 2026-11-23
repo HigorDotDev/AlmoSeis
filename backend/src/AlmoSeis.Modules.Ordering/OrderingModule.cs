@@ -52,7 +52,11 @@ public static class OrderingModule
             .AddClasses(c => c.AssignableTo<IIntegrationEventMapper>(), publicOnly: false).As<IIntegrationEventMapper>().WithScopedLifetime()
             .AddClasses(c => c.AssignableTo<ICurrentResourceReader>(), publicOnly: false).As<ICurrentResourceReader>().WithScopedLifetime());
 
-        services.AddValidatorsFromAssemblyContaining<OrderDtoBuilder>(includeInternalTypes: true);
+        // O validador de item público é parametrizado pelo tipo do pedido e instanciado pelo validador do pedido
+        // (um por tipo); registrá-lo no contêiner quebra a validação do contêiner em Development (sem `OrderType`).
+        services.AddValidatorsFromAssemblyContaining<OrderDtoBuilder>(
+            filter: r => r.ValidatorType != typeof(PublicOrderItemValidator),
+            includeInternalTypes: true);
         return services;
     }
 }

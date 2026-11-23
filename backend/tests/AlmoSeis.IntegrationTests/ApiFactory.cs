@@ -29,6 +29,13 @@ public sealed class ApiFactory(PostgresFixture db, Action<IServiceCollection>? s
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
+        // Como em Development: um serviço que o contêiner não consegue montar falha aqui, e não só ao subir a API
+        // (o validador de item público parametrizado escapou dos testes por isso).
+        builder.UseDefaultServiceProvider(o =>
+        {
+            o.ValidateOnBuild = true;
+            o.ValidateScopes = true;
+        });
         builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ConnectionStrings:App"] = db.AppConnectionString,

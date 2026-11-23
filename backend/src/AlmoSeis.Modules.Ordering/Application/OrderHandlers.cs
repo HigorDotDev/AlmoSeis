@@ -476,7 +476,9 @@ internal sealed class ListOrdersQueryHandler(AppDbContext db, IBusinessDayReader
                 o.Id, o.Version, o.OrderNumber, o.BusinessDate, o.OrderType, o.Origin, o.FulfillmentType, o.CustomerName, o.TableLabel, o.TabNumber,
                 o.TotalAmount, o.PaidAmount, o.IsPaid, o.ProductionStatus, o.CancellationStatus, o.CreatedAt,
                 o.AcceptanceStatus, o.AcceptanceDeadline, o.FulfillmentStatus, o.ExpectedPaymentMethod, o.ChangeFor,
-                ItemCount = o.Items.Count(i => i.Status == LineStatus.Active),
+                // Unidades do primeiro nível, como no `OrderAwaitingAcceptance` (ADR-0058 item 14): um combo conta 1,
+                // não 1 + partes + adicionais.
+                ItemCount = o.Items.Where(i => i.Status == LineStatus.Active && i.ParentOrderItemId == null).Sum(i => (int?)i.Quantity) ?? 0,
             })
             .ToListAsync(cancellationToken);
 

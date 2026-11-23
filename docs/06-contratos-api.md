@@ -2041,6 +2041,8 @@ Ordenação: `createdAt` decrescente (na prática, pelo id UUID v7, que segue a 
 
 `expectedPaymentMethod` e `changeFor` vêm também no resumo (EP-003 fatia 4), para o card do delivery mostrar o troco que o motoboy leva (`changeFor − balance`, ADR-0059 item 12). Fora de entrega e retirada, e quando ninguém informou, `null`. `changeForBelowTotal` (2026-11-23, I2) vem no resumo com a mesma regra do `Order`, para o card mostrar o alerta em vez de um troco negativo.
 
+`itemCount` do resumo (2026-11-23, teste no navegador): **unidades do primeiro nível** ativas, como no `OrderAwaitingAcceptance` (ADR-0058 item 14). Um combo conta 1 (as partes e os adicionais não contam); 2 marmitas com adicionais contam 2. Antes contava todas as linhas gravadas, e o card mostrava "3 itens" para um combo.
+
 **Aba Delivery da lanchonete** (ADR-0059 itens 10 a 12, RF-315): `GET /orders?orderType=A_LA_CARTE&fulfillmentType=DELIVERY&fulfillmentType=PICKUP` lista os pedidos do telefone (`origin: "APP"`) e do site já aceitos (`origin: "WEB"`, selo "Site") do expediente aberto, com `fulfillmentStatus` para os filtros por status; a faixa "Novos do site" é a mesma lista com `acceptanceStatus=AWAITING_ACCEPTANCE`. "Pronto para retirar" é o `isReadyForPickup` (derivado, ADR-0046 item 2).
 
 ```json
