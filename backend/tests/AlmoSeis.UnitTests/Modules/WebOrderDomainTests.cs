@@ -209,7 +209,8 @@ public sealed class WebOrderDomainTests
     private static NewOrder Data(FulfillmentType fulfillment) => new(
         OrderType.Marmita, fulfillment, null, "Carla", "+5534999990000",
         fulfillment == FulfillmentType.Delivery ? new DeliveryAddressDto("Rua A", "1", null, null, null) : null,
-        fulfillment == FulfillmentType.Delivery ? Money.Of(5m) : Money.Zero, null, null, null, [Marmita(2)], []);
+        fulfillment == FulfillmentType.Delivery ? Money.Of(5m) : Money.Zero, null, null, null, [Marmita(2)], [],
+        ExpectedPaymentMethod: fulfillment == FulfillmentType.Delivery ? ExpectedPaymentMethod.Pix : null);
 
     private static Order Web(FulfillmentType fulfillment) =>
         Order.SubmitFromWeb(Guid.NewGuid(), Guid.NewGuid(), Data(fulfillment), Guid.NewGuid(), new DateOnly(2026, 11, 20), Deadline, Guid.NewGuid, Now);

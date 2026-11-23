@@ -94,9 +94,10 @@ public sealed class ALaCarteOrderTests
     private static Order Create(IReadOnlyList<NewItem> items, FulfillmentType fulfillment = FulfillmentType.DineIn, OrderType type = OrderType.ALaCarte) =>
         Order.Create(
             Guid.NewGuid(), Guid.NewGuid(),
-            new NewOrder(type, fulfillment, null, fulfillment == FulfillmentType.DineIn ? null : "Carla", null,
+            new NewOrder(type, fulfillment, null, fulfillment == FulfillmentType.DineIn ? null : "Carla", fulfillment == FulfillmentType.DineIn ? null : "+5534999990000",
                 fulfillment == FulfillmentType.Delivery ? new DeliveryAddressDto("Rua A", "1", null, null, null) : null,
-                fulfillment == FulfillmentType.Delivery ? M(5m) : Money.Zero, fulfillment == FulfillmentType.DineIn ? "5" : null, null, null, items, []),
+                fulfillment == FulfillmentType.Delivery ? M(5m) : Money.Zero, fulfillment == FulfillmentType.DineIn ? "5" : null, null, null, items, [],
+                ExpectedPaymentMethod: fulfillment == FulfillmentType.Delivery ? ExpectedPaymentMethod.Cash : null),
             Guid.NewGuid(), new DateOnly(2026, 11, 22), 1, By, Guid.NewGuid, Now);
 
     /// ADR-0058 item 9: 2 combos com bacon e Coca Zero = R$ 73,00.

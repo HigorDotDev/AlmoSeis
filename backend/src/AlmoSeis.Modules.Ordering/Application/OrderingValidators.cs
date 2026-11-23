@@ -128,6 +128,7 @@ internal sealed class CreateOrderCommandValidator : AbstractValidator<CreateOrde
         RuleFor(x => x.TableLabel).MaximumLength(10);
         RuleFor(x => x.TabNumber).MaximumLength(10);
         RuleFor(x => x.Notes).MaximumLength(300);
+        RuleFor(x => x.ExpectedPaymentMethod).IsInEnum().When(x => x.ExpectedPaymentMethod is not null);
         RuleFor(x => x.Items).NotNull().WithMessage("Informe os itens (pode ser uma lista vazia em pedido por quilo).");
         RuleForEach(x => x.Items).SetValidator(new OrderItemInputValidator());
     }

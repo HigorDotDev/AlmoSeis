@@ -19,6 +19,14 @@ public sealed class CustomersController : ControllerBase
         CancellationToken cancellationToken, [FromQuery] int limit = 20) =>
         Ok(await handler.HandleAsync(new SearchCustomersQuery(search, limit, cursor), cancellationToken));
 
+    /// Telefone digitado no pedido (ADR-0059 item 14): preenche o nome e oferece o endereço do último pedido.
+    [HttpGet("by-phone")]
+    [HasPermission(Permissions.Orders.View)]
+    public async Task<ActionResult<CustomerPhoneLookupDto>> ByPhone(
+        [FromQuery] string? phoneNumber,
+        [FromServices] IQueryHandler<LookupCustomerByPhoneQuery, CustomerPhoneLookupDto> handler, CancellationToken cancellationToken) =>
+        Ok(await handler.HandleAsync(new LookupCustomerByPhoneQuery(phoneNumber), cancellationToken));
+
     [HttpGet("{id:guid}")]
     [HasPermission(Permissions.Orders.View)]
     public async Task<ActionResult<CustomerDto>> Get(

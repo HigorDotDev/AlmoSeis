@@ -161,7 +161,7 @@ Cada endpoint indica a permissão exigida. Matriz em código (`Permissions.cs` /
 | `orders.view` | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `orders.create`, `orders.edit` | ✓ | ✓ | ✓ | | |
 | `orders.cancel` | ✓ | ✓ | | | |
-| `orders.delivery-fee.edit` | ✓ | ✓ | | | |
+| `orders.delivery-fee.edit` (alterar a taxa de um pedido já criado; na criação, quem tem `orders.create` digita a taxa, Q-315 do EP-003) | ✓ | ✓ | | | |
 | `orders.accept` (aceitar e recusar pedido do site, ADR-0046) | ✓ | ✓ | ✓ | | ✓ |
 | `orders.fulfillment.update` (saiu para entrega, entregue, retirado, ADR-0046) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `production.view`, `production.update` | ✓ | ✓ | | ✓ | |
@@ -1473,6 +1473,7 @@ Módulo `DAILY_MENU` (ADR-0054): sem ele, `POST /menus`, `PUT /menus/{id}/items`
 | Método e rota | Permissão | Corpo → resposta |
 |---|---|---|
 | `GET /customers?search=joao&limit=20&cursor=` | `orders.view` | busca por nome ou telefone → `200 { "items": [Customer], "nextCursor": null }` |
+| `GET /customers/by-phone?phoneNumber=%2B5534999991234` | `orders.view` | cliente do telefone e endereço do último pedido → ver abaixo (EP-003 fatia 4) |
 | `GET /customers/{id}` | `orders.view` | → `200 Customer` |
 | `POST /customers` | `customers.manage` | `{ "name": "João Silva", "phoneNumber": "+5534999991234", "notes": null, "addresses": [ { "label": "Casa", "street": "Rua das Acácias", "number": "120", "complement": "Ap 201", "neighborhood": "Santa Mônica", "reference": null, "isDefault": true } ] }` → `201 Customer` |
 | `PATCH /customers/{id}` [M] | `customers.manage` | `{ "name": "João P. Silva", "notes": null }` → `200 Customer` |
@@ -1495,6 +1496,35 @@ Módulo `DAILY_MENU` (ADR-0054): sem ele, `POST /menus`, `PUT /menus/{id}/items`
 ```
 
 `409` em `POST /customers` com telefone já cadastrado, trazendo o cliente existente em `current`.
+
+### `GET /customers/by-phone?phoneNumber=` — `orders.view` (EP-003 fatia 4, ADR-0059 item 14, Q-313)
+
+Chamado quando o atendente termina de digitar o telefone no pedido por telefone (entrega ou retirada, marmita ou à la carte). O telefone vai em E.164 e codificado na URL (`+` → `%2B`); a busca é pelo número exato, nunca por trecho. → `200`:
+
+```json
+{
+  "customer": {
+    "id": "0192d6a0-0000-7000-8000-000000000801",
+    "version": 1,
+    "name": "João Silva",
+    "phoneNumber": "+5534999991234",
+    "notes": null,
+    "addresses": [],
+    "pendingAmount": "0.00",
+    "pendingOrderCount": 0,
+    "anonymizedAt": null,
+    "createdAt": "2026-11-22T19:10:00Z"
+  },
+  "lastDeliveryAddress": { "street": "Rua das Flores", "number": "123", "complement": null, "neighborhood": "Centro", "reference": "Portão verde" }
+}
+```
+
+- `customer` é o `Customer` de §6.8 (o app preenche o nome; na marmita, oferece também os `addresses` salvos, Q-313). Telefone sem cadastro → `200 { "customer": null, "lastDeliveryAddress": null }`, nunca `404`. Cliente anonimizado não tem telefone e não aparece.
+- `lastDeliveryAddress`: o `deliveryAddress` do pedido mais recente desse cliente que tinha endereço, de qualquer data e atendimento (é o "usar o endereço do último pedido" da lanchonete, Q-313). `null` se ele nunca pediu entrega.
+- Telefone ausente ou fora do formato E.164 → `422 ValidationFailed` em `phoneNumber`.
+- Cliente de outro tenant nunca aparece (ADR-0026): o mesmo telefone em dois estabelecimentos são dois clientes.
+
+**Cliente criado pelo pedido.** O cliente do delivery é criado pelo próprio `POST /orders` (§6.9), só com nome e telefone e sem endereço salvo, e aparece nesta lista e em `GET /customers` com `pendingAmount` do saldo dos pedidos dele (ADR-0059 item 16). A auditoria `CustomerCreated` leva o nome e a contagem de endereços, nunca o telefone (ADR-0024).
 
 Fiado (`pendingAmount`, `pendingOrderCount` e `pending-orders`) só considera pedidos aceitos; pedido do site só é vinculado ao cliente no aceite (ADR-0044 item 20, ADR-0046 item 4).
 
@@ -1520,7 +1550,7 @@ Fiado (`pendingAmount`, `pendingOrderCount` e `pending-orders`) só considera pe
   "tableLabel": null,
   "tabNumber": null,
   "notes": "Entregar até 12h30",
-  "expectedPaymentMethod": null,
+  "expectedPaymentMethod": "PIX",
   "changeFor": null,
   "riskFlag": null,
   "deliveryFee": "5.00",
@@ -1872,7 +1902,7 @@ Pedido `A_LA_CARTE` (EP-003 fatia 3, ADR-0058): comanda da mesa 5 com 1 Açaí 5
 - **Preço:** o prato custa o preço único ou o do tamanho. A bebida custa o tamanho mais o acréscimo do sabor (Suco 500 ml 9,00 + Laranja com acerola 1,00 = 10,00). O combo tem preço fechado, e a parte custa `0.00`, salvo o acréscimo do sabor da bebida. O adicional de grupo custa o preço da opção, igual em qualquer tamanho. Tudo sai da `priceList` do pedido: no app, sempre `COUNTER` (preço de balcão, no salão e na entrega por telefone, ADR-0058 item 4). O preço de site vale só no pedido da página (`SITE`, fatia 5). Adicional e acréscimo de sabor têm o mesmo preço nas duas tabelas (Q-308).
 - **Snapshot** (ADR-0020): `name` é o nome de exibição montado do snapshot (nome base + `sizeName` + " · " + `flavorName`). `sizeName` e `flavorName` só existem quando há tamanho e sabor. Mudar o cardápio fixo depois não altera o pedido.
 - **Cozinha:** o `requiresPreparation` do prato avulso e da parte de prato vem do prato (`requiresPreparation` do cadastro); o do adicional de grupo, do pai. `COMBO`, `FIXED_BEVERAGE` e a parte de bebida são sempre `false`.
-- `customer` e `deliveryAddress` seguem as regras de hoje: na comanda, `null` (ou o nome avulso); na entrega e na retirada, como na marmita.
+- `customer` e `deliveryAddress`: na comanda, `null` (ou o nome avulso); na entrega e na retirada (o delivery por telefone, EP-003 fatia 4), nome e telefone obrigatórios, e o cliente vinculado ou criado pelo telefone (`POST /orders`, regras do pedido por telefone).
 
 ### Pedido do site (ADR-0046)
 
@@ -1967,7 +1997,7 @@ Pedido "pagar na entrega/retirada" enviado pela página, aguardando aceite. A ro
 - Não aparece na lista padrão, no painel da cozinha, no fechamento nem nas pendências do cliente (RN-206.9). O app lê a faixa "Novos do site" com `GET /orders?acceptanceStatus=AWAITING_ACCEPTANCE` e conta o prazo com `acceptanceDeadline`.
 - Depois do aceite é um pedido comum (edita, recebe pagamento manual, pode ser cancelado pelo ADR-0022).
 - `customer.phoneNumber` não é verificado (ADR-0044): o app mostra "telefone não verificado" nos pedidos `WEB`.
-- Só em pedido `WEB` (`null` nos do app): `expectedPaymentMethod` (`CASH`, `PIX`, `CARD`: a forma que o cliente pretende usar, ADR-0044 item 19; **não** cria pagamento), `changeFor` ("troco para R$ X", só com `CASH`) e `riskFlag` (`CAPTCHA_UNAVAILABLE` quando o anti-robô não respondeu no envio, ADR-0045 item 12: o app pode destacar o pedido).
+- `expectedPaymentMethod` (`CASH`, `PIX`, `CARD`: a forma que o cliente pretende usar, ADR-0044 item 19; **não** cria pagamento) e `changeFor` ("troco para R$ X", só com `CASH`) existem no pedido do site e, desde o EP-003 fatia 4, também no pedido do app de entrega e retirada (marmita e à la carte, ADR-0059 item 5; regras em `POST /orders`). Na comanda do salão (`DINE_IN`), sempre `null`. `riskFlag` (`CAPTCHA_UNAVAILABLE` quando o anti-robô não respondeu no envio, ADR-0045 item 12: o app pode destacar o pedido) continua só no pedido `WEB` (`null` nos do app).
 - Pedidos do site que não viraram venda (`REJECTED`, `EXPIRED`, `WITHDRAWN`) têm nome, telefone, endereço e observações anonimizados 7 dias depois (ADR-0052 item 3): `customer.name = "Cliente anonimizado"`, `phoneNumber: null`, endereço `"Endereço anonimizado"`. Itens, valores e motivo ficam.
 - A partir da fatia 2 o envio é a rota pública `POST /public/stores/{slug}/orders` (§6.19).
 
@@ -1978,10 +2008,16 @@ Filtros:
 - `allDays=true` (ignora o expediente; útil para pendências);
 - `acceptanceStatus` (padrão `ACCEPTED`): a lista comum **só traz pedidos aceitos**; `AWAITING_ACCEPTANCE` é a faixa "Novos do site"; `REJECTED`, `EXPIRED` e `WITHDRAWN` listam os que não viraram venda (ADR-0046);
 - `orderType`, `isPaid`, `cancellationStatus`, `productionStatus`, `customerId`;
+- `fulfillmentType` (EP-003 fatia 4), **repetível**: `fulfillmentType=DELIVERY&fulfillmentType=PICKUP` traz entrega e retirada; valor fora de `DINE_IN`/`DELIVERY`/`PICKUP` → `400 MalformedRequest`;
+- `fulfillmentStatus` (EP-003 fatia 4): `PENDING`, `OUT_FOR_DELIVERY`, `DELIVERED` ou `PICKED_UP`. `PENDING` inclui a entrega e a retirada sem marcação gravada pela versão anterior da API; a comanda do salão nunca entra no filtro;
 - `search` (nome do cliente, mesa ou comanda);
 - `limit`, `cursor`.
 
 Ordenação: `createdAt` decrescente (na prática, pelo id UUID v7, que segue a ordem de criação). Sem `businessDayId` e sem expediente aberto, a lista vem vazia.
+
+`expectedPaymentMethod` e `changeFor` vêm também no resumo (EP-003 fatia 4), para o card do delivery mostrar o troco que o motoboy leva (`changeFor − balance`, ADR-0059 item 12). Fora de entrega e retirada, e quando ninguém informou, `null`.
+
+**Aba Delivery da lanchonete** (ADR-0059 itens 10 a 12, RF-315): `GET /orders?orderType=A_LA_CARTE&fulfillmentType=DELIVERY&fulfillmentType=PICKUP` lista os pedidos do telefone (`origin: "APP"`) e do site já aceitos (`origin: "WEB"`, selo "Site") do expediente aberto, com `fulfillmentStatus` para os filtros por status; a faixa "Novos do site" é a mesma lista com `acceptanceStatus=AWAITING_ACCEPTANCE`. "Pronto para retirar" é o `isReadyForPickup` (derivado, ADR-0046 item 2).
 
 ```json
 {
@@ -2007,6 +2043,8 @@ Ordenação: `createdAt` decrescente (na prática, pelo id UUID v7, que segue a 
       "acceptanceDeadline": null,
       "fulfillmentStatus": "PENDING",
       "isReadyForPickup": false,
+      "expectedPaymentMethod": "PIX",
+      "changeFor": null,
       "itemCount": 3,
       "pendingAlertCount": 1,
       "createdAt": "2026-10-27T11:30:00Z"
@@ -2042,6 +2080,8 @@ Ordenação: `createdAt` decrescente (na prática, pelo id UUID v7, que segue a 
       "acceptanceDeadline": "2026-10-27T12:10:00Z",
       "fulfillmentStatus": null,
       "isReadyForPickup": false,
+      "expectedPaymentMethod": "CASH",
+      "changeFor": "50.00",
       "itemCount": 1,
       "pendingAlertCount": 0,
       "createdAt": "2026-10-27T12:00:00Z"
@@ -2073,6 +2113,8 @@ Marmita para entrega:
   "tableLabel": null,
   "tabNumber": null,
   "notes": "Entregar até 12h30",
+  "expectedPaymentMethod": "PIX",
+  "changeFor": null,
   "items": [
     {
       "itemKind": "MARMITA",
@@ -2091,8 +2133,10 @@ Marmita para entrega:
 
 Regras do corpo:
 - **Endereço:** informe `customerAddressId` **ou** `deliveryAddress` (objeto como no `Order`). O servidor grava o snapshot.
-- **Taxa de entrega:** `deliveryFee: null` usa a taxa padrão. Um valor diferente do padrão exige `orders.delivery-fee.edit`.
-- **Novo cliente:** `saveCustomer: true` sem `customerId` cria o cliente, com o endereço quando houver, na mesma transação. Se o telefone já existir, o pedido é vinculado ao cliente existente.
+- **Taxa de entrega** (Q-315 do EP-003, ADR-0021 complementado): `deliveryFee: null` usa a taxa padrão; o app começa o campo com ela. Quem cria o pedido (`orders.create`) pode digitar outro valor **na criação**, sem `orders.delivery-fee.edit`: o pedido grava `deliveryFeeSource: "MANUAL"` e a auditoria `OrderCreated` leva o valor digitado e a taxa padrão do momento. Igual à padrão → `FIXED_DEFAULT`. Alterar a taxa **depois** (`PATCH /orders/{id}`) continua exigindo `orders.delivery-fee.edit` (`403 PermissionDenied`, extensão `permission`).
+- **Cliente:** `customerId` vincula o cadastro informado. Sem ele, `saveCustomer: true` cria o cliente com o endereço (o "salvar cliente" da marmita, Q-313). Sem os dois, em **entrega ou retirada** com `customerPhone`, o pedido é vinculado ao cliente desse telefone ou cria um novo **só com nome e telefone, sem endereço salvo** (ADR-0059 item 14), sem precisar marcar nada. Telefone já cadastrado com outro nome: o pedido guarda o nome digitado e o cadastro não muda (Q-314). Dois atendentes com o mesmo telefone novo ao mesmo tempo criam um cliente só (05 §5.14). No salão (`DINE_IN`), o telefone nunca cria cliente.
+- **Nome e telefone** (`customerName`, `customerPhone` em E.164; ADR-0059, Q-312): marmita sempre com nome; **entrega de marmita** também com telefone; retirada de marmita (balcão) com telefone opcional, como hoje. À la carte de **entrega ou retirada** (delivery por telefone) com nome e telefone. Faltando → `422 ValidationFailed` em `customerName` ou `customerPhone`.
+- **Forma prevista e troco** (`expectedPaymentMethod`: `CASH`, `PIX`, `CARD`; `changeFor`: string de dinheiro; ADR-0059 item 5, Q-316): a forma é **obrigatória na entrega**, opcional na retirada e **proibida no salão** (`422` em `expectedPaymentMethod`). Precisa estar entre as formas habilitadas do estabelecimento (`422 PaymentMethodDisabled`). `changeFor` só com `CASH` e de pelo menos o total do pedido, conferido na criação (`422` em `changeFor`). É só informação para o entregador: **não cria pagamento** nem marca nada como pago; o pagamento é registrado na confirmação do recebimento (`POST /orders/{id}/payments`, ADR-0059 item 8). Uma edição posterior que passe o total do "troco para" não é recusada por isso (05 §5.17 0011).
 - **Cardápio do dia:** pratos e acompanhamentos precisam estar disponíveis no cardápio `MARMITA` da data (`422 ProductUnavailable`).
 
 PF:
@@ -2198,7 +2242,7 @@ Quilo:
 
 Regras do corpo `A_LA_CARTE`:
 - **Atendimento** (ADR-0058 item 2): `DINE_IN` (comanda), `DELIVERY` ou `PICKUP`. A comanda segue o fluxo do PF: `tableLabel` e/ou `tabNumber`, nome opcional. O balcão "para viagem" é uma comanda `DINE_IN` com `tabNumber` (Q-320).
-- **Entrega e retirada nesta fase:** valem os campos e as regras de entrega de hoje, como na marmita: `deliveryAddress` ou `customerAddressId` obrigatório em `DELIVERY`, `deliveryFee: null` = taxa padrão (outro valor exige `orders.delivery-fee.edit`), `customerId`/`saveCustomer` opcionais. Nome e telefone obrigatórios, forma prevista, troco e a taxa digitada na criação são da fatia 4 (ADR-0059) e ainda não são exigidos.
+- **Entrega e retirada (delivery por telefone, EP-003 fatia 4, ADR-0059):** `customerName` e `customerPhone` obrigatórios nas duas; `deliveryAddress` obrigatório em `DELIVERY` (o delivery da lanchonete não usa `customerAddressId` nem `saveCustomer`: o endereço fica só no pedido, e o app oferece o `lastDeliveryAddress` de `GET /customers/by-phone`, Q-313); taxa digitada na criação e forma prevista/troco como nas regras da marmita acima. O cliente é vinculado ou criado pelo telefone. O pedido entra direto na cozinha, com número, sem fila de aceite (ADR-0059 item 6), e segue os status de atendimento (`PATCH /orders/{id}/fulfillment`).
 - **Só cardápio fixo** (ADR-0058 item 3, Q-317): `itemKind` `FIXED_DISH`, `FIXED_BEVERAGE` ou `COMBO`. `MARMITA`, `PF`, `BEVERAGE` e `ADDON` (do catálogo) → `422 ValidationFailed` em `items[i].itemKind`, e os tipos do cardápio fixo num pedido `MARMITA`, `PF` ou `KILO` também. Pesagens → `422`. `COMBO_PART` e `GROUP_ADDON` nunca vão no primeiro nível: as partes vêm em `parts`, os adicionais em `groupAddons`.
 - **`FIXED_DISH`:** `dishId`, `dishSizeId` (obrigatório se o prato tem tamanho e proibido se não tem), `quantity` (1 a 99), `notes` (até 200), `groupAddons` (opções dos grupos ligados à categoria do prato ou ao próprio prato, ADR-0056 item 18; cada uma com `quantity` de 1 a 10).
 - **`FIXED_BEVERAGE`:** `beverageSizeId` e `beverageFlavorId` (obrigatório se o tamanho tem sabores, proibido se não tem), `quantity`, `notes`.
@@ -2207,9 +2251,64 @@ Regras do corpo `A_LA_CARTE`:
 - **Disponibilidade** (ADR-0056 itens 23 e 24): prato, tamanho, tamanho de bebida, sabor, combo (inclusive pela pausa de um componente) ou opção de adicional inativos ou pausados → `422 ProductUnavailable`, com o `detail` dizendo o que falta. Item de outro tenant não existe para o pedido e também dá `422 ProductUnavailable`.
 - **Preço:** sempre de balcão (`priceList: "COUNTER"`), em qualquer atendimento.
 
+À la carte, entrega por telefone (EP-003 fatia 4, RF-312): 1 combo (32,00) + açaí 500 ml com granola (20,00) + taxa digitada 5,00 = **57,00**, em dinheiro com troco para 100,00 (o motoboy leva 43,00):
+
+```json
+{
+  "orderType": "A_LA_CARTE",
+  "fulfillmentType": "DELIVERY",
+  "customerId": null,
+  "customerName": "Carla Souza",
+  "customerPhone": "+5534988887777",
+  "saveCustomer": false,
+  "customerAddressId": null,
+  "deliveryAddress": { "street": "Rua das Flores", "number": "123", "complement": null, "neighborhood": "Centro", "reference": "Portão verde" },
+  "deliveryFee": "5.00",
+  "tableLabel": null,
+  "tabNumber": null,
+  "notes": null,
+  "expectedPaymentMethod": "CASH",
+  "changeFor": "100.00",
+  "items": [
+    {
+      "itemKind": "COMBO",
+      "comboId": "0192d6a0-0000-7000-8000-000000000c01",
+      "quantity": 1,
+      "parts": [
+        { "comboComponentId": "0192d6a0-0000-7000-8000-000000000c11", "beverageFlavorId": null, "notes": null, "groupAddons": null },
+        { "comboComponentId": "0192d6a0-0000-7000-8000-000000000c13", "beverageFlavorId": "0192d6a0-0000-7000-8000-000000000f12", "notes": null, "groupAddons": null }
+      ]
+    },
+    {
+      "itemKind": "FIXED_DISH",
+      "dishId": "0192d6a0-0000-7000-8000-000000000d03",
+      "dishSizeId": "0192d6a0-0000-7000-8000-000000000d32",
+      "quantity": 1,
+      "notes": null,
+      "groupAddons": [ { "addonOptionId": "0192d6a0-0000-7000-8000-000000000e21", "quantity": 1 } ]
+    }
+  ],
+  "weighings": []
+}
+```
+
+→ `201` com `orderNumber` do dia, `acceptanceStatus: "ACCEPTED"`, `productionStatus: "OPEN"`, `fulfillmentStatus: "PENDING"`, `customer.id` do cadastro do telefone (criado agora ou já existente), `deliveryFee: "5.00"`, `deliveryFeeSource: "MANUAL"` (com a taxa padrão de 4,00), `totalAmount: "57.00"`, `paidAmount: "0.00"`, `balance: "57.00"`, `expectedPaymentMethod: "CASH"`, `changeFor: "100.00"` e `payments: []`. A retirada é igual, sem `deliveryAddress` nem taxa, e com `expectedPaymentMethod` opcional.
+
 → `201`, `Location: /api/v1/orders/{id}`, `ETag: "1"`, corpo `Order`.
 
-Erros: `403 ModuleNotEnabled` (`orderType` de um módulo que o estabelecimento não tem: `MARMITA` → `MARMITA`, `PF` → `PF`, `KILO` → `KILO`, `A_LA_CARTE` em `DINE_IN` → `A_LA_CARTE`, `A_LA_CARTE` em `DELIVERY`/`PICKUP` → `DELIVERY` (ADR-0058 item 1); vem antes do expediente), `409 BusinessDayRequired`, `404 MenuNotFound` (só marmita e PF: o à la carte não usa cardápio do dia), `422 ProductUnavailable`, `422 KiloPriceNotConfigured`, `422 ValidationFailed` (pedido vazio, `itemKind` incompatível com `orderType`, tamanho ou sabor faltando, adicional que não é do prato, endereço faltando em entrega).
+Erros: `403 ModuleNotEnabled` (`orderType` de um módulo que o estabelecimento não tem: `MARMITA` → `MARMITA`, `PF` → `PF`, `KILO` → `KILO`, `A_LA_CARTE` em `DINE_IN` → `A_LA_CARTE`, `A_LA_CARTE` em `DELIVERY`/`PICKUP` → `DELIVERY` (ADR-0058 item 1); vem antes do expediente), `409 BusinessDayRequired`, `404 MenuNotFound` (só marmita e PF: o à la carte não usa cardápio do dia), `422 ProductUnavailable`, `422 KiloPriceNotConfigured`, `422 PaymentMethodDisabled` (`expectedPaymentMethod` desabilitado), `422 ValidationFailed` (pedido vazio, `itemKind` incompatível com `orderType`, tamanho ou sabor faltando, adicional que não é do prato, endereço faltando em entrega; desde a fatia 4: `customerName`/`customerPhone` faltando, `expectedPaymentMethod` faltando na entrega ou enviado no salão, `changeFor` sem `CASH` ou abaixo do total).
+
+```json
+{
+  "type": "urn:almoseis:error:validation-failed",
+  "title": "Dados inválidos.",
+  "status": 422,
+  "instance": "/api/v1/orders",
+  "errorCode": "ValidationFailed",
+  "traceId": "00-4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a-4d5e6f7a8b9c0d1e-01",
+  "errors": { "changeFor": ["O valor para troco precisa ser de pelo menos R$ 57.00."] }
+}
+```
 
 ```json
 {
@@ -2223,7 +2322,7 @@ Erros: `403 ModuleNotEnabled` (`orderType` de um módulo que o estabelecimento n
 }
 ```
 
-O pedido criado no app nasce `acceptanceStatus: "ACCEPTED"`, com número, `acceptedAt = createdAt` e, em entrega ou retirada, `fulfillmentStatus: "PENDING"` (ADR-0046 item 1).
+O pedido criado no app nasce `acceptanceStatus: "ACCEPTED"`, com número, `acceptedAt = createdAt` e, em entrega ou retirada, `fulfillmentStatus: "PENDING"` (ADR-0046 item 1). Vale também para o delivery por telefone (marmita e à la carte): não há fila de aceite nem `origin` próprio (ADR-0059 item 6, ADR-0046 complementado).
 
 ### `PATCH /orders/{id}` — `orders.edit` [M]
 
@@ -2243,6 +2342,12 @@ Altera dados do pedido, não itens:
 ```
 
 Campos ausentes não mudam. Em pedido pago, só `notes`, `tableLabel` e `tabNumber` podem mudar. Os demais campos respondem `409 OrderAlreadyPaid`. Trocar `fulfillmentType` com o atendimento em `OUT_FOR_DELIVERY`, `DELIVERED` ou `PICKED_UP` → `409 OrderAlreadyDispatched`. → `200 Order`.
+
+Desde o EP-003 fatia 4 (ADR-0059):
+- `deliveryFee` diferente da padrão exige `orders.delivery-fee.edit` (`403 PermissionDenied`, extensão `permission`), também para quem criou o pedido e digitou a taxa na criação (Q-315).
+- Nome e telefone seguem as regras da criação: trocar `fulfillmentType` confere os dois (comanda à la carte que vira retirada precisa de nome e telefone no mesmo `PATCH`); sem trocar, só o campo enviado é conferido (apagar o telefone de uma entrega → `422` em `customerPhone`). Um pedido antigo sem telefone continua editável.
+- `expectedPaymentMethod` e `changeFor` não mudam por esta rota. Trocar um pedido à la carte para `DINE_IN` apaga os dois (a comanda paga na mesa).
+- O vínculo com o cliente (`customer.id`) não muda por esta rota.
 
 ### `POST /orders/{id}/items` — `orders.edit` [I][M]
 
@@ -2456,6 +2561,26 @@ Erros: `409 OrderNotAccepted`, `409 OrderCanceled`, `409 ProductionNotCompleted`
   "nextCursor": null
 }
 ```
+
+`OrderCreated` (a primeira linha, EP-003 fatia 4) mostra a taxa digitada na criação e a padrão do momento (Q-315), sem telefone nem endereço (ADR-0024):
+
+```json
+{
+  "occurredAt": "2026-11-22T19:10:00Z",
+  "operationType": "OrderCreated",
+  "origin": "APP",
+  "actor": { "id": "0192d6a0-0000-7000-8000-000000000304", "displayName": "Duda" },
+  "before": null,
+  "after": {
+    "orderNumber": 7, "orderType": "A_LA_CARTE", "fulfillmentType": "DELIVERY", "itemCount": 6, "weighingCount": 0,
+    "deliveryFee": "5.00", "deliveryFeeSource": "MANUAL", "defaultDeliveryFee": "4.00",
+    "expectedPaymentMethod": "CASH", "changeFor": "100.00", "totalAmount": "57.00",
+    "customerId": "0192d6a0-0000-7000-8000-000000000802"
+  }
+}
+```
+
+`deliveryFeeSource` é `FIXED_DEFAULT` (com `defaultDeliveryFee: null`) quando a taxa é a padrão, e `null` fora de entrega. `itemCount` conta todas as linhas gravadas (combo, partes e adicionais).
 
 Do mais recente para o mais antigo. Inclui itens removidos, pagamentos, estornos, status e cancelamento. Em pedido do site: `WebOrderSubmitted` e `WebOrderWithdrawn` (`origin: "WEB"`, `actor: null`), `OrderAccepted`, `OrderRejected`, `WebOrderExpired`, `WebOrderAutoRejected` e `WebOrderAnonymized` (`origin: "SYSTEM"`; a anonimização é a retenção do ADR-0052), e `OrderFulfillmentChanged` (ADR-0046 item 24).
 

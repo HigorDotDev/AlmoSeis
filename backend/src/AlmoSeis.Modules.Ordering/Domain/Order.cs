@@ -130,12 +130,9 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
         Guid createdBy, Func<Guid> newId, DateTimeOffset now)
     {
         EnsureFulfillment(data.OrderType, data.FulfillmentType);
-        if (data.OrderType == OrderType.Marmita && string.IsNullOrWhiteSpace(data.CustomerName))
-        {
-            throw BusinessException.Validation("customerName", "Informe o nome do cliente da marmita.");
-        }
-
+        EnsureCustomerContact(data.OrderType, data.FulfillmentType, data.CustomerName, data.CustomerPhone, checkName: true, checkPhone: true);
         EnsureDelivery(data.FulfillmentType, data.DeliveryAddress, data.DeliveryFee);
+        EnsureExpectedPayment(data.FulfillmentType, data.ExpectedPaymentMethod);
         if (data.Weighings.Count > 0 && data.OrderType != OrderType.Kilo)
         {
             throw BusinessException.Validation("weighings", "Pesagens só existem em pedidos por quilo.");
@@ -160,6 +157,9 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
             TabNumber = data.TabNumber,
             Notes = data.Notes,
             DeliveryFee = data.DeliveryFee,
+            // Forma prevista e "troco para" (ADR-0059 item 5): só informação; nenhum pagamento nasce aqui (item 8).
+            ExpectedPaymentMethod = data.ExpectedPaymentMethod,
+            ChangeFor = data.ChangeFor,
             PaidAmount = Money.Zero,
             ProductionStatus = data.OrderType == OrderType.Kilo ? null : Contracts.ProductionStatus.Open,
             ProductionStatusChangedAt = data.OrderType == OrderType.Kilo ? null : now,
@@ -177,6 +177,7 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
 
         order.ApplyDeliveryPricing(data.FulfillmentType == FulfillmentType.Delivery ? data.Pricing ?? new DeliveryPricing(Contracts.DeliveryFeeSource.FixedDefault) : null);
         order.AddInitialLines(data, createdBy, newId, now);
+        order.EnsureChangeFor();
         order.Raise(new OrderCreated(id, orderNumber, order.OrderType, order.Label, now));
         return order;
     }
@@ -248,7 +249,8 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
         return order;
     }
 
-    /// "Troco para R$ X" só em dinheiro e de pelo menos o total (ADR-0044 item 19).
+    /// "Troco para R$ X" só em dinheiro e de pelo menos o total (ADR-0044 item 19; no app, ADR-0059 item 5). Conferido
+    /// só na criação: uma edição posterior pode passar o total do "troco para", que é só informação (05 §5.17 0011).
     private void EnsureChangeFor()
     {
         if (ChangeFor is not { } change)
@@ -261,7 +263,7 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
             throw BusinessException.Validation("changeFor", "Troco só para pagamento em dinheiro.");
         }
 
-        if (change < TotalAmount)
+        if (change < TotalAmount || change.IsZero || change.IsNegative)
         {
             throw BusinessException.Validation("changeFor", $"O valor para troco precisa ser de pelo menos R$ {TotalAmount}.");
         }
@@ -516,13 +518,17 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
         }
 
         var customerName = changes.CustomerName.GetValueOr(CustomerName);
-        if (OrderType == OrderType.Marmita && string.IsNullOrWhiteSpace(customerName))
-        {
-            throw BusinessException.Validation("customerName", "Informe o nome do cliente da marmita.");
-        }
-
+        var customerPhone = changes.CustomerPhone.GetValueOr(CustomerPhone);
         var fulfillment = changes.FulfillmentType.GetValueOr(FulfillmentType);
         EnsureFulfillment(OrderType, fulfillment);
+
+        // Nome e telefone (ADR-0059, Q-312): trocar o atendimento confere os dois; senão, só o campo que mudou, para
+        // um pedido antigo sem telefone continuar editável (a regra é da criação, 05 §5.17 0011).
+        var fulfillmentTypeChanged = fulfillment != FulfillmentType;
+        EnsureCustomerContact(
+            OrderType, fulfillment, customerName, customerPhone,
+            checkName: fulfillmentTypeChanged || customerName != CustomerName || OrderType == OrderType.Marmita,
+            checkPhone: fulfillmentTypeChanged || customerPhone != CustomerPhone);
         if (fulfillment != FulfillmentType && IsDispatched)
         {
             // Entrega que saiu (ou retirada feita) não vira o outro tipo: corrija o atendimento antes.
@@ -562,7 +568,14 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
         }
 
         CustomerName = customerName;
-        CustomerPhone = changes.CustomerPhone.GetValueOr(CustomerPhone);
+        CustomerPhone = customerPhone;
+        if (fulfillment == FulfillmentType.DineIn)
+        {
+            // A comanda do salão paga na mesa: sem forma prevista nem troco (ck_orders_expected_payment_fulfillment).
+            ExpectedPaymentMethod = null;
+            ChangeFor = null;
+        }
+
         FulfillmentType = fulfillment;
         DeliveryAddress = address;
         DeliveryFee = fee;
@@ -1060,6 +1073,47 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
         DeliveryMinimumFee = pricing?.MinimumFee;
     }
 
+    /// Nome e telefone do pedido do app (ADR-0059 itens 1 e 2, Q-312): marmita sempre com nome e, na entrega, com
+    /// telefone (a retirada é o balcão); à la carte de entrega ou retirada (o delivery por telefone) com os dois. A
+    /// comanda do salão e o PF/quilo não exigem nada.
+    public static (bool Name, bool Phone) ContactRequired(OrderType type, FulfillmentType fulfillment) => type switch
+    {
+        OrderType.Marmita => (true, fulfillment == FulfillmentType.Delivery),
+        OrderType.ALaCarte when fulfillment != FulfillmentType.DineIn => (true, true),
+        _ => (false, false),
+    };
+
+    private static void EnsureCustomerContact(
+        OrderType type, FulfillmentType fulfillment, string? name, string? phone, bool checkName, bool checkPhone)
+    {
+        var (nameRequired, phoneRequired) = ContactRequired(type, fulfillment);
+        if (checkName && nameRequired && string.IsNullOrWhiteSpace(name))
+        {
+            throw BusinessException.Validation(
+                "customerName", type == OrderType.Marmita ? "Informe o nome do cliente da marmita." : "Informe o nome do cliente.");
+        }
+
+        if (checkPhone && phoneRequired && string.IsNullOrWhiteSpace(phone))
+        {
+            throw BusinessException.Validation(
+                "customerPhone", fulfillment == FulfillmentType.Delivery ? "Informe o telefone do cliente da entrega." : "Informe o telefone do cliente.");
+        }
+    }
+
+    /// Forma prevista (ADR-0059 item 5, Q-316): obrigatória na entrega, opcional na retirada e proibida no salão.
+    private static void EnsureExpectedPayment(FulfillmentType fulfillment, ExpectedPaymentMethod? method)
+    {
+        if (fulfillment == FulfillmentType.DineIn && method is not null)
+        {
+            throw BusinessException.Validation("expectedPaymentMethod", "Pedido no salão não tem forma de pagamento prevista.");
+        }
+
+        if (fulfillment == FulfillmentType.Delivery && method is null)
+        {
+            throw BusinessException.Validation("expectedPaymentMethod", "Informe como o cliente vai pagar na entrega.");
+        }
+    }
+
     private static void EnsureDelivery(FulfillmentType fulfillment, DeliveryAddressDto? address, Money fee)
     {
         if (fulfillment == FulfillmentType.Delivery && address is null)
@@ -1338,7 +1392,9 @@ internal sealed record NewOrder(
     string? Notes,
     IReadOnlyList<NewItem> Items,
     IReadOnlyList<NewWeighing> Weighings,
-    DeliveryPricing? Pricing = null);
+    DeliveryPricing? Pricing = null,
+    ExpectedPaymentMethod? ExpectedPaymentMethod = null,
+    Money? ChangeFor = null);
 
 /// Origem da taxa de entrega e snapshot da regra por distância (ADR-0048 item 20).
 internal sealed record DeliveryPricing(DeliveryFeeSource Source, int? DistanceMeters = null, Money? PricePerKm = null, Money? MinimumFee = null);

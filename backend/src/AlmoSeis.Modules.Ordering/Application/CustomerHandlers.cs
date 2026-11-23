@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using AlmoSeis.Infrastructure.Audit;
 using AlmoSeis.Infrastructure.Concurrency;
 using AlmoSeis.Infrastructure.Persistence;
@@ -229,6 +230,35 @@ internal sealed class SearchCustomersQueryHandler(AppDbContext db, CustomerDtoBu
         var rows = await customers.OrderByDescending(c => c.Id).Take(query.Limit + 1).ToListAsync(cancellationToken);
         var items = await dtos.BuildManyAsync(rows.Take(query.Limit).ToList(), cancellationToken);
         return new PageDto<CustomerDto>(items, rows.Count > query.Limit ? Paging.EncodeCursor(items[^1].Id) : null);
+    }
+}
+
+/// GET /customers/by-phone: telefone exato (E.164), nunca por trecho. O cliente anonimizado não tem telefone e não
+/// aparece. O endereço é o do pedido mais recente do cliente com entrega (05 §5.14, `ix_orders_customer_recent`).
+internal sealed class LookupCustomerByPhoneQueryHandler(AppDbContext db, CustomerDtoBuilder dtos)
+    : IQueryHandler<LookupCustomerByPhoneQuery, CustomerPhoneLookupDto>
+{
+    public async Task<CustomerPhoneLookupDto> HandleAsync(LookupCustomerByPhoneQuery query, CancellationToken cancellationToken)
+    {
+        var phone = query.PhoneNumber?.Trim();
+        if (string.IsNullOrEmpty(phone) || !Regex.IsMatch(phone, OrderingFormats.PhonePattern))
+        {
+            throw BusinessException.Validation("phoneNumber", OrderingFormats.PhoneMessage);
+        }
+
+        var customer = await db.Set<Customer>().AsNoTracking().Include(c => c.Addresses)
+            .SingleOrDefaultAsync(c => c.PhoneNumber == phone && c.AnonymizedAt == null, cancellationToken);
+        if (customer is null)
+        {
+            return new CustomerPhoneLookupDto(null, null);
+        }
+
+        var lastAddress = await db.Set<Order>().AsNoTracking()
+            .Where(o => o.CustomerId == customer.Id && o.DeliveryAddress != null)
+            .OrderByDescending(o => o.CreatedAt)
+            .Select(o => o.DeliveryAddress)
+            .FirstOrDefaultAsync(cancellationToken);
+        return new CustomerPhoneLookupDto(await dtos.BuildAsync(customer, cancellationToken), lastAddress);
     }
 }
 

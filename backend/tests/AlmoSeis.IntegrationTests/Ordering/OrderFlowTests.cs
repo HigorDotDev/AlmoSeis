@@ -115,7 +115,7 @@ public sealed class OrderFlowTests(PostgresFixture db) : IDisposable
         (await (await s.Client.PostIdempotentAsync("/api/v1/orders", wrongKind, Guid.NewGuid())).ExpectAsync(HttpStatusCode.UnprocessableEntity, _api))
             .GetProperty("errors").TryGetProperty("items[0].itemKind", out _).ShouldBeTrue();
 
-        var noAddress = new { orderType = "MARMITA", fulfillmentType = "DELIVERY", customerName = "Ana", items = new object[] { new { itemKind = "BEVERAGE", productId = s.Coca, quantity = 1 } } };
+        var noAddress = new { orderType = "MARMITA", fulfillmentType = "DELIVERY", customerName = "Ana", customerPhone = "+5534999990001", expectedPaymentMethod = "PIX", items = new object[] { new { itemKind = "BEVERAGE", productId = s.Coca, quantity = 1 } } };
         (await (await s.Client.PostIdempotentAsync("/api/v1/orders", noAddress, Guid.NewGuid())).ExpectAsync(HttpStatusCode.UnprocessableEntity, _api))
             .GetProperty("errors").TryGetProperty("deliveryAddress", out _).ShouldBeTrue();
 
@@ -156,18 +156,22 @@ public sealed class OrderFlowTests(PostgresFixture db) : IDisposable
             .ExpectAsync(HttpStatusCode.UnprocessableEntity, _api)).GetProperty("errors").TryGetProperty("productionStatus", out _).ShouldBeTrue();
     }
 
+    /// Q-315 (EP-003, ADR-0021 complementado): na criação quem cria digita a taxa; depois, só com `orders.delivery-fee.edit`.
     [Fact]
-    public async Task Delivery_fee_different_from_the_default_needs_permission()
+    public async Task Delivery_fee_typed_at_creation_needs_no_permission_but_later_changes_do()
     {
         var s = await OrderingScenario.CreateAsync(_api, db);
         var attendant = _api.Authenticated(await _api.EmployeeTokenAsync(db, s.Owner, "ATTENDANT"));
 
-        var problem = await (await attendant.PostIdempotentAsync("/api/v1/orders", s.MarmitaDelivery(deliveryFee: "8.00"), Guid.NewGuid()))
+        var typed = await s.CreateOrderAsync(s.MarmitaDelivery(deliveryFee: "8.00"), attendant);
+        typed.GetProperty("totalAmount").GetString().ShouldBe("58.00");
+        typed.GetProperty("deliveryFeeSource").GetString().ShouldBe("MANUAL");
+
+        var problem = await (await attendant.SendJsonAsync(HttpMethod.Patch, $"/api/v1/orders/{typed.Id()}", new { deliveryFee = "9.00" }, typed.Version()))
             .ExpectAsync(HttpStatusCode.Forbidden, _api);
         problem.GetProperty("permission").GetString().ShouldBe("orders.delivery-fee.edit");
 
         (await s.CreateOrderAsync(s.MarmitaDelivery(deliveryFee: "5.00"), attendant)).GetProperty("deliveryFee").GetString().ShouldBe("5.00");
-        (await s.CreateOrderAsync(s.MarmitaDelivery(deliveryFee: "8.00"))).GetProperty("totalAmount").GetString().ShouldBe("58.00");
     }
 
     [Fact]

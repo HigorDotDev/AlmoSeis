@@ -279,6 +279,8 @@ public sealed record OrderSummaryDto(
     DateTimeOffset? AcceptanceDeadline,
     FulfillmentStatus? FulfillmentStatus,
     bool IsReadyForPickup,
+    ExpectedPaymentMethod? ExpectedPaymentMethod,
+    Money? ChangeFor,
     int ItemCount,
     int PendingAlertCount,
     DateTimeOffset CreatedAt) : IVersionedDto;
@@ -332,7 +334,9 @@ public sealed record CreateOrderCommand(
     string? TabNumber,
     string? Notes,
     IReadOnlyList<OrderItemInput> Items,
-    IReadOnlyList<WeighingInput>? Weighings);
+    IReadOnlyList<WeighingInput>? Weighings,
+    ExpectedPaymentMethod? ExpectedPaymentMethod = null,
+    Money? ChangeFor = null);
 
 public sealed record UpdateOrderRequest(
     Optional<string?> CustomerName,
@@ -400,7 +404,9 @@ public sealed record ListOrdersQuery(
     Guid? CustomerId,
     string? Search,
     int Limit,
-    string? Cursor);
+    string? Cursor,
+    IReadOnlyList<FulfillmentType>? FulfillmentTypes = null,
+    FulfillmentStatus? FulfillmentStatus = null);
 
 // ---------- Alertas, produção e histórico ----------
 
@@ -504,6 +510,12 @@ public sealed record AnonymizeCustomerCommand(Guid CustomerId, AnonymizeCustomer
 public sealed record GetCustomerQuery(Guid CustomerId);
 
 public sealed record SearchCustomersQuery(string? Search, int Limit, string? Cursor);
+
+/// GET /customers/by-phone (ADR-0059 item 14, Q-313): o cliente do telefone, para preencher o nome (e, na marmita, os
+/// endereços salvos), e o endereço de entrega do último pedido dele. `customer` nulo: telefone sem cadastro.
+public sealed record LookupCustomerByPhoneQuery(string? PhoneNumber);
+
+public sealed record CustomerPhoneLookupDto(CustomerDto? Customer, DeliveryAddressDto? LastDeliveryAddress);
 
 public sealed record CustomerRefDto(Guid Id, string Name);
 

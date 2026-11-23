@@ -73,6 +73,7 @@ public sealed class CustomerFlowTests(PostgresFixture db) : IDisposable
             fulfillmentType = "DELIVERY",
             customerId = customer.Id(),
             customerAddressId = addressId,
+            expectedPaymentMethod = "CASH",
             items = new object[] { new { itemKind = "MARMITA", marmitaSizeId = s.SizeM, quantity = 1, mainDishProductIds = new[] { s.Frango } } },
         });
 

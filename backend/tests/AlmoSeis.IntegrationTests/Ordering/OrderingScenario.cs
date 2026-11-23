@@ -121,7 +121,9 @@ public sealed class OrderingScenario
         return (T)(await command.ExecuteScalarAsync(Ct))!;
     }
 
-    public object MarmitaDelivery(int quantity = 2, object? deliveryFee = null, bool saveCustomer = false, string phone = "+5534999991234") => new
+    public object MarmitaDelivery(
+        int quantity = 2, object? deliveryFee = null, bool saveCustomer = false, string? phone = "+5534999991234", string? expectedPaymentMethod = "PIX",
+        string? changeFor = null) => new
     {
         orderType = "MARMITA",
         fulfillmentType = "DELIVERY",
@@ -135,6 +137,8 @@ public sealed class OrderingScenario
         tableLabel = (string?)null,
         tabNumber = (string?)null,
         notes = "Entregar até 12h30",
+        expectedPaymentMethod,
+        changeFor,
         items = new object[]
         {
             new

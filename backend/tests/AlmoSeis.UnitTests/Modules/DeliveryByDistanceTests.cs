@@ -192,7 +192,7 @@ public sealed class OrderDeliveryPricingTests
     private static NewOrder Data(Money fee, DeliveryPricing? pricing) => new(
         OrderType.Marmita, FulfillmentType.Delivery, null, "Carla", "+5534999990000", new DeliveryAddressDto("Rua A", "1", null, null, null), fee,
         null, null, null, [new NewItem(OrderItemKind.Marmita, null, null, Guid.NewGuid(), 2, Money.Of(20m), "Marmita M", "Frango", true, null, [], [])], [],
-        pricing);
+        pricing, ExpectedPaymentMethod.Cash);
 
     [Fact]
     public void Distance_order_keeps_the_snapshot_and_shows_the_km()

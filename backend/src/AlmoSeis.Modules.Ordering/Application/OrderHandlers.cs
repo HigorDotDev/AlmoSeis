@@ -25,7 +25,6 @@ internal sealed class CreateOrderHandler(
     IIdGenerator ids,
     IBusinessDayReader businessDays,
     ITenantSettingsReader settings,
-    IPermissionChecker permissions,
     ITenantModules modules,
     OrderItemResolver items,
     CustomerResolver customers,
@@ -41,16 +40,17 @@ internal sealed class CreateOrderHandler(
         var day = await businessDays.GetOpenAsync(cancellationToken) ?? throw new BusinessException(ErrorCodes.BusinessDayRequired);
         var config = await settings.GetAsync(cancellationToken);
 
-        // Taxa nula = padrão (só em entrega). Valor diferente do padrão exige permissão (ADR-0021).
-        Money fee;
-        if (command.FulfillmentType == FulfillmentType.Delivery)
+        // Taxa nula = padrão (só em entrega). Na criação, quem cria (`orders.create`) digita a taxa que quiser, com
+        // auditoria do valor (Q-315, ADR-0021 complementado); alterá-la depois exige `orders.delivery-fee.edit` (PATCH).
+        var fee = command.FulfillmentType == FulfillmentType.Delivery
+            ? command.DeliveryFee ?? config.DefaultDeliveryFee
+            : command.DeliveryFee ?? Money.Zero;
+
+        // Forma prevista dentro das formas habilitadas (ADR-0059 item 5). Não cria pagamento (item 8).
+        if (command.ExpectedPaymentMethod is { } method
+            && !config.EnabledPaymentMethods.Contains(UpperSnakeEnumConverter<ExpectedPaymentMethod>.ToText(method)))
         {
-            fee = command.DeliveryFee ?? config.DefaultDeliveryFee;
-            OrderRules.EnsureCanSetDeliveryFee(permissions, fee, config.DefaultDeliveryFee);
-        }
-        else
-        {
-            fee = command.DeliveryFee ?? Money.Zero;
+            throw new BusinessException(ErrorCodes.PaymentMethodDisabled);
         }
 
         var weighings = OrderRules.Weighings(command.Weighings ?? [], config.KiloPricePerKg);
@@ -58,24 +58,33 @@ internal sealed class CreateOrderHandler(
         var customer = await customers.ResolveAsync(command, cancellationToken);
         var number = await numbers.NextAsync(day.BusinessDate, cancellationToken);
 
+        var feeSource = command.FulfillmentType == FulfillmentType.Delivery
+            ? fee == config.DefaultDeliveryFee ? DeliveryFeeSource.FixedDefault : DeliveryFeeSource.Manual
+            : (DeliveryFeeSource?)null;
         var order = Order.Create(
             ids.New(), tenant.TenantId!.Value,
             new NewOrder(
                 command.OrderType, command.FulfillmentType, customer.CustomerId, customer.Name, customer.Phone, customer.Address, fee,
                 command.TableLabel, command.TabNumber, command.Notes, resolvedItems, weighings,
-                command.FulfillmentType == FulfillmentType.Delivery
-                    ? new DeliveryPricing(fee == config.DefaultDeliveryFee ? DeliveryFeeSource.FixedDefault : DeliveryFeeSource.Manual)
-                    : null),
+                feeSource is { } source ? new DeliveryPricing(source) : null,
+                command.ExpectedPaymentMethod, command.ChangeFor),
             day.Id, day.BusinessDate, number, tenant.EmployeeId!.Value, ids.New, time.GetUtcNow());
         db.Add(order);
 
+        // Sem telefone nem endereço (ADR-0024). A taxa digitada (MANUAL) vai com a padrão do momento, para a revisão
+        // do R-304 (taxa errada) mostrar "digitou 7,00; a padrão era 5,00".
         audit.Add("OrderCreated", order.SyncEntityType, order.Id, order.Id, after: new
         {
             order.OrderNumber,
             orderType = UpperSnakeEnumConverter<OrderType>.ToText(order.OrderType),
+            fulfillmentType = UpperSnakeEnumConverter<FulfillmentType>.ToText(order.FulfillmentType),
             itemCount = order.Items.Count,
             weighingCount = order.Weighings.Count,
             deliveryFee = order.DeliveryFee.ToString(),
+            deliveryFeeSource = feeSource is { } s ? UpperSnakeEnumConverter<DeliveryFeeSource>.ToText(s) : null,
+            defaultDeliveryFee = feeSource == DeliveryFeeSource.Manual ? config.DefaultDeliveryFee.ToString() : null,
+            expectedPaymentMethod = order.ExpectedPaymentMethod is { } m ? UpperSnakeEnumConverter<ExpectedPaymentMethod>.ToText(m) : null,
+            changeFor = order.ChangeFor?.ToString(),
             totalAmount = order.TotalAmount.ToString(),
             order.CustomerId,
         });
@@ -405,6 +414,22 @@ internal sealed class ListOrdersQueryHandler(AppDbContext db, IBusinessDayReader
             orders = orders.Where(o => o.CustomerId == customerId);
         }
 
+        // Aba Delivery (ADR-0059 item 10): `fulfillmentType=DELIVERY&fulfillmentType=PICKUP`, do telefone e do site.
+        if (query.FulfillmentTypes is { Count: > 0 } fulfillmentTypes)
+        {
+            var types = fulfillmentTypes.Distinct().ToArray();
+            orders = orders.Where(o => types.Contains(o.FulfillmentType));
+        }
+
+        // Nulo em entrega/retirada aceita = `PENDING` (pedido da versão anterior da API, 05 §5.17 0003).
+        if (query.FulfillmentStatus is { } fulfillmentStatus)
+        {
+            orders = fulfillmentStatus == FulfillmentStatus.Pending
+                ? orders.Where(o => o.FulfillmentType != FulfillmentType.DineIn
+                    && (o.FulfillmentStatus == FulfillmentStatus.Pending || o.FulfillmentStatus == null))
+                : orders.Where(o => o.FulfillmentStatus == fulfillmentStatus);
+        }
+
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var pattern = $"%{Paging.EscapeLike(query.Search.Trim())}%";
@@ -423,7 +448,7 @@ internal sealed class ListOrdersQueryHandler(AppDbContext db, IBusinessDayReader
             {
                 o.Id, o.Version, o.OrderNumber, o.BusinessDate, o.OrderType, o.Origin, o.FulfillmentType, o.CustomerName, o.TableLabel, o.TabNumber,
                 o.TotalAmount, o.PaidAmount, o.IsPaid, o.ProductionStatus, o.CancellationStatus, o.CreatedAt,
-                o.AcceptanceStatus, o.AcceptanceDeadline, o.FulfillmentStatus,
+                o.AcceptanceStatus, o.AcceptanceDeadline, o.FulfillmentStatus, o.ExpectedPaymentMethod, o.ChangeFor,
                 ItemCount = o.Items.Count(i => i.Status == LineStatus.Active),
             })
             .ToListAsync(cancellationToken);
@@ -435,7 +460,7 @@ internal sealed class ListOrdersQueryHandler(AppDbContext db, IBusinessDayReader
                 r.Id, r.Version, r.OrderNumber, r.BusinessDate, r.OrderType, r.Origin, r.FulfillmentType, r.CustomerName, r.TableLabel, r.TabNumber,
                 r.TotalAmount, r.PaidAmount, r.TotalAmount - r.PaidAmount, r.IsPaid, r.ProductionStatus, r.CancellationStatus,
                 r.AcceptanceStatus, r.AcceptanceDeadline, r.FulfillmentStatus,
-                Order.IsReadyForPickupRule(r.FulfillmentType, r.ProductionStatus, r.FulfillmentStatus), r.ItemCount,
+                Order.IsReadyForPickupRule(r.FulfillmentType, r.ProductionStatus, r.FulfillmentStatus), r.ExpectedPaymentMethod, r.ChangeFor, r.ItemCount,
                 counts.GetValueOrDefault(r.Id), r.CreatedAt))
             .ToList();
         return new PageDto<OrderSummaryDto>(items, rows.Count > query.Limit ? Paging.EncodeCursor(items[^1].Id) : null);

@@ -96,13 +96,15 @@ public sealed class ALaCarteOrderFlowTests(PostgresFixture db) : IDisposable
 
     private static object Comanda(params object[] items) => Order("DINE_IN", items, table: "5");
 
-    private static object Order(string fulfillment, object[] items, string? table = null, string? tab = null, string? name = null, object? address = null) => new
+    private static object Order(
+        string fulfillment, object[] items, string? table = null, string? tab = null, string? name = null, object? address = null,
+        string? phone = "+5534999990000", string? payment = "PIX") => new
     {
         orderType = "A_LA_CARTE",
         fulfillmentType = fulfillment,
         customerId = (Guid?)null,
         customerName = name,
-        customerPhone = (string?)null,
+        customerPhone = name is null ? null : phone,
         saveCustomer = false,
         customerAddressId = (Guid?)null,
         deliveryAddress = address,
@@ -110,6 +112,7 @@ public sealed class ALaCarteOrderFlowTests(PostgresFixture db) : IDisposable
         tableLabel = table,
         tabNumber = tab,
         notes = (string?)null,
+        expectedPaymentMethod = fulfillment == "DELIVERY" ? payment : null,
         items,
         weighings = Array.Empty<object>(),
     };
@@ -469,6 +472,72 @@ public sealed class ALaCarteOrderFlowTests(PostgresFixture db) : IDisposable
         var board = await (await b.Client.GetAsync("/api/v1/production/orders", Ct)).ExpectAsync(HttpStatusCode.OK, _api);
         board.GetProperty("groups").GetProperty("OPEN").GetArrayLength().ShouldBe(0);
         (await Scalar<long>(b.TenantId, "SELECT count(*) FROM orders WHERE tenant_id = @t")).ShouldBe(0);
+    }
+
+    /// EP-003 fatia 4 (ADR-0059, RF-312): delivery por telefone da lanchonete. 1 combo (32,00) + açaí 500 ml com granola
+    /// (20,00) + taxa digitada 5,00 (padrão 4,00 → MANUAL) = 57,00; troco para 100,00. Nasce aceito, com número, na
+    /// cozinha e na lista da aba Delivery; retirada e entrega exigem nome e telefone; troco abaixo do total, forma no salão
+    /// e entrega sem forma → 422.
+    [Fact]
+    public async Task Phone_delivery_is_born_accepted_in_the_kitchen_with_change_and_contact_rules()
+    {
+        var s = await ShopAsync();
+        await Sql(s.TenantId, "UPDATE tenant_settings SET default_delivery_fee = 4.00 WHERE tenant_id = @t");
+        var address = new { street = "Rua das Flores", number = "123", complement = (string?)null, neighborhood = "Centro", reference = (string?)null };
+        object[] items = [ComboItem(s, 1, s.Coca, bacon: false), Dish(s.Acai, s.Acai500, 1, null, (s.Granola, 1))];
+
+        Dictionary<string, object?> Phone(string fulfillment, string? name = "Carla", string? phone = "+5534988887777", string? payment = "CASH",
+            string? changeFor = null, string? fee = null)
+        {
+            var body = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(JsonSerializer.Serialize(
+                Order(fulfillment, items, name: name, address: fulfillment == "DELIVERY" ? address : null, phone: phone, payment: payment), ApiFactory.Json))!
+                .ToDictionary(kv => kv.Key, kv => (object?)kv.Value);
+            body["changeFor"] = changeFor;
+            body["deliveryFee"] = fee;
+            body["customerPhone"] = phone;
+            body["expectedPaymentMethod"] = payment;
+            return body;
+        }
+
+        var order = await CreateAsync(s.Client, Phone("DELIVERY", changeFor: "100.00", fee: "5.00"));
+        order.GetProperty("orderNumber").GetInt32().ShouldBe(1);
+        order.GetProperty("acceptanceStatus").GetString().ShouldBe("ACCEPTED");
+        order.GetProperty("origin").GetString().ShouldBe("APP");
+        order.GetProperty("deliveryFee").GetString().ShouldBe("5.00");
+        order.GetProperty("deliveryFeeSource").GetString().ShouldBe("MANUAL");
+        order.GetProperty("totalAmount").GetString().ShouldBe("57.00");
+        order.GetProperty("expectedPaymentMethod").GetString().ShouldBe("CASH");
+        order.GetProperty("changeFor").GetString().ShouldBe("100.00");
+        order.GetProperty("balance").GetString().ShouldBe("57.00");
+        order.GetProperty("customer").GetProperty("id").ValueKind.ShouldBe(JsonValueKind.String);
+        (await Scalar<long>(s.TenantId, "SELECT count(*) FROM customer_addresses WHERE tenant_id = @t")).ShouldBe(0);
+
+        var board = await (await s.Client.GetAsync("/api/v1/production/orders", Ct)).ExpectAsync(HttpStatusCode.OK, _api);
+        board.GetProperty("groups").GetProperty("OPEN").EnumerateArray().ShouldHaveSingleItem().Id().ShouldBe(order.Id());
+
+        var tab = await (await s.Client.GetAsync("/api/v1/orders?orderType=A_LA_CARTE&fulfillmentType=DELIVERY&fulfillmentType=PICKUP", Ct))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+        var card = tab.GetProperty("items").EnumerateArray().ShouldHaveSingleItem();
+        card.GetProperty("changeFor").GetString().ShouldBe("100.00");
+        card.GetProperty("fulfillmentStatus").GetString().ShouldBe("PENDING");
+
+        async Task<List<string>> Refused(object body)
+        {
+            var problem = await Problem(s.Client.PostIdempotentAsync("/api/v1/orders", body, Guid.NewGuid()), HttpStatusCode.UnprocessableEntity);
+            problem.GetProperty("errorCode").GetString().ShouldBe("ValidationFailed");
+            return problem.GetProperty("errors").EnumerateObject().Select(p => p.Name).ToList();
+        }
+
+        (await Refused(Phone("DELIVERY", changeFor: "50.00"))).ShouldContain("changeFor");
+        (await Refused(Phone("DELIVERY", payment: null))).ShouldContain("expectedPaymentMethod");
+        (await Refused(Phone("PICKUP", phone: null, payment: null))).ShouldContain("customerPhone");
+        (await Refused(Phone("PICKUP", name: null, payment: null))).ShouldContain("customerName");
+        (await Refused(Phone("DINE_IN", name: null, phone: null, payment: "PIX"))).ShouldContain("expectedPaymentMethod");
+
+        var pickup = await CreateAsync(s.Client, Phone("PICKUP", payment: null));
+        pickup.GetProperty("orderNumber").GetInt32().ShouldBe(2);
+        pickup.GetProperty("expectedPaymentMethod").ValueKind.ShouldBe(JsonValueKind.Null);
+        pickup.GetProperty("customer").Id().ShouldBe(order.GetProperty("customer").Id());
     }
 
     private static object Sized(Guid category, string name, params (string Name, string Price)[] sizes) => new

@@ -1,3 +1,4 @@
+using AlmoSeis.Infrastructure.Audit;
 using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Tenancy;
 using AlmoSeis.Modules.Catalog.Contracts;
@@ -180,8 +181,10 @@ internal sealed class OrderItemResolver(ICatalogReader catalog, IMenuReader menu
     private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max];
 }
 
-/// `customerId`, ou `saveCustomer` → busca por telefone → cria ou reaproveita (07 §7.8). Resolve o endereço em snapshot.
-internal sealed class CustomerResolver(AppDbContext db, ITenantContext tenant, IIdGenerator ids, TimeProvider time)
+/// Cliente do pedido do app (07 §7.8): `customerId`; ou `saveCustomer` (marmita, com o endereço salvo, Q-313); ou, fora
+/// do salão, o telefone informado vincula o cliente existente ou cria um só com nome e telefone, sem `CustomerAddress`
+/// (ADR-0059 item 14, ADR-0024 complementado). O cadastro existente nunca muda: o pedido guarda o nome digitado (Q-314).
+internal sealed class CustomerResolver(AppDbContext db, ITenantContext tenant, IIdGenerator ids, IAuditWriter audit, TimeProvider time)
 {
     public sealed record Resolved(Guid? CustomerId, string? Name, string? Phone, DeliveryAddressDto? Address);
 
@@ -215,30 +218,88 @@ internal sealed class CustomerResolver(AppDbContext db, ITenantContext tenant, I
             throw BusinessException.Validation("customerAddressId", "Endereço salvo exige o cliente.");
         }
 
-        if (!command.SaveCustomer)
+        var name = string.IsNullOrWhiteSpace(command.CustomerName) ? null : command.CustomerName.Trim();
+        var phone = command.CustomerPhone;
+        if (command.SaveCustomer)
         {
-            return new Resolved(null, command.CustomerName, command.CustomerPhone, command.DeliveryAddress);
+            if (name is null)
+            {
+                throw BusinessException.Validation("customerName", "Informe o nome para salvar o cliente.");
+            }
+
+            // "Salvar cliente" da marmita grava o endereço (Q-313). Telefone já cadastrado: o pedido vai para o cliente
+            // existente, sem mudar o cadastro (06 §6.9).
+            var addresses = command.DeliveryAddress is { } a
+                ? new[] { new CustomerAddressInput(null, a.Street, a.Number, a.Complement, a.Neighborhood, a.Reference, IsDefault: true) }
+                : [];
+            if (phone is null)
+            {
+                var created = Customer.Create(ids.New(), tenant.TenantId!.Value, name, null, null, addresses, ids.New, time.GetUtcNow());
+                db.Add(created);
+                AuditCreated(created);
+                return new Resolved(created.Id, name, null, command.DeliveryAddress);
+            }
+
+            return new Resolved(await FindOrCreateByPhoneAsync(name, phone, addresses, cancellationToken), name, phone, command.DeliveryAddress);
         }
 
-        if (string.IsNullOrWhiteSpace(command.CustomerName))
+        // Pedido por telefone (entrega ou retirada): vínculo automático, sem "salvar cliente" (ADR-0059 item 14).
+        if (phone is not null && name is not null && command.FulfillmentType != FulfillmentType.DineIn)
         {
-            throw BusinessException.Validation("customerName", "Informe o nome para salvar o cliente.");
+            return new Resolved(await FindOrCreateByPhoneAsync(name, phone, [], cancellationToken), name, phone, command.DeliveryAddress);
         }
 
-        // Telefone já cadastrado: o pedido vai para o cliente existente (06 §6.9).
-        if (command.CustomerPhone is { } phone
-            && await db.Set<Customer>().AsNoTracking().SingleOrDefaultAsync(c => c.PhoneNumber == phone, cancellationToken) is { } existing)
-        {
-            return new Resolved(existing.Id, command.CustomerName, phone, command.DeliveryAddress);
-        }
-
-        var addresses = command.DeliveryAddress is { } a
-            ? new[] { new CustomerAddressInput(null, a.Street, a.Number, a.Complement, a.Neighborhood, a.Reference, IsDefault: true) }
-            : [];
-        var created = Customer.Create(ids.New(), tenant.TenantId!.Value, command.CustomerName, command.CustomerPhone, null, addresses, ids.New, time.GetUtcNow());
-        db.Add(created);
-        return new Resolved(created.Id, command.CustomerName, command.CustomerPhone, command.DeliveryAddress);
+        return new Resolved(null, command.CustomerName, phone, command.DeliveryAddress);
     }
+
+    /// 05 §5.14 "Cliente pelo telefone": `INSERT … ON CONFLICT DO NOTHING RETURNING id`, e o `SELECT` quando não volta
+    /// linha (o telefone já existe, ou outro atendente acabou de criá-lo: o ON CONFLICT esperou o commit dele). Um INSERT
+    /// comum que batesse no `ux_customers_phone` abortaria a transação do pedido. A trava por telefone é a mesma do
+    /// aceite do pedido do site (`WebOrderCustomerLinker`), que cria pelo EF: sem ela, o aceite estouraria o índice.
+    private async Task<Guid> FindOrCreateByPhoneAsync(
+        string name, string phone, IReadOnlyList<CustomerAddressInput> addresses, CancellationToken cancellationToken)
+    {
+        var tenantId = tenant.TenantId!.Value;
+        await db.Database.ExecuteSqlAsync(
+            $"SELECT pg_advisory_xact_lock(hashtextextended({"customer-phone:" + tenantId + ":" + phone}, 0))", cancellationToken);
+
+        var id = ids.New();
+        var now = time.GetUtcNow();
+        var inserted = await db.Database
+            .SqlQuery<Guid>(
+                $"""
+                INSERT INTO customers (id, tenant_id, name, phone_number, created_at)
+                VALUES ({id}, {tenantId}, {name}, {phone}, {now})
+                ON CONFLICT (tenant_id, phone_number) WHERE phone_number IS NOT NULL DO NOTHING
+                RETURNING id AS "Value"
+                """)
+            .ToListAsync(cancellationToken);
+
+        if (inserted.Count == 0)
+        {
+            return await db.Set<Customer>().AsNoTracking()
+                .Where(c => c.PhoneNumber == phone)
+                .Select(c => c.Id)
+                .SingleAsync(cancellationToken);
+        }
+
+        // A linha já está no banco (versão 1). O agregado entra rastreado como alterado, sem mudar nada, só para o
+        // UnitOfWork gravar o feed (`CUSTOMER`, versão 1) e o `CustomerChanged` no outbox, como num cadastro pelo EF; os
+        // endereços do "salvar cliente" entram como novos.
+        var customer = Customer.Create(id, tenantId, name, phone, null, addresses, ids.New, now);
+        db.Attach(customer);
+        db.Entry(customer).Property(c => c.Name).IsModified = true;
+        foreach (var address in customer.Addresses)
+        {
+            db.Entry(address).State = EntityState.Added;
+        }
+
+        AuditCreated(customer);
+        return id;
+    }
+
+    private void AuditCreated(Customer customer) =>
+        audit.Add("CustomerCreated", customer.SyncEntityType, customer.Id, after: CustomerRules.AuditView(customer));
 }
 
 /// SQL de 05 §5.14: número sequencial por data operacional (ADR-0039).
@@ -282,7 +343,8 @@ internal static class OrderRules
             .SingleOrDefaultAsync(o => o.Id == orderId, cancellationToken)
         ?? throw new NotFoundException("ORDER", orderId);
 
-    /// Taxa diferente da padrão exige `orders.delivery-fee.edit` (ADR-0021).
+    /// Alterar a taxa de um pedido existente para um valor diferente da padrão exige `orders.delivery-fee.edit`
+    /// (ADR-0021). Na criação, não: quem cria digita a taxa (Q-315).
     public static void EnsureCanSetDeliveryFee(IPermissionChecker permissions, Money fee, Money defaultFee)
     {
         if (fee != defaultFee && !permissions.Has(Permissions.Orders.EditDeliveryFee))

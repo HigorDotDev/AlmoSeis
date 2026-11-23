@@ -24,11 +24,15 @@ public sealed class OrdersController : ControllerBase
         [FromQuery] Guid? customerId,
         [FromQuery] string? search,
         [FromQuery] string? cursor,
+        [FromQuery] FulfillmentType[]? fulfillmentType,
+        [FromQuery] FulfillmentStatus? fulfillmentStatus,
         [FromServices] IQueryHandler<ListOrdersQuery, PageDto<OrderSummaryDto>> handler,
         CancellationToken cancellationToken,
         [FromQuery] int limit = 50) =>
         Ok(await handler.HandleAsync(
-            new ListOrdersQuery(businessDayId, allDays ?? false, acceptanceStatus ?? AcceptanceStatus.Accepted, orderType, isPaid, cancellationStatus, productionStatus, customerId, search, limit, cursor),
+            new ListOrdersQuery(
+                businessDayId, allDays ?? false, acceptanceStatus ?? AcceptanceStatus.Accepted, orderType, isPaid, cancellationStatus, productionStatus,
+                customerId, search, limit, cursor, fulfillmentType, fulfillmentStatus),
             cancellationToken));
 
     [HttpGet("{id:guid}")]
