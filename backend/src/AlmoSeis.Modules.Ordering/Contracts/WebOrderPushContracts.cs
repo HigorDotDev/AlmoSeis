@@ -6,7 +6,7 @@ namespace AlmoSeis.Modules.Ordering.Contracts;
 /// `available_at` para `WebOrders:ReminderMinutes` depois do envio.
 ///
 /// `data`: `{ "kind": "WEB_ORDER_AWAITING_ACCEPTANCE" | "WEB_ORDER_REMINDER", "fulfillmentType": "DELIVERY" | "PICKUP",
-/// "marmitaCount": 2 }`. Sem nome, telefone, endereço nem valor (ADR-0049 item 3, ADR-0052 item 7).
+/// "marmitaCount": 2, "itemCount": 3 }` (`itemCount` desde o EP-003 fatia 5; `marmitaCount` 0 no pedido à la carte). Sem nome, telefone, endereço nem valor (ADR-0049 item 3, ADR-0052 item 7).
 public static class WebOrderPushMessage
 {
     public const string EventType = "WebOrderPushRequested";

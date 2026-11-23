@@ -578,7 +578,7 @@ O que o servidor envia para cada aparelho, em lotes de até 100, pelo outbox (pe
 
 | `kind` | Quando | `title` | `body` |
 |---|---|---|---|
-| `WEB_ORDER_AWAITING_ACCEPTANCE` | pedido do site enviado (`OrderAwaitingAcceptance`) | `Novo pedido do site` | `{n} marmita(s) · Entrega\|Retirada · aceite em até {m} min` |
+| `WEB_ORDER_AWAITING_ACCEPTANCE` | pedido do site enviado (`OrderAwaitingAcceptance`) | `Novo pedido do site` | `{n} marmita(s) · Entrega\|Retirada · aceite em até {m} min`; no pedido da lanchonete (`marmitaCount` 0), `{itemCount} item(ns) · …` ("3 itens · Retirada · aceite em até 10 min") |
 | `WEB_ORDER_REMINDER` | 3 min depois, se ainda aguarda aceite (ADR-0046 item 15) | `Pedido do site esperando` | `Faltam {m} min para expirar` |
 
 - `{m}`: minutos inteiros até o prazo de aceite, arredondados para cima, no momento do envio. `ttl`: segundos até o prazo (depois disso a Expo descarta).
@@ -3035,7 +3035,7 @@ Uma repetição de `POST /orders` com a mesma chave e o mesmo corpo devolve **a 
 | `eventType` | Grupo | `data` |
 |---|---|---|
 | `OrderCreated` | orders, production (exceto KILO) | `orderNumber`, `orderType`, `label`. Pedido do site: emitido **no aceite**, com `label: null` (evento sem dado pessoal, ADR-0046 item 23) |
-| `OrderAwaitingAcceptance` | orders | `fulfillmentType`, `marmitaCount`, `totalAmount`, `acceptanceDeadline` (pedido do site chegou; sem nome, telefone nem endereço) |
+| `OrderAwaitingAcceptance` | orders | `fulfillmentType`, `marmitaCount`, `itemCount`, `totalAmount`, `acceptanceDeadline` (pedido do site chegou; sem nome, telefone nem endereço). `itemCount` (EP-003 fatia 5, ADR-0058 item 14): unidades do primeiro nível (marmitas, pratos, combos e bebidas: 2 combos + 1 prato + 3 bebidas = 6); `marmitaCount` vai `0` no pedido `A_LA_CARTE` |
 | `OrderAccepted` | orders | `orderNumber`, `acceptedBy` (`{ "id", "displayName" }`; `null` no aceite do sistema, Fase 2) |
 | `OrderRejected` | orders | `acceptanceStatus` (`REJECTED`/`EXPIRED`/`WITHDRAWN`), `reasonCode` (`null` em `EXPIRED`/`WITHDRAWN`) |
 | `OrderFulfillmentChanged` | orders, production | `orderNumber`, `from`, `to` |
@@ -3221,7 +3221,7 @@ Regras (`422 ValidationFailed`, com o campo em `errors`):
 | Campo | Regra |
 |---|---|
 | `slug` | `a-z`, `0-9` e `-`; 3 a 40; sem `-` no começo, no fim ou repetido; não só números; fora da lista de reservados (`admin`, `pedidos`, `restaurantes`…, ADR-0044 item 16) e de palavras ofensivas; livre (nem atual nem antigo de outro tenant). Maiúsculas viram minúsculas. Trocar guarda o anterior (redireciona); voltar a um antigo do próprio tenant o reativa; depois de 5 trocas, só pelo suporte |
-| `isPageActive: true` | exige `address` com rua, número, bairro, cidade e UF, e pelo menos um tamanho de marmita ativo **com `sellsOnSite: true`** (ADR-0044 item 11, ADR-0057 item 3) |
+| `isPageActive: true` | exige `address` com rua, número, bairro, cidade e UF, e algo que vende no site numa das seções da página (§6.19 `sections`): na `MARMITA`, um tamanho de marmita ativo **com `sellsOnSite: true`** (ADR-0044 item 11, ADR-0057 item 3); na `A_LA_CARTE` (lanchonete, EP-003 RN-316.5), um **prato ou combo** ativo com `sellsOnSite: true` (prato com tamanho: um tamanho ativo que vende no site). Só bebida não basta (o pedido precisa de prato ou combo, Q-318). A pausa não conta: um prato pausado que vende no site permite ativar. Mensagem conforme as seções ("…um prato ou combo ativo que vende no site.") |
 | `offersDelivery`, `offersPickup` | pelo menos um verdadeiro |
 | `publicName` | 2 a 80 |
 | `contactPhone` | E.164 ou `null` |
@@ -3284,6 +3284,7 @@ Perfil, estado e cardápio do dia. Estado calculado a cada requisição (ADR-004
   "slug": "marmitaria-da-ana",
   "status": "OPEN",
   "name": "Marmitaria da Ana",
+  "sections": ["MARMITA"],
   "address": { "street": "Rua das Flores", "number": "123", "complement": null, "neighborhood": "Centro", "city": "Uberlândia", "state": "MG" },
   "contactPhone": "+5534999990000",
   "hoursText": "Seg a sáb, 10h30 às 14h",
@@ -3312,11 +3313,98 @@ Perfil, estado e cardápio do dia. Estado calculado a cada requisição (ADR-004
       { "productId": "0192d6a0-0000-7000-8000-000000000121", "name": "Coca-Cola 350ml", "description": null, "imageUrl": null, "price": "6.00", "isAvailable": true }
     ]
   },
-  "limits": { "maxMarmitas": 20, "maxLines": 30, "maxQuantityPerLine": 20, "notesMaxLength": 200 }
+  "fixedMenu": null,
+  "limits": { "maxMarmitas": 20, "maxDishesAndCombos": 20, "maxLines": 30, "maxQuantityPerLine": 20, "maxAddonQuantity": 10, "notesMaxLength": 200 }
 }
 ```
 
-- `menu`: o `DAILY` de `MARMITA` da `businessDate` (ADR-0038) + tamanhos ativos **que vendem no site** + adicionais e bebidas ativos com `isVisibleOnPage`. **Todo preço é o de site** (EP-003, ADR-0057 item 6): `marmitaSizes[].price` = `sitePrice` do tamanho; `beverages[].price` = `sitePrice` da bebida (o `defaultPrice` só para bebida ainda sem preço de site, §6.5); `addons[].price` = `defaultPrice` (Q-308). O envio recalcula com os mesmos preços, e o pedido nasce com `priceList: "SITE"`. `isAvailable: false` → "Acabou" (desabilitado). Sem cardápio publicado → `menu: null`. PF e quilo nunca aparecem.
+**Lanchonete** (EP-003 fatia 5, RF-316; ADR-0044 complementado, ADR-0057): `sections: ["A_LA_CARTE"]`, `menu: null` e o cardápio fixo em `fixedMenu`. Só os campos que mudam em relação ao exemplo acima:
+
+```json
+{
+  "slug": "lanchonete-do-ze",
+  "status": "OPEN",
+  "name": "Lanchonete do Zé",
+  "sections": ["A_LA_CARTE"],
+  "businessDate": "2026-11-23",
+  "menu": null,
+  "fixedMenu": {
+    "categories": [
+      {
+        "id": "0192d6a0-0000-7000-8000-000000001001",
+        "name": "Lanches",
+        "dishes": [
+          {
+            "id": "0192d6a0-0000-7000-8000-000000001101", "name": "X-Burguer", "description": "Pão, hambúrguer 150 g, queijo", "imageUrl": null,
+            "hasSizes": false, "price": "23.90", "sizes": [], "addonGroupIds": ["0192d6a0-0000-7000-8000-000000001501"]
+          }
+        ]
+      },
+      {
+        "id": "0192d6a0-0000-7000-8000-000000001002",
+        "name": "Porções",
+        "dishes": [
+          {
+            "id": "0192d6a0-0000-7000-8000-000000001102", "name": "Batata frita", "description": null, "imageUrl": null,
+            "hasSizes": true, "price": null,
+            "sizes": [ { "id": "0192d6a0-0000-7000-8000-000000001201", "name": "P", "price": "13.00" } ],
+            "addonGroupIds": []
+          }
+        ]
+      }
+    ],
+    "beverages": [
+      {
+        "id": "0192d6a0-0000-7000-8000-000000001301",
+        "name": "Refrigerante",
+        "sizes": [
+          {
+            "id": "0192d6a0-0000-7000-8000-000000001311", "name": "Lata 350 ml", "price": "6.50",
+            "flavors": [
+              { "id": "0192d6a0-0000-7000-8000-000000001321", "name": "Coca-Cola", "extraPrice": "0.00" },
+              { "id": "0192d6a0-0000-7000-8000-000000001322", "name": "Coca-Cola Zero", "extraPrice": "0.50" }
+            ]
+          }
+        ]
+      }
+    ],
+    "combos": [
+      {
+        "id": "0192d6a0-0000-7000-8000-000000001401", "name": "X-Burguer + batata + refri", "description": null, "imageUrl": null, "price": "34.90",
+        "components": [
+          { "id": "0192d6a0-0000-7000-8000-000000001411", "kind": "DISH", "name": "X-Burguer", "quantity": 1, "addonGroupIds": ["0192d6a0-0000-7000-8000-000000001501"], "flavors": [] },
+          { "id": "0192d6a0-0000-7000-8000-000000001412", "kind": "DISH", "name": "Batata frita P", "quantity": 1, "addonGroupIds": [], "flavors": [] },
+          {
+            "id": "0192d6a0-0000-7000-8000-000000001413", "kind": "BEVERAGE", "name": "Refrigerante Lata 350 ml", "quantity": 1, "addonGroupIds": [],
+            "flavors": [
+              { "id": "0192d6a0-0000-7000-8000-000000001321", "name": "Coca-Cola", "extraPrice": "0.00" },
+              { "id": "0192d6a0-0000-7000-8000-000000001322", "name": "Coca-Cola Zero", "extraPrice": "0.50" }
+            ]
+          }
+        ]
+      }
+    ],
+    "addonGroups": [
+      {
+        "id": "0192d6a0-0000-7000-8000-000000001501", "name": "Adicionais de lanche",
+        "options": [ { "id": "0192d6a0-0000-7000-8000-000000001511", "name": "Bacon", "price": "4.00" } ]
+      }
+    ]
+  },
+  "limits": { "maxMarmitas": 20, "maxDishesAndCombos": 20, "maxLines": 30, "maxQuantityPerLine": 20, "maxAddonQuantity": 10, "notesMaxLength": 200 }
+}
+```
+
+- `sections` (EP-003 Q-317): o que a página vende, pelos **módulos** do estabelecimento (ADR-0054 item 13), na ordem `MARMITA`, `A_LA_CARTE`. `MARMITA` = módulo `MARMITA` (restaurante): marmitas e bebidas em `menu`. `A_LA_CARTE` = módulos `FIXED_MENU` e `DELIVERY` (lanchonete): o cardápio fixo em `fixedMenu`. Com os dois comportamentos, as duas, e a página mostra as duas seções. O nome da seção é o `orderType` que o envio usa. Em `UNAVAILABLE`, `[]`. Em `CLOSED`, as seções aparecem (para a página dizer o que vende), sem `menu` nem `fixedMenu`.
+- `fixedMenu` (só com a seção `A_LA_CARTE`, em `OPEN` e `PAUSED`; senão `null`): **só o que vende no site e está vendável agora, pelo preço de site** (ADR-0057 itens 3 e 6). Pausado, inativo ou sem "vende no site" **não aparece** (não fica desabilitado, ao contrário do "Acabou" da marmita). Todas as listas vêm na ordem do cadastro.
+  - `categories`: uma aba por categoria que tem pelo menos um prato na página. Prato sem tamanho: `hasSizes: false`, `price` (de site), `sizes: []`. Prato com tamanho: `hasSizes: true`, `price: null` e só os tamanhos que vendem no site e não estão pausados (o cliente escolhe um). `addonGroupIds`: os grupos de `addonGroups` que o cliente pode escolher para o prato (da categoria ou do próprio prato).
+  - `beverages` (aba **Bebidas**): tipo → tamanhos (que vendem no site, com `price` de site) → `flavors` não pausados. Com `flavors`, o sabor é obrigatório; `flavors: []` = vende sem escolha. Preço da bebida = `price` do tamanho + `extraPrice` do sabor.
+  - `combos` (aba **Combos**): combo com "vende no site", não pausado e com **todos** os componentes vendáveis (um componente pausado tira o combo da página, ADR-0056 item 23); os componentes não precisam vender no site sozinhos (ADR-0057 item 4). `components[]`, na ordem do combo: `DISH` ("Batata frita P", tamanho já fixo) com `addonGroupIds` (adicionais e observação por prato); `BEVERAGE` com `flavors` (o cliente escolhe o sabor; `extraPrice` soma ao combo). `quantity` é a do componente.
+  - `addonGroups`: só os grupos usados por algum prato ou componente da página, com as opções não pausadas. Preço da opção e acréscimo de sabor: os do balcão (Q-308). Quantidade de cada opção: 1 a `limits.maxAddonQuantity`.
+- `limits`: marmita `maxMarmitas`; lanchonete `maxDishesAndCombos` (EP-003 Q-318: pratos e combos somados); `maxLines` e `maxQuantityPerLine` valem para as duas; `maxAddonQuantity` por opção de adicional de grupo.
+- Pausar ou tirar do site no app reflete na próxima leitura (o `Cache-Control: no-cache` abaixo garante os 30 s de RF-316).
+
+- `menu` (só com a seção `MARMITA`; senão `null`): o `DAILY` de `MARMITA` da `businessDate` (ADR-0038) + tamanhos ativos **que vendem no site** + adicionais e bebidas ativos com `isVisibleOnPage`. **Todo preço é o de site** (EP-003, ADR-0057 item 6): `marmitaSizes[].price` = `sitePrice` do tamanho; `beverages[].price` = `sitePrice` da bebida (o `defaultPrice` só para bebida ainda sem preço de site, §6.5); `addons[].price` = `defaultPrice` (Q-308). O envio recalcula com os mesmos preços, e o pedido nasce com `priceList: "SITE"`. `isAvailable: false` → "Acabou" (desabilitado). Sem cardápio publicado → `menu: null`. PF e quilo nunca aparecem.
 - `pickupAvailable` / `deliveryAvailable`: o que a página oferece agora. `deliveryAvailable` = entrega ligada (`offersDelivery` e `isDeliveryEnabled`) e, no modo `DISTANCE`, preço por km, ponto do restaurante confirmado e provedor de mapas configurado na API (o mesmo que `pageDelivery.available`, §6.18). Uma falha momentânea do provedor **não** muda este campo: a cotação responde `422 DeliveryUnavailable` e a página oferece retirada. `deliveryRule` (só com `deliveryAvailable: true`): `DISTANCE` → `{ "feeMode": "DISTANCE", "pricePerKm": "0.80", "minimumFee": "3.00", "maxDistanceKm": "6.0", "fixedFee": null }` ("R$ 0,80/km, mínimo R$ 3,00, até 6 km"); `FIXED` → `{ "feeMode": "FIXED", "pricePerKm": null, "minimumFee": null, "maxDistanceKm": null, "fixedFee": "5.00" }`.
 - `privacy` (ADR-0052 item 1): dados variáveis do aviso "Seus dados são usados por **{controllerName}** para preparar e entregar o pedido". O texto completo é da página (revisão jurídica). `thirdParties`: `ANTI_BOT` (Cloudflare Turnstile, quando ligado); `MAPS` (entrega por distância disponível e provedor externo, `Osm` ou `Google`; o `Fake` não manda o endereço a ninguém) e `PAYMENTS` com a Fase 2.
 - `Cache-Control: no-cache`: o servidor da página revalida a cada uso (pausa e "Acabou" aparecem em até 30 s, RF-202/RF-205).
@@ -3373,29 +3461,91 @@ Headers: `Idempotency-Key: {uuid}` (obrigatório, gerado quando o cliente toca e
 - O Turnstile e a conferência da cotação de entrega (que pode recalcular no provedor de mapas) rodam **antes** da transação do envio; um reenvio de pedido já gravado responde antes deles (o token do Turnstile, de uso único, não é verificado de novo). A ordem dos erros abaixo não muda.
 - O pedido entra no app como pedido do site `AWAITING_ACCEPTANCE` (§6.9 "Pedido do site"), com `customerPhone` normalizado em E.164 e passa pelo aceite (`POST /orders/{id}/accept`).
 - `customerPhone` aceita os formatos comuns ("(34) 98888-7777", "34988887777", "+55 34 98888-7777", DDD com zero) e é normalizado: celular com 9 dígitos começando por 9, fixo com 8 começando por 2 a 5.
+**Pedido da lanchonete** (EP-003 fatia 5; RN-316.4, ADR-0058 item 14): `orderType: "A_LA_CARTE"` e os itens no mesmo formato do `POST /orders` à la carte (§6.9): `FIXED_DISH`, `FIXED_BEVERAGE` e `COMBO`. 1 combo com bacon no X-Burguer e Coca-Cola Zero, 1 X-Burguer e 1 lata de Coca-Cola, para retirar:
+
+```json
+{
+  "orderType": "A_LA_CARTE",
+  "fulfillmentType": "PICKUP",
+  "customerName": "Carla Souza",
+  "customerPhone": "(34) 98888-7777",
+  "deliveryAddress": null,
+  "deliveryQuoteId": null,
+  "expectedPaymentMethod": "PIX",
+  "changeFor": null,
+  "notes": "Sem talher",
+  "items": [
+    {
+      "itemKind": "COMBO",
+      "comboId": "0192d6a0-0000-7000-8000-000000001401",
+      "quantity": 1,
+      "notes": null,
+      "parts": [
+        {
+          "comboComponentId": "0192d6a0-0000-7000-8000-000000001411",
+          "beverageFlavorId": null,
+          "notes": "Sem cebola",
+          "groupAddons": [ { "addonOptionId": "0192d6a0-0000-7000-8000-000000001511", "quantity": 1 } ]
+        },
+        { "comboComponentId": "0192d6a0-0000-7000-8000-000000001413", "beverageFlavorId": "0192d6a0-0000-7000-8000-000000001322", "notes": null, "groupAddons": null }
+      ]
+    },
+    {
+      "itemKind": "FIXED_DISH",
+      "dishId": "0192d6a0-0000-7000-8000-000000001101",
+      "dishSizeId": null,
+      "quantity": 1,
+      "notes": null,
+      "groupAddons": []
+    },
+    {
+      "itemKind": "FIXED_BEVERAGE",
+      "beverageSizeId": "0192d6a0-0000-7000-8000-000000001311",
+      "beverageFlavorId": "0192d6a0-0000-7000-8000-000000001321",
+      "quantity": 1,
+      "notes": null
+    }
+  ],
+  "expectedTotal": "69.80",
+  "website": null
+}
+```
+
+→ `201` com a mesma resposta: `"itemsTotal": "69.80"`, `"deliveryFee": "0.00"`, `"totalAmount": "69.80"`, `"acceptanceStatus": "AWAITING_ACCEPTANCE"`. Valor pelo preço de site: combo 34,90 + bacon 4,00 + acréscimo da Coca-Cola Zero 0,50 = 39,40; X-Burguer 23,90; lata 6,50 → **69,80**. Com 2 combos, a linha do combo dobra inteira: 2 × (34,90 + 4,00 + 0,50) = 78,80.
+
+- `orderType`: `MARMITA` (o padrão, quando ausente: a página do EP-002 continua igual) ou `A_LA_CARTE`. Precisa ser uma das `sections` da página. **Um tipo por pedido** (Q-317): o carrinho aceita um tipo só por vez; marmita num pedido `A_LA_CARTE` (ou prato do cardápio fixo num `MARMITA`) → `422` em `items[i].itemKind` ("O carrinho aceita um tipo de pedido por vez…").
+- Campos por tipo de item (os de outro tipo vão nulos ou ausentes; preenchidos → `422` em `items[i].itemKind`):
+  - `FIXED_DISH`: `dishId`; `dishSizeId` (obrigatório se o prato tem tamanho, proibido se não tem); `quantity`; `notes`; `groupAddons` (até 10 opções dos `addonGroupIds` do prato, `quantity` 1 a 10).
+  - `FIXED_BEVERAGE`: `beverageSizeId`; `beverageFlavorId` (obrigatório se o tamanho tem `flavors`, proibido se não tem); `quantity`; `notes`.
+  - `COMBO`: `comboId`; `quantity`; `parts` com as escolhas por componente (`comboComponentId` = `components[].id`, no máximo uma vez cada; componente sem escolha pode ficar fora). Parte de prato: `notes` e `groupAddons`. Parte de bebida: só `beverageFlavorId`. O próprio combo não tem `notes` nem `groupAddons` (`422`).
+- Limites (Q-318): pelo menos **1 prato ou combo** (pedido só de bebidas → `422` em `items`); até **20 pratos e combos** somados (as bebidas não contam); 1 a 30 linhas; 1 a 20 por linha.
+- O pedido entra como pedido do site `A_LA_CARTE`, `origin: "WEB"`, `priceList: "SITE"`, aguardando aceite. Aceito, ganha número, vai para a Cozinha (as partes do combo e os pratos, sem a linha do combo nem bebidas) e aparece na aba Delivery; a faixa "Novos do site" é `GET /orders?orderType=A_LA_CARTE&fulfillmentType=DELIVERY&fulfillmentType=PICKUP&acceptanceStatus=AWAITING_ACCEPTANCE` (§6.9). Recusa, expiração, desistência, entrega por distância, Turnstile, idempotência e acompanhamento são os mesmos da marmita.
+- Item acrescentado no app a esse pedido (`POST /orders/{id}/items`, Q-309): preço de site quando o item vende no site, senão o de balcão.
 - Reenvio com a mesma chave e o mesmo corpo → a mesma resposta + `Idempotent-Replayed: true` (escopo `(tenant, key)`, sem usuário). Mesma chave com corpo diferente → `422 IdempotencyKeyReused`. A página **não** usa `GET /operations/{key}`.
 
 Ordem das checagens e erros:
 
 | # | Situação | Resposta |
 |---|---|---|
-| 1 | formato: nome 2–80; telefone com DDD; `fulfillmentType` `PICKUP`/`DELIVERY`; endereço só (e obrigatório) na entrega; `notes` e `items[].notes` até 200; 1 a 30 linhas; só `MARMITA` e `BEVERAGE`; quantidade 1–20 por linha; marmita com tamanho e pelo menos 1 prato; **pelo menos 1 marmita** (pedido só de bebidas não é aceito); **até 20 marmitas** somadas; `changeFor` só com `CASH` | `422 ValidationFailed` |
+| 1 | formato: nome 2–80; telefone com DDD; `orderType` `MARMITA`/`A_LA_CARTE` (ausente = `MARMITA`); `fulfillmentType` `PICKUP`/`DELIVERY`; endereço só (e obrigatório) na entrega; `notes` e `items[].notes` até 200; 1 a 30 linhas; quantidade 1–20 por linha; `changeFor` só com `CASH`. **Marmita:** só `MARMITA` e `BEVERAGE`; marmita com tamanho e pelo menos 1 prato; **pelo menos 1 marmita** (pedido só de bebidas não é aceito); **até 20 marmitas** somadas. **Lanchonete:** só `FIXED_DISH`, `FIXED_BEVERAGE` e `COMBO`, com os campos do tipo; **pelo menos 1 prato ou combo**; **até 20 pratos e combos** somados; adicional de grupo 1–10. Item de outro tipo → `items[i].itemKind` | `422 ValidationFailed` |
 | 2 | campo-isca `website` preenchido | `400 MalformedRequest`, sem detalhes |
 | 3 | página fora de `OPEN` | `409 StoreUnavailable` (`storeStatus`) |
 | 4 | Turnstile ausente ou inválido | `403 CaptchaFailed`. Cloudflare sem resposta em 3 s → o pedido é aceito com `riskFlag: "CAPTCHA_UNAVAILABLE"` |
 | 5 | `DELIVERY` com a entrega indisponível (§6.18 `pageDelivery`) | `422 DeliveryUnavailable` |
 | 5a | `DELIVERY` sem `deliveryQuoteId` | `422 ValidationFailed` em `deliveryQuoteId` (já na checagem 1) |
 | 6 | `PICKUP` com a retirada desligada | `422 ValidationFailed` em `fulfillmentType` |
+| 6a | `orderType` fora das `sections` da página (marmita numa lanchonete, à la carte num restaurante) | `422 ValidationFailed` em `orderType` |
 | 7 | `expectedPaymentMethod` fora das formas habilitadas | `422 PaymentMethodDisabled` |
 | 8 | o telefone já tem 2 pedidos aguardando aceite, ou o IP já tem 3 | `429 TooManyPendingOrders` |
-| 9 | sem cardápio do dia publicado | `404 MenuNotFound` |
+| 9 | `MARMITA` sem cardápio do dia publicado (o à la carte não usa cardápio do dia) | `404 MenuNotFound` |
 | 9a | `DELIVERY`: cotação inexistente ou de outro restaurante | `422 ValidationFailed` em `deliveryQuoteId` ("Calcule a entrega de novo") |
 | 9b | `DELIVERY`: cotação vencida, de outro endereço (rua, número, bairro, cidade ou CEP; complemento e referência não contam) ou feita antes de o restaurante mudar a configuração → **recalcula**. Mesma taxa → segue com ela; outra taxa → | `409 DeliveryQuoteChanged` com a cotação nova em `quote`. O recálculo pode dar os erros da cotação (`OutOfDeliveryArea`, `DeliveryUnavailable`, `422` em `deliveryAddress.street`/`deliveryAddress.number`) |
-| 10 | item fora do cardápio, indisponível ou escondido, ou `expectedTotal` diferente do recalculado | `409 CartChanged` |
+| 10 | item fora do cardápio, indisponível ou escondido, ou `expectedTotal` diferente do recalculado. Lanchonete: prato, tamanho, bebida ou combo que não vende no site, pausado (inclusive pelo componente do combo), inativo ou de outro estabelecimento; sabor ou adicional pausado ou que não é do prato; componente que não é do combo | `409 CartChanged` |
+| 10b | lanchonete: escolha incoerente com o cardápio (tamanho faltando num prato com tamanho, ou enviado num prato sem tamanho; sabor faltando ou enviado num tamanho sem sabor; componente repetido; observação ou adicional na parte de bebida) | `422 ValidationFailed` no campo (`items[i].dishSizeId`, `items[i].beverageFlavorId`, `items[i].parts[k].comboComponentId`…) |
 | 10a | o pedido gravado não bate com o carrinho conferido no passo 10 (total, itens ou taxa; ex.: preço mudou no meio do envio) | `409 CartChanged` com o carrinho recalculado; nada é gravado |
 | 11 | `changeFor` menor que o total | `422 ValidationFailed` em `changeFor` |
 
-`409 CartChanged` traz o carrinho recalculado (linhas na ordem de `items`; indisponível → `available: false` e sem valores; o total soma só as disponíveis). A página mostra as diferenças e o cliente confirma de novo:
+`409 CartChanged` traz o carrinho recalculado (linhas na ordem de `items`; indisponível → `available: false` e sem valores; o total soma só as disponíveis). A página mostra as diferenças e o cliente confirma de novo. Na lanchonete, `name` é o nome de exibição ("X-Burguer", "Batata frita P", "Refrigerante Lata 350 ml · Coca-Cola", o nome do combo), `lineTotal` inclui adicionais, partes e acréscimos de sabor (`unitPrice` é o do prato, da bebida com sabor ou do combo), e `unavailableProductIds` traz os ids do cardápio fixo que saíram da página (`dishId`, `dishSizeId`, `beverageSizeId`, `beverageFlavorId`, `comboId`, `addonOptionId`; num combo fora de venda por um componente, também o tamanho/prato/bebida desse componente):
 
 ```json
 {
@@ -3518,9 +3668,10 @@ No envio com entrega, o pedido grava a taxa da cotação e o snapshot (`delivery
     {
       "itemKind": "MARMITA", "name": "Marmita M", "composition": "Frango grelhado · Arroz, Feijão", "quantity": 2,
       "unitPrice": "20.00", "lineTotal": "40.00", "notes": "Sem cebola",
-      "addons": [{ "name": "Ovo frito", "quantity": 1, "unitPrice": "2.00", "lineTotal": "4.00" }]
+      "addons": [{ "name": "Ovo frito", "quantity": 1, "unitPrice": "2.00", "lineTotal": "4.00" }],
+      "parts": []
     },
-    { "itemKind": "BEVERAGE", "name": "Coca-Cola 350ml", "composition": null, "quantity": 1, "unitPrice": "6.00", "lineTotal": "6.00", "notes": null, "addons": [] }
+    { "itemKind": "BEVERAGE", "name": "Coca-Cola 350ml", "composition": null, "quantity": 1, "unitPrice": "6.00", "lineTotal": "6.00", "notes": null, "addons": [], "parts": [] }
   ],
   "itemsTotal": "50.00",
   "deliveryFee": "0.00",
@@ -3535,6 +3686,20 @@ No envio com entrega, o pedido grava a taxa da cotação e o snapshot (`delivery
 
 - `status` (ADR-0047 item 7): `AWAITING_PAYMENT` (Fase 2), `AWAITING_ACCEPTANCE`, `REJECTED`, `EXPIRED`, `WITHDRAWN`, `CONFIRMED` (aceito, produção `OPEN`), `IN_PREPARATION`, `READY_FOR_DELIVERY`, `READY_FOR_PICKUP`, `OUT_FOR_DELIVERY`, `DELIVERED`, `PICKED_UP`, `CANCELED`. Um pedido que volta de `COMPLETED` para `IN_PROGRESS` volta a `IN_PREPARATION`. Prazo de aceite vencido antes de o job rodar já aparece como `EXPIRED`.
 - `timeline[].step`: `SUBMITTED`, `ACCEPTED`, `IN_PREPARATION`, `READY`, `OUT_FOR_DELIVERY`, `DELIVERED`, `PICKED_UP`, `REJECTED`, `EXPIRED`, `WITHDRAWN`, `CANCELED`, em ordem de horário.
+- `items` (EP-003 fatia 5): `name` é o nome de exibição do snapshot ("Açaí 500 ml", "Refrigerante Lata 350 ml · Coca-Cola"). Fora do combo, `addons` são os adicionais e `parts: []`. No `COMBO`, `addons: []` e `parts` são as partes (`itemKind: "COMBO_PART"`, mesmo formato, `parts: []`), cada parte de prato com os adicionais dela em `addons`. O combo do exemplo do envio da lanchonete:
+
+  ```json
+  {
+    "itemKind": "COMBO", "name": "X-Burguer + batata + refri", "composition": null, "quantity": 1, "unitPrice": "34.90", "lineTotal": "34.90", "notes": null, "addons": [],
+    "parts": [
+      { "itemKind": "COMBO_PART", "name": "X-Burguer", "composition": null, "quantity": 1, "unitPrice": "0.00", "lineTotal": "0.00", "notes": "Sem cebola", "addons": [{ "name": "Bacon", "quantity": 1, "unitPrice": "4.00", "lineTotal": "4.00" }], "parts": [] },
+      { "itemKind": "COMBO_PART", "name": "Batata frita P", "composition": null, "quantity": 1, "unitPrice": "0.00", "lineTotal": "0.00", "notes": null, "addons": [], "parts": [] },
+      { "itemKind": "COMBO_PART", "name": "Refrigerante Lata 350 ml · Coca-Cola Zero", "composition": null, "quantity": 1, "unitPrice": "0.50", "lineTotal": "0.50", "notes": null, "addons": [], "parts": [] }
+    ]
+  }
+  ```
+
+  O `lineTotal` de cada linha é só dela (combo 34,90; bacon 4,00; acréscimo 0,50); o total do combo para mostrar é a soma da árvore (39,40). `itemsTotal` e `totalAmount` já somam tudo.
 - `rejection`: `{ "reasonCode": "ITEM_UNAVAILABLE", "message": "A costela acabou." }`; em `SUSPECTED_PRANK`, `message: null` (ADR-0046 item 12). `BUSINESS_DAY_CLOSED` na recusa do fechamento.
 - `canWithdraw`: `true` só em `AWAITING_ACCEPTANCE`.
 - `changedByStore`: o restaurante alterou o pedido depois do aceite ("O restaurante alterou seu pedido", com o total atualizado).

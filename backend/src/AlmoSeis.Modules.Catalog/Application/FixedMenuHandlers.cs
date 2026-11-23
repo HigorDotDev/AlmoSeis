@@ -499,10 +499,13 @@ internal sealed class AddonGroupCurrentReader(IQueryHandler<GetAddonGroupQuery, 
 }
 
 /// Porta `IFixedMenuReader` (Contracts): o mesmo carregamento e a mesma disponibilidade do `GET /fixed-menu`.
-internal sealed class FixedMenuReader(FixedMenuLoader loader) : IFixedMenuReader
+internal sealed class FixedMenuReader(FixedMenuLoader loader, IObjectStorage storage) : IFixedMenuReader
 {
     public async Task<FixedMenuSnapshot> LoadAsync(CancellationToken cancellationToken) =>
         FixedMenuMapping.ToSnapshot(await loader.LoadAsync(cancellationToken));
+
+    public async Task<FixedMenuDto> LoadMenuAsync(CancellationToken cancellationToken) =>
+        FixedMenuMapping.ToDto(await loader.LoadAsync(cancellationToken), storage, includeInactive: false);
 }
 
 /// Agregados rastreados para escrita, com os filhos.

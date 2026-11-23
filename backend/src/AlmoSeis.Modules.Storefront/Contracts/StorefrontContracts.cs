@@ -19,6 +19,15 @@ public enum StoreStatus
     Unavailable,
 }
 
+/// Seção da página (EP-003 RF-316, Q-317), com o mesmo nome do `orderType` que o carrinho envia: `MARMITA` (módulo
+/// `MARMITA`: marmitas do cardápio do dia e bebidas) e `A_LA_CARTE` (módulos `FIXED_MENU` e `DELIVERY`: o cardápio fixo da
+/// lanchonete). Com os dois comportamentos, as duas; um pedido é de uma seção só.
+public enum StoreSection
+{
+    Marmita,
+    ALaCarte,
+}
+
 /// ADR-0048 item 1. `DISTANCE`: rota × preço por km com mínimo; `FIXED`: a taxa padrão do ADR-0021, sem mapa.
 public enum DeliveryFeeMode
 {
@@ -124,13 +133,60 @@ public sealed record PublicMenuDto(
     IReadOnlyList<PublicPricedProductDto> Addons,
     IReadOnlyList<PublicPricedProductDto> Beverages);
 
-/// Limites do pedido da página (ADR-0044 item 4, ADR-0045 item 13).
-public sealed record PublicOrderLimitsDto(int MaxMarmitas, int MaxLines, int MaxQuantityPerLine, int NotesMaxLength);
+// ---------- Cardápio fixo da página da lanchonete (EP-003 fatia 5; ADR-0044 complementado, ADR-0057) ----------
 
+/// Só o que **vende no site** e não está pausado, pelo preço de site (ADR-0057 itens 3 e 6). Pausado não aparece (nem
+/// desabilitado, ao contrário do "Acabou" da marmita). Listas na ordem do cadastro (`sortOrder`, nome).
+public sealed record PublicFixedMenuDto(
+    IReadOnlyList<PublicDishCategoryDto> Categories,
+    IReadOnlyList<PublicBeverageTypeDto> Beverages,
+    IReadOnlyList<PublicComboDto> Combos,
+    IReadOnlyList<PublicAddonGroupDto> AddonGroups);
+
+/// Uma aba por categoria com pelo menos um prato na página.
+public sealed record PublicDishCategoryDto(Guid Id, string Name, IReadOnlyList<PublicFixedDishDto> Dishes);
+
+/// Prato sem tamanho: `price` (de site) e `sizes: []`. Com tamanho: `price: null` e só os tamanhos que vendem no site e
+/// não estão pausados. `addonGroupIds`: grupos de `addonGroups` que o cliente pode escolher para o prato.
+public sealed record PublicFixedDishDto(
+    Guid Id, string Name, string? Description, string? ImageUrl, bool HasSizes, Money? Price, IReadOnlyList<PublicDishSizeDto> Sizes,
+    IReadOnlyList<Guid> AddonGroupIds);
+
+public sealed record PublicDishSizeDto(Guid Id, string Name, Money Price);
+
+/// Tipo de bebida → tamanhos (que vendem no site) → sabores (não pausados). Sem sabor, vende sem escolha.
+public sealed record PublicBeverageTypeDto(Guid Id, string Name, IReadOnlyList<PublicBeverageSizeDto> Sizes);
+
+public sealed record PublicBeverageSizeDto(Guid Id, string Name, Money Price, IReadOnlyList<PublicBeverageFlavorDto> Flavors);
+
+/// Acréscimo do sabor: o mesmo do balcão (Q-308).
+public sealed record PublicBeverageFlavorDto(Guid Id, string Name, Money ExtraPrice);
+
+/// Combo que vende no site, não pausado e com todos os componentes vendáveis (ADR-0056 item 23, ADR-0057 item 4).
+public sealed record PublicComboDto(
+    Guid Id, string Name, string? Description, string? ImageUrl, Money Price, IReadOnlyList<PublicComboComponentDto> Components);
+
+/// `DISH`: prato no tamanho fixo ("Batata frita P"), com os grupos de adicionais dele e observação; `flavors: []`.
+/// `BEVERAGE`: o sabor é escolhido no pedido (`flavors`, vazio se o tamanho não tem sabor); `addonGroupIds: []`.
+public sealed record PublicComboComponentDto(
+    Guid Id, AlmoSeis.Modules.Catalog.Contracts.ComboComponentKind Kind, string Name, int Quantity, IReadOnlyList<Guid> AddonGroupIds,
+    IReadOnlyList<PublicBeverageFlavorDto> Flavors);
+
+/// Grupo de adicionais com as opções não pausadas; preço do balcão (Q-308).
+public sealed record PublicAddonGroupDto(Guid Id, string Name, IReadOnlyList<PublicAddonOptionDto> Options);
+
+public sealed record PublicAddonOptionDto(Guid Id, string Name, Money Price);
+
+/// Limites do pedido da página (ADR-0044 item 4, ADR-0045 item 13; lanchonete: EP-003 Q-318).
+public sealed record PublicOrderLimitsDto(
+    int MaxMarmitas, int MaxDishesAndCombos, int MaxLines, int MaxQuantityPerLine, int MaxAddonQuantity, int NotesMaxLength);
+
+/// `sections`: o que a página vende (vazio em `UNAVAILABLE`). `menu`: a seção `MARMITA`; `fixedMenu`: a `A_LA_CARTE`.
 public sealed record PublicStoreDto(
     string Slug,
     StoreStatus Status,
     string Name,
+    IReadOnlyList<StoreSection> Sections,
     PublicStoreAddressDto? Address,
     string? ContactPhone,
     string? HoursText,
@@ -140,6 +196,7 @@ public sealed record PublicStoreDto(
     PublicPrivacyDto? Privacy,
     DateOnly? BusinessDate,
     PublicMenuDto? Menu,
+    PublicFixedMenuDto? FixedMenu,
     PublicOrderLimitsDto Limits);
 
 public sealed record GetPublicStoreQuery(string Slug);
@@ -182,15 +239,40 @@ public static class StoreErrors
             extensions: new Dictionary<string, object?> { ["storeStatus"] = status.ToString().ToUpperInvariant() });
 }
 
-/// Limites do pedido da página (ADR-0044 item 4; decisões do usuário de 2026-11-20).
+/// Limites do pedido da página (ADR-0044 item 4; decisões do usuário de 2026-11-20). Lanchonete (EP-003 Q-318): pelo
+/// menos 1 prato ou combo, até 20 pratos e combos somados e as mesmas 30 linhas.
 public static class PublicOrderLimits
 {
     public const int MaxMarmitas = 20;
+    public const int MaxDishesAndCombos = 20;
     public const int MaxLines = 30;
     public const int MaxQuantityPerLine = 20;
+
+    /// Quantidade de cada adicional de grupo (a mesma do app, 06 §6.9).
+    public const int MaxAddonQuantity = 10;
     public const int NotesMaxLength = 200;
 
-    public static readonly PublicOrderLimitsDto Dto = new(MaxMarmitas, MaxLines, MaxQuantityPerLine, NotesMaxLength);
+    public static readonly PublicOrderLimitsDto Dto = new(MaxMarmitas, MaxDishesAndCombos, MaxLines, MaxQuantityPerLine, MaxAddonQuantity, NotesMaxLength);
+}
+
+/// Seções pelos módulos do tenant (ADR-0054 item 13: a regra pergunta pelo módulo, nunca pelo comportamento).
+public static class StoreSections
+{
+    public static IReadOnlyList<StoreSection> For(IReadOnlyCollection<AlmoSeis.SharedKernel.Security.TenantModule> modules)
+    {
+        var sections = new List<StoreSection>(2);
+        if (modules.Contains(AlmoSeis.SharedKernel.Security.TenantModule.Marmita))
+        {
+            sections.Add(StoreSection.Marmita);
+        }
+
+        if (modules.Contains(AlmoSeis.SharedKernel.Security.TenantModule.FixedMenu) && modules.Contains(AlmoSeis.SharedKernel.Security.TenantModule.Delivery))
+        {
+            sections.Add(StoreSection.ALaCarte);
+        }
+
+        return sections;
+    }
 }
 
 /// Situação da página para o envio e o acompanhamento (usada pelo Ordering), no tenant corrente.
@@ -203,7 +285,12 @@ public sealed record StorefrontOrderingContext(
     bool PickupAvailable,
     bool DeliveryAvailable,
     DateOnly? BusinessDate,
-    int SettingsVersion = 0);
+    int SettingsVersion = 0,
+    IReadOnlyList<StoreSection>? Sections = null)
+{
+    /// O que a página vende (sem a informação, só a marmita, como antes do EP-003).
+    public IReadOnlyList<StoreSection> OfferedSections => Sections ?? [StoreSection.Marmita];
+}
 
 public interface IStorefrontGate
 {

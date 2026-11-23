@@ -55,8 +55,12 @@ internal sealed class StorefrontSettings : AggregateRoot, ITenantOwned
     };
 
     /// PUT /storefront. `slugChanged` sobe a versão mesmo sem outra mudança (o slug mora em `store_slugs`).
-    /// `hasActiveMarmitaSize`: ativar a página exige pelo menos um tamanho ativo que vende no site (ADR-0044 item 11, ADR-0057 item 3).
-    public bool Update(StorefrontChanges changes, bool slugChanged, bool hasActiveMarmitaSize, DateTimeOffset now)
+    public const string MissingMarmitaSizeMessage = "Para ativar a página, cadastre pelo menos um tamanho de marmita ativo que vende no site.";
+
+    /// `hasSellableItem`: ativar a página exige algo que vende no site (ADR-0044 item 11, ADR-0057 item 3): um tamanho de
+    /// marmita no restaurante, um prato ou combo na lanchonete (`StorefrontActivation`). `missingItemMessage`: o texto
+    /// do `422` para as seções da página (padrão: o da marmita).
+    public bool Update(StorefrontChanges changes, bool slugChanged, bool hasSellableItem, DateTimeOffset now, string? missingItemMessage = null)
     {
         var before = Snapshot();
         var address = changes.Address;
@@ -105,9 +109,9 @@ internal sealed class StorefrontSettings : AggregateRoot, ITenantOwned
                 throw BusinessException.Validation("isPageActive", "Para ativar a página, informe o endereço do restaurante (rua, número, bairro, cidade e UF).");
             }
 
-            if (!hasActiveMarmitaSize)
+            if (!hasSellableItem)
             {
-                throw BusinessException.Validation("isPageActive", "Para ativar a página, cadastre pelo menos um tamanho de marmita ativo que vende no site.");
+                throw BusinessException.Validation("isPageActive", missingItemMessage ?? MissingMarmitaSizeMessage);
             }
         }
 

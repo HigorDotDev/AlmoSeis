@@ -117,5 +117,5 @@ O EP-003 muda **o que a página vende** (itens 2, 3, 5 e 11). O resto deste ADR 
 - Itens pausados do cardápio fixo **não aparecem** na página (no item 5, os indisponíveis do cardápio do dia aparecem desabilitados; isso continua para a marmita).
 - Item 1: o pedido web pode ser `MARMITA` ou `A_LA_CARTE`.
 - Item 3 (pelo menos 1 marmita) e item 4 (até 20 marmitas): na lanchonete, valem a regra e o limite da EP-003 Q-318.
-- Item 11 (ativação): na lanchonete, ativar exige o endereço completo e pelo menos **1 item vendável no site** (prato, tamanho, bebida ou combo), no lugar do tamanho de marmita ativo.
+- Item 11 (ativação): na lanchonete, ativar exige o endereço completo e pelo menos **1 item vendável no site** no lugar do tamanho de marmita ativo. *(2026-11-23, fatia 5: o item precisa ser um **prato** (ou tamanho de prato) **ou combo** ativo com "vende no site", porque o pedido da lanchonete precisa de prato ou combo (Q-318): uma página só com bebidas não receberia pedido. A pausa não impede ativar. Com os dois comportamentos, basta uma das seções ter o que vender. Contrato em `docs/06-contratos-api.md` §6.18.)*
 - Item 21: o recálculo usa o preço de site.

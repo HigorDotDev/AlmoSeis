@@ -227,7 +227,8 @@ internal sealed record SubmitWebOrderCommand(
     ExpectedPaymentMethod? ExpectedPaymentMethod = null,
     Money? ChangeFor = null,
     WebOrderRiskFlag? RiskFlag = null,
-    DeliveryPricing? Pricing = null);
+    DeliveryPricing? Pricing = null,
+    OrderType OrderType = OrderType.Marmita);
 
 internal sealed class SubmitWebOrderHandler(WebOrderSubmitter submitter) : ICommandHandler<SubmitWebOrderCommand, Guid>
 {
@@ -248,14 +249,14 @@ internal sealed class WebOrderSubmitter(
     public async Task<Order> SubmitAsync(SubmitWebOrderCommand command, CancellationToken cancellationToken)
     {
         var day = await businessDays.GetOpenAsync(cancellationToken) ?? throw new BusinessException(ErrorCodes.BusinessDayRequired);
-        // Todo pedido do site usa o preço de site (ADR-0057 item 6).
-        var resolved = await items.ResolveAsync(command.Items, new ItemResolution(day.BusinessDate, PriceList.Site, OrderType.Marmita), cancellationToken);
+        // Todo pedido do site usa o preço de site (ADR-0057 item 6). Marmita ou à la carte (EP-003 fatia 5), um tipo só.
+        var resolved = await items.ResolveAsync(command.Items, new ItemResolution(day.BusinessDate, PriceList.Site, command.OrderType), cancellationToken);
         var now = time.GetUtcNow();
 
         var order = Order.SubmitFromWeb(
             ids.New(), tenant.TenantId!.Value,
             new NewOrder(
-                OrderType.Marmita, command.FulfillmentType, null, command.CustomerName, command.CustomerPhone, command.DeliveryAddress,
+                command.OrderType, command.FulfillmentType, null, command.CustomerName, command.CustomerPhone, command.DeliveryAddress,
                 command.DeliveryFee, null, null, command.Notes, resolved, [], command.Pricing),
             day.Id, day.BusinessDate, now + options.Value.AcceptanceWindow, ids.New, now,
             new WebOrderExtras(command.ExpectedPaymentMethod, command.ChangeFor, command.RiskFlag));
@@ -265,6 +266,7 @@ internal sealed class WebOrderSubmitter(
         audit.Add("WebOrderSubmitted", order.SyncEntityType, order.Id, order.Id, after: new
         {
             acceptanceStatus = "AWAITING_ACCEPTANCE",
+            orderType = UpperSnakeEnumConverter<OrderType>.ToText(order.OrderType),
             fulfillmentType = UpperSnakeEnumConverter<FulfillmentType>.ToText(order.FulfillmentType),
             itemCount = order.Items.Count,
             totalAmount = order.TotalAmount.ToString(),

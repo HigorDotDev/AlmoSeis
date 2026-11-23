@@ -54,7 +54,9 @@ internal sealed class WebOrderPushConsumer(IServiceScopeFactory scopes, IOptions
             envelope.GetProperty("entityId").GetGuid(),
             data.GetProperty("kind").GetString() == WebOrderPushMessage.Reminder ? PushKind.WebOrderReminder : PushKind.WebOrderAwaitingAcceptance,
             data.GetProperty("fulfillmentType").GetString() ?? string.Empty,
-            data.GetProperty("marmitaCount").GetInt32());
+            data.GetProperty("marmitaCount").GetInt32(),
+            // Mensagem gravada antes do EP-003 fatia 5 não tem `itemCount`: o texto cai no das marmitas.
+            data.TryGetProperty("itemCount", out var itemCount) ? itemCount.GetInt32() : 0);
 
         await using var scope = scopes.CreateAsyncScope();
         scope.ServiceProvider.GetRequiredService<ITenantContext>().InitializeForSystem(tenantId);

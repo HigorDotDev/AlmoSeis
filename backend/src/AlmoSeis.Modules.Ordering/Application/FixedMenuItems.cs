@@ -11,7 +11,12 @@ namespace AlmoSeis.Modules.Ordering.Application;
 /// tamanho de bebida e os grupos de adicionais do prato (categoria ∪ prato), e monta os snapshots com o preço da tabela
 /// do pedido. O combo vira `COMBO` (preço do combo) → `COMBO_PART` (um por componente, `0.00` ou o acréscimo do sabor)
 /// → `GROUP_ADDON` sob as partes de prato.
-internal sealed class FixedMenuItems(FixedMenuSnapshot menu, ItemResolution context)
+///
+/// `siteOnly` (carrinho da página, EP-003 fatia 5): o prato, o tamanho de prato, o tamanho de bebida e o combo pedidos
+/// precisam **vender no site** (ADR-0057 item 3); senão, `ProductUnavailable`, como a pausa. Os componentes do combo não
+/// (item 4). Fora da página (`false`), o pedido `SITE` usa o preço de site de quem vende no site e o de balcão no resto
+/// (Q-309, item acrescentado no app).
+internal sealed class FixedMenuItems(FixedMenuSnapshot menu, ItemResolution context, bool siteOnly = false)
 {
     private const int NameMax = 80;
     private const int SizeNameMax = 30;
@@ -22,20 +27,32 @@ internal sealed class FixedMenuItems(FixedMenuSnapshot menu, ItemResolution cont
         var result = new List<NewItem>(inputs.Count);
         for (var i = 0; i < inputs.Count; i++)
         {
-            var input = inputs[i];
-            var field = $"items[{i}]";
-            result.Add(input.ItemKind switch
-            {
-                OrderItemKind.FixedDish => Dish(input, field),
-                OrderItemKind.FixedBeverage => Beverage(input, field),
-                OrderItemKind.Combo => Combo(input, field),
-                OrderItemKind.GroupAddon => LaterAddon(input, field),
-                _ => throw BusinessException.Validation($"{field}.itemKind", Order.KindMismatchMessage),
-            });
+            result.Add(ResolveLine(inputs[i], i));
         }
 
         return result;
     }
+
+    /// Uma linha, com o índice dela nos campos dos erros (`items[i]...`).
+    public NewItem ResolveLine(OrderItemInput input, int index)
+    {
+        var field = $"items[{index}]";
+        return input.ItemKind switch
+        {
+            OrderItemKind.FixedDish => Dish(input, field),
+            OrderItemKind.FixedBeverage => Beverage(input, field),
+            OrderItemKind.Combo => Combo(input, field),
+            OrderItemKind.GroupAddon => LaterAddon(input, field),
+            _ => throw BusinessException.Validation($"{field}.itemKind", Order.KindMismatchMessage),
+        };
+    }
+
+    /// Valor da linha com os filhos e os netos (ADR-0058 item 9): `unitário × quantidade × quantidade do pai × do avô`.
+    public static Money LineTotal(NewItem item) =>
+        (item.UnitPrice * item.Quantity)
+        + Money.Sum(item.Addons.Select(child =>
+            (child.UnitPrice * child.Quantity * item.Quantity)
+            + Money.Sum(child.Addons.Select(grandchild => grandchild.UnitPrice * grandchild.Quantity * child.Quantity * item.Quantity))));
 
     private NewItem Dish(OrderItemInput input, string field)
     {
@@ -55,6 +72,8 @@ internal sealed class FixedMenuItems(FixedMenuSnapshot menu, ItemResolution cont
                 throw Unavailable(size is null ? $"Este tamanho de {dish.Name} não está disponível." : $"{dish.Name} {size.Name} está pausado.");
             }
 
+            EnsureOnSite(size.Price, $"{dish.Name} {size.Name}");
+
             price = size.Price.For(context.PriceList);
         }
         else
@@ -64,6 +83,7 @@ internal sealed class FixedMenuItems(FixedMenuSnapshot menu, ItemResolution cont
                 throw BusinessException.Validation($"{field}.dishSizeId", $"{dish.Name} não tem tamanho.");
             }
 
+            EnsureOnSite(dish.Price!, dish.Name);
             price = dish.Price!.For(context.PriceList);
         }
 
@@ -78,6 +98,7 @@ internal sealed class FixedMenuItems(FixedMenuSnapshot menu, ItemResolution cont
     private NewItem Beverage(OrderItemInput input, string field)
     {
         var (size, flavor) = SellableBeverage(input.BeverageSizeId, input.BeverageFlavorId, field);
+        EnsureOnSite(size.Price, $"{size.TypeName} {size.Name}");
         var price = size.Price.For(context.PriceList) + (flavor?.ExtraPrice ?? Money.Zero);
         return new NewItem(
             OrderItemKind.FixedBeverage, null, null, null, input.Quantity, price, Truncate(size.TypeName, NameMax), null,
@@ -97,6 +118,8 @@ internal sealed class FixedMenuItems(FixedMenuSnapshot menu, ItemResolution cont
             var blocked = combo.Components.FirstOrDefault(c => !c.IsSellable);
             throw Unavailable(blocked is null ? $"{combo.Name} está pausado." : $"{combo.Name} está indisponível. Pausado: {blocked.Name}.");
         }
+
+        EnsureOnSite(combo.Price, combo.Name);
 
         var parts = input.Parts ?? [];
         var byComponent = new Dictionary<Guid, (ComboPartInput Part, int Index)>();
@@ -257,6 +280,15 @@ internal sealed class FixedMenuItems(FixedMenuSnapshot menu, ItemResolution cont
         BeverageFlavorId: flavor?.Id,
         SizeName: Truncate(size.Name, SizeNameMax),
         FlavorName: flavor is null ? null : Truncate(flavor.Name, FlavorNameMax));
+
+    /// Página: a unidade pedida precisa vender no site (ADR-0057 item 3). Para a página, é como se estivesse indisponível.
+    private void EnsureOnSite(FixedMenuPrice price, string name)
+    {
+        if (siteOnly && !(price.SellsOnSite && price.Site is not null))
+        {
+            throw Unavailable($"{name} não é vendido pelo site.");
+        }
+    }
 
     /// `422 ProductUnavailable` (06 §6.1; o mesmo código da marmita, ADR-0056 item 24 complementado).
     private static BusinessException Unavailable(string detail) => new(ErrorCodes.ProductUnavailable, detail);

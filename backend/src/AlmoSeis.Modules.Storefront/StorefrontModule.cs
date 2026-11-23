@@ -23,6 +23,8 @@ public static class StorefrontModule
         services.AddScoped<SlugWriter>();
         services.AddScoped<StorefrontStatusCalculator>();
         services.AddScoped<PublicMenuBuilder>();
+        services.AddScoped<PublicFixedMenuBuilder>();
+        services.AddScoped<StorefrontActivation>();
         services.AddScoped<IStorefrontGate, StorefrontGate>();
         services.AddScoped<IStoreSlugResolver, StoreSlugResolver>();
         services.AddScoped<ITenantCreatedListener, StorefrontProvisioner>();

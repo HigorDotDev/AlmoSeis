@@ -183,20 +183,26 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     }
 
     /// Pedido "pagar na entrega/retirada" da página (ADR-0046): sem número, sem produção, sem cliente vinculado e sem
-    /// autor. Espera o aceite até `deadline`. Pertence ao expediente aberto no envio (item 5).
+    /// autor. Espera o aceite até `deadline`. Pertence ao expediente aberto no envio (item 5). `MARMITA` (restaurante) ou
+    /// `A_LA_CARTE` (lanchonete, EP-003 fatia 5, ADR-0058 item 14), sempre entrega ou retirada.
     public static Order SubmitFromWeb(
         Guid id, Guid tenantId, NewOrder data, Guid businessDayId, DateOnly businessDate, DateTimeOffset deadline,
         Func<Guid> newId, DateTimeOffset now, WebOrderExtras? extras = null)
     {
-        if (data.OrderType != OrderType.Marmita)
+        if (data.OrderType is not (OrderType.Marmita or OrderType.ALaCarte))
         {
-            throw BusinessException.Validation("orderType", "A página de pedidos só vende marmitas.");
+            throw BusinessException.Validation("orderType", "A página de pedidos vende marmitas ou o cardápio da lanchonete.");
+        }
+
+        if (data.FulfillmentType is not (FulfillmentType.Delivery or FulfillmentType.Pickup))
+        {
+            throw BusinessException.Validation("fulfillmentType", "O pedido da página é entrega ou retirada.");
         }
 
         EnsureFulfillment(data.OrderType, data.FulfillmentType);
         if (string.IsNullOrWhiteSpace(data.CustomerName))
         {
-            throw BusinessException.Validation("customerName", "Informe o nome do cliente da marmita.");
+            throw BusinessException.Validation("customerName", "Informe o nome do cliente.");
         }
 
         EnsureDelivery(data.FulfillmentType, data.DeliveryAddress, data.DeliveryFee);
@@ -243,9 +249,12 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
         order.ApplyDeliveryPricing(data.FulfillmentType == FulfillmentType.Delivery ? data.Pricing ?? new DeliveryPricing(Contracts.DeliveryFeeSource.FixedDefault) : null);
         order.AddInitialLines(data, by: null, newId, now);
         order.EnsureChangeFor();
+        // `itemCount` (ADR-0058 item 14): unidades do primeiro nível (marmitas, pratos, combos e bebidas); `marmitaCount`
+        // fica 0 no à la carte.
+        var topLevel = order.Items.Where(i => i.ParentOrderItemId is null).ToList();
         order.Raise(new OrderAwaitingAcceptance(
-            id, order.FulfillmentType, order.Items.Where(i => i.ItemKind == OrderItemKind.Marmita).Sum(i => i.Quantity),
-            order.TotalAmount, deadline, now));
+            id, order.FulfillmentType, topLevel.Where(i => i.ItemKind == OrderItemKind.Marmita).Sum(i => i.Quantity),
+            order.TotalAmount, deadline, now, topLevel.Sum(i => i.Quantity)));
         return order;
     }
 
@@ -1413,8 +1422,10 @@ internal sealed record OrderDetailsChanges(
 
 internal sealed record OrderCreated(Guid OrderId, int OrderNumber, OrderType OrderType, string? Label, DateTimeOffset OccurredAt) : IDomainEvent;
 
+/// `ItemCount`: unidades do primeiro nível do pedido (marmitas, pratos, combos e bebidas, ADR-0058 item 14).
 internal sealed record OrderAwaitingAcceptance(
-    Guid OrderId, FulfillmentType FulfillmentType, int MarmitaCount, Money TotalAmount, DateTimeOffset AcceptanceDeadline, DateTimeOffset OccurredAt)
+    Guid OrderId, FulfillmentType FulfillmentType, int MarmitaCount, Money TotalAmount, DateTimeOffset AcceptanceDeadline, DateTimeOffset OccurredAt,
+    int ItemCount = 0)
     : IDomainEvent;
 
 internal sealed record OrderAccepted(Guid OrderId, int OrderNumber, Guid? AcceptedBy, string? AcceptedByName, DateTimeOffset OccurredAt) : IDomainEvent;

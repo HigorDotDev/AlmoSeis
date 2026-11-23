@@ -2,6 +2,7 @@ using AlmoSeis.Infrastructure.Audit;
 using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Security;
 using AlmoSeis.Infrastructure.Tenancy;
+using AlmoSeis.Modules.Catalog.Contracts;
 using AlmoSeis.Modules.Identity.Contracts;
 using AlmoSeis.Modules.Ordering.Contracts;
 using AlmoSeis.Modules.Ordering.Domain;
@@ -16,7 +17,9 @@ namespace AlmoSeis.Modules.Ordering.Application;
 
 /// POST /public/stores/{slug}/orders [I] (06 §6.19; ADR-0044, ADR-0045, ADR-0046). O tenant vem do slug, resolvido no
 /// servidor; o idempotência é anônima, com escopo `(tenant, key)`. Ordem das barreiras: campo-isca → estado da página →
-/// Turnstile → modalidade → forma de pagamento → pedidos pendentes por telefone e IP → carrinho recalculado → gravação.
+/// Turnstile → modalidade → seção (`orderType`) → forma de pagamento → pedidos pendentes por telefone e IP → carrinho
+/// recalculado → gravação. `MARMITA` confere o carrinho contra o cardápio do dia da página; `A_LA_CARTE` (EP-003 fatia 5)
+/// contra o cardápio fixo, só com o que vende no site e pelo preço de site.
 internal sealed class PlaceWebOrderHandler(
     AppDbContext db,
     ITenantContext tenant,
@@ -28,6 +31,7 @@ internal sealed class PlaceWebOrderHandler(
     ITrackingTokenIssuer trackingTokens,
     WebOrderSubmitter submitter,
     IDeliveryQuoteRedeemer quotes,
+    IFixedMenuReader fixedMenu,
     TimeProvider time) : ICommandHandler<PlaceWebOrderCommand, PlacedWebOrderDto>, IPublicHandler
 {
     /// ADR-0045 item 13.
@@ -66,6 +70,16 @@ internal sealed class PlaceWebOrderHandler(
             throw BusinessException.Validation("fulfillmentType", "Este restaurante não faz retirada pela página.");
         }
 
+        // Seção da página (EP-003 Q-317): o restaurante vende marmita, a lanchonete o cardápio fixo, e com os dois
+        // comportamentos as duas, um tipo por pedido.
+        var orderType = request.EffectiveOrderType;
+        if (!store.OfferedSections.Contains(orderType == OrderType.ALaCarte ? StoreSection.ALaCarte : StoreSection.Marmita))
+        {
+            throw BusinessException.Validation("orderType", orderType == OrderType.ALaCarte
+                ? "Esta página não vende o cardápio da lanchonete."
+                : "Esta página não vende marmitas.");
+        }
+
         var method = UpperSnakeEnumConverter<ExpectedPaymentMethod>.ToText(request.ExpectedPaymentMethod);
         if (!(await settings.GetAsync(cancellationToken)).EnabledPaymentMethods.Contains(method))
         {
@@ -78,10 +92,13 @@ internal sealed class PlaceWebOrderHandler(
         var ipHash = ipHasher.Hash(command.ClientIp, now);
         await EnsurePendingLimitsAsync(phone, ipHash, now, cancellationToken);
 
-        var menu = await storefront.GetMenuAsync(businessDate, cancellationToken)
-            ?? throw new BusinessException(
-                ErrorCodes.MenuNotFound, "O cardápio de hoje ainda não foi publicado.",
-                new Dictionary<string, object?> { ["menuType"] = "MARMITA", ["businessDate"] = businessDate });
+        // Marmita: o cardápio do dia da página (sem ele, `MenuNotFound`). À la carte: o cardápio fixo, sem data.
+        var menu = orderType == OrderType.ALaCarte
+            ? null
+            : await storefront.GetMenuAsync(businessDate, cancellationToken)
+                ?? throw new BusinessException(
+                    ErrorCodes.MenuNotFound, "O cardápio de hoje ainda não foi publicado.",
+                    new Dictionary<string, object?> { ["menuType"] = "MARMITA", ["businessDate"] = businessDate });
         // Entrega: a taxa é a da cotação que o cliente viu, conferida aqui (ADR-0048 item 10). Taxa mudada → 409 com a nova.
         var deliveryFee = Money.Zero;
         DeliveryPricing? pricing = null;
@@ -98,7 +115,10 @@ internal sealed class PlaceWebOrderHandler(
             address = new DeliveryAddressDto(input.Street.Trim(), Clean(input.Number), Clean(input.Complement), Clean(input.Neighborhood), Clean(input.Reference));
         }
 
-        var cart = WebOrderCart.Price(request.Items, menu, deliveryFee);
+        var items = request.Items.Select(ToOrderItem).ToList();
+        var cart = menu is not null
+            ? WebOrderCart.Price(request.Items, menu, deliveryFee)
+            : WebOrderCart.PriceFixedMenu(items, await fixedMenu.LoadAsync(cancellationToken), businessDate, deliveryFee);
         if (cart.Items.Any(i => !i.Available) || cart.TotalAmount != request.ExpectedTotal)
         {
             throw new BusinessException(ErrorCodes.CartChanged, extensions: new Dictionary<string, object?> { ["cart"] = cart });
@@ -107,10 +127,11 @@ internal sealed class PlaceWebOrderHandler(
         var order = await submitter.SubmitAsync(
             new SubmitWebOrderCommand(
                 request.FulfillmentType, request.CustomerName.Trim(), phone, address, deliveryFee, Clean(request.Notes),
-                request.Items.Select(ToOrderItem).ToList(),
+                items,
                 request.ExpectedPaymentMethod, request.ChangeFor,
                 captcha == TurnstileOutcome.Unavailable ? WebOrderRiskFlag.CaptchaUnavailable : null,
-                pricing),
+                pricing,
+                orderType),
             cancellationToken);
 
         // O pedido gravado precisa ter exatamente o total e a taxa que o cliente confirmou (ADR-0044 item 21): o carrinho
@@ -155,9 +176,17 @@ internal sealed class PlaceWebOrderHandler(
     internal static PublicAddressInput ToAddress(PublicDeliveryAddressInput input) =>
         new(input.Street, input.Number, input.Complement, input.Neighborhood, input.City, input.ZipCode, input.Reference);
 
-    private static OrderItemInput ToOrderItem(PublicOrderItemInput i) => new(
+    internal static OrderItemInput ToOrderItem(PublicOrderItemInput i) => new(
         i.ItemKind, null, i.MarmitaSizeId, i.ProductId, i.Quantity, i.MainDishProductIds, i.SideDishProductIds, Clean(i.Notes),
-        i.Addons?.Select(a => new AddonInput(a.ProductId, a.Quantity, null)).ToList());
+        i.Addons?.Select(a => new AddonInput(a.ProductId, a.Quantity, null)).ToList(),
+        DishId: i.DishId,
+        DishSizeId: i.DishSizeId,
+        BeverageSizeId: i.BeverageSizeId,
+        BeverageFlavorId: i.BeverageFlavorId,
+        ComboId: i.ComboId,
+        GroupAddons: i.GroupAddons?.Select(a => new GroupAddonInput(a.AddonOptionId, a.Quantity)).ToList(),
+        Parts: i.Parts?.Select(p => new ComboPartInput(
+            p.ComboComponentId, p.BeverageFlavorId, Clean(p.Notes), p.GroupAddons?.Select(a => new GroupAddonInput(a.AddonOptionId, a.Quantity)).ToList())).ToList());
 
     private static string? Clean(string? text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
 }
@@ -289,6 +318,122 @@ internal static class WebOrderCart
         return new CartQuoteDto(lines, unavailable.Distinct().ToList(), itemsTotal, deliveryFee, itemsTotal + deliveryFee);
     }
 
+    /// Carrinho `A_LA_CARTE` da lanchonete (EP-003 fatia 5) contra o cardápio fixo, com o mesmo resolvedor do pedido
+    /// (`FixedMenuItems`) em modo página: só o que vende no site, pelo preço de site. Linha com algo pausado, inativo, de
+    /// outro estabelecimento ou que não vende no site → `available: false`; os ids dela que não estão à venda vão em
+    /// `unavailableProductIds`. Escolha incoerente com o cardápio (sabor faltando, tamanho de um prato sem tamanho,
+    /// componente repetido) é erro de formato: `422` no campo, como no app.
+    public static CartQuoteDto PriceFixedMenu(IReadOnlyList<OrderItemInput> items, FixedMenuSnapshot menu, DateOnly businessDate, Money deliveryFee)
+    {
+        var resolver = new FixedMenuItems(menu, new ItemResolution(businessDate, PriceList.Site, OrderType.ALaCarte), siteOnly: true);
+        var lines = new List<CartLineDto>();
+        var unavailable = new List<Guid>();
+        for (var index = 0; index < items.Count; index++)
+        {
+            var item = items[index];
+            try
+            {
+                var resolved = resolver.ResolveLine(item, index);
+                lines.Add(new CartLineDto(index, OrderItem.DisplayNameOf(resolved.Name, resolved.Fixed?.SizeName, resolved.Fixed?.FlavorName), true,
+                    resolved.UnitPrice, FixedMenuItems.LineTotal(resolved)));
+            }
+            catch (BusinessException ex) when (ex.ErrorCode == ErrorCodes.ProductUnavailable)
+            {
+                lines.Add(new CartLineDto(index, FixedName(item, menu), false, null, null));
+                unavailable.AddRange(UnavailableIds(item, menu));
+            }
+        }
+
+        var itemsTotal = Money.Sum(lines.Where(l => l.Available).Select(l => l.LineTotal!.Value));
+        return new CartQuoteDto(lines, unavailable.Distinct().ToList(), itemsTotal, deliveryFee, itemsTotal + deliveryFee);
+    }
+
+    /// Nome da linha indisponível, quando o item ainda existe no cardápio.
+    private static string? FixedName(OrderItemInput item, FixedMenuSnapshot menu) => item.ItemKind switch
+    {
+        OrderItemKind.FixedDish when item.DishId is { } id && menu.Dishes.TryGetValue(id, out var dish) =>
+            item.DishSizeId is { } sizeId && dish.Sizes.TryGetValue(sizeId, out var size) ? $"{dish.Name} {size.Name}" : dish.Name,
+        OrderItemKind.FixedBeverage when item.BeverageSizeId is { } id && menu.BeverageSizes.TryGetValue(id, out var size) => $"{size.TypeName} {size.Name}",
+        OrderItemKind.Combo when item.ComboId is { } id && menu.Combos.TryGetValue(id, out var combo) => combo.Name,
+        _ => null,
+    };
+
+    /// Os ids da linha que não estão à venda na página agora: prato, tamanho, tamanho de bebida e combo que não vendem no
+    /// site ou não estão vendáveis; sabores e opções pausados ou inexistentes; o componente pausado do combo.
+    private static List<Guid> UnavailableIds(OrderItemInput item, FixedMenuSnapshot menu)
+    {
+        static bool OnSite(FixedMenuPrice price) => price.SellsOnSite && price.Site is not null;
+
+        IEnumerable<Guid> Options(IReadOnlyList<GroupAddonInput>? addons, FixedMenuDish? dish) =>
+            (addons ?? []).Where(a => !menu.AddonOptions.TryGetValue(a.AddonOptionId, out var option) || !option.IsSellable
+                    || dish is null || !dish.AddonOptionIds.Contains(a.AddonOptionId))
+                .Select(a => a.AddonOptionId);
+
+        static IEnumerable<Guid> Flavor(FixedMenuBeverageSize? size, Guid? flavorId) =>
+            flavorId is { } id && (size is null || !size.Flavors.TryGetValue(id, out var flavor) || !flavor.IsSellable) ? [id] : [];
+
+        var ids = new List<Guid>();
+        switch (item.ItemKind)
+        {
+            case OrderItemKind.FixedDish:
+            {
+                var dish = item.DishId is { } dishId && menu.Dishes.TryGetValue(dishId, out var d) ? d : null;
+                var size = dish is not null && item.DishSizeId is { } sizeId && dish.Sizes.TryGetValue(sizeId, out var z) ? z : null;
+                if (item.DishId is { } chosenDish && (dish is null || !dish.IsSellable || (!dish.HasSizes && !OnSite(dish.Price!))))
+                {
+                    ids.Add(chosenDish);
+                }
+
+                if (item.DishSizeId is { } chosenSize && (size is null || !size.IsSellable || !OnSite(size.Price)))
+                {
+                    ids.Add(chosenSize);
+                }
+
+                ids.AddRange(Options(item.GroupAddons, dish));
+                break;
+            }
+
+            case OrderItemKind.FixedBeverage:
+            {
+                var size = item.BeverageSizeId is { } sizeId && menu.BeverageSizes.TryGetValue(sizeId, out var z) ? z : null;
+                if (item.BeverageSizeId is { } id && (size is null || !size.IsSellable || !OnSite(size.Price)))
+                {
+                    ids.Add(id);
+                }
+
+                ids.AddRange(Flavor(size, item.BeverageFlavorId));
+                break;
+            }
+
+            case OrderItemKind.Combo:
+            {
+                var combo = item.ComboId is { } comboId && menu.Combos.TryGetValue(comboId, out var c) ? c : null;
+                if (item.ComboId is { } id && (combo is null || !combo.IsSellable || !OnSite(combo.Price)))
+                {
+                    ids.Add(id);
+                }
+
+                foreach (var component in combo?.Components.Where(x => !x.IsSellable) ?? [])
+                {
+                    ids.Add(component.DishSizeId ?? component.DishId ?? component.BeverageSizeId ?? component.Id);
+                }
+
+                foreach (var part in item.Parts ?? [])
+                {
+                    var component = combo?.Components.FirstOrDefault(x => x.Id == part.ComboComponentId);
+                    var size = component?.BeverageSizeId is { } sizeId && menu.BeverageSizes.TryGetValue(sizeId, out var z) ? z : null;
+                    ids.AddRange(Flavor(size, part.BeverageFlavorId));
+                    var dish = component?.DishId is { } dishId && menu.Dishes.TryGetValue(dishId, out var d) ? d : null;
+                    ids.AddRange(Options(part.GroupAddons, dish));
+                }
+
+                break;
+            }
+        }
+
+        return ids;
+    }
+
     private static bool Dish(Dictionary<Guid, PublicDishDto> section, Guid id, List<Guid> unavailable)
     {
         if (section.TryGetValue(id, out var dish) && dish.IsAvailable)
@@ -340,9 +485,14 @@ internal static class BrazilianPhone
     }
 }
 
-/// Formato do envio (06 §6.19). Limites do ADR-0044 item 4 (decisão do usuário: 20 marmitas, sem pedido só de bebidas).
+/// Formato do envio (06 §6.19). Marmita: limites do ADR-0044 item 4 (decisão do usuário: 20 marmitas, sem pedido só de
+/// bebidas). Lanchonete (EP-003 Q-318): pelo menos 1 prato ou combo, até 20 pratos e combos somados; as mesmas 30 linhas
+/// e 1 a 20 por linha. Um tipo por pedido (Q-317): item de outra seção → `422` em `items[i].itemKind`.
 internal sealed class PlaceWebOrderRequestValidator : AbstractValidator<PlaceWebOrderRequest>
 {
+    private static readonly PublicOrderItemValidator MarmitaItems = new(OrderType.Marmita);
+    private static readonly PublicOrderItemValidator ALaCarteItems = new(OrderType.ALaCarte);
+
     public PlaceWebOrderRequestValidator()
     {
         RuleFor(x => x.CustomerName).Must(n => n is not null && n.Trim().Length is >= 2 and <= 80).WithMessage("Informe seu nome (2 a 80 caracteres).");
@@ -363,24 +513,55 @@ internal sealed class PlaceWebOrderRequestValidator : AbstractValidator<PlaceWeb
         RuleFor(x => x.ChangeFor).Null().WithMessage("Troco só para pagamento em dinheiro.").When(x => x.ExpectedPaymentMethod != ExpectedPaymentMethod.Cash);
         RuleFor(x => x.ExpectedTotal).Must(t => !t.IsNegative).WithMessage("Total inválido.");
 
+        RuleFor(x => x.OrderType).Must(t => t is null or OrderType.Marmita or OrderType.ALaCarte)
+            .WithMessage("A página vende marmitas ou o cardápio da lanchonete.");
+
+        // Marmita (ADR-0044 itens 3 e 4).
         RuleFor(x => x.Items).NotEmpty().WithMessage("O pedido precisa de pelo menos 1 marmita.")
             .Must(items => items is null || items.Count <= PublicOrderLimits.MaxLines)
             .WithMessage($"Até {PublicOrderLimits.MaxLines} itens por pedido. Para mais, fale com o restaurante.")
             .Must(items => items is null || items.Count == 0 || items.Any(i => i.ItemKind == OrderItemKind.Marmita))
             .WithMessage("O pedido precisa de pelo menos 1 marmita.")
             .Must(items => items is null || items.Where(i => i.ItemKind == OrderItemKind.Marmita).Sum(i => (long)i.Quantity) <= PublicOrderLimits.MaxMarmitas)
-            .WithMessage($"Até {PublicOrderLimits.MaxMarmitas} marmitas por pedido. Para mais, fale com o restaurante.");
-        RuleForEach(x => x.Items).SetValidator(new PublicOrderItemValidator());
+            .WithMessage($"Até {PublicOrderLimits.MaxMarmitas} marmitas por pedido. Para mais, fale com o restaurante.")
+            .When(x => x.EffectiveOrderType != OrderType.ALaCarte);
+
+        // Lanchonete (EP-003 Q-318): bebida sozinha não é pedido.
+        RuleFor(x => x.Items).NotEmpty().WithMessage("O pedido precisa de pelo menos 1 prato ou combo.")
+            .Must(items => items is null || items.Count <= PublicOrderLimits.MaxLines)
+            .WithMessage($"Até {PublicOrderLimits.MaxLines} itens por pedido. Para mais, fale com o restaurante.")
+            .Must(items => items is null || items.Count == 0 || items.Any(IsDishOrCombo))
+            .WithMessage("O pedido precisa de pelo menos 1 prato ou combo.")
+            .Must(items => items is null || items.Where(IsDishOrCombo).Sum(i => (long)i.Quantity) <= PublicOrderLimits.MaxDishesAndCombos)
+            .WithMessage($"Até {PublicOrderLimits.MaxDishesAndCombos} pratos e combos por pedido. Para mais, fale com o restaurante.")
+            .When(x => x.EffectiveOrderType == OrderType.ALaCarte);
+
+        RuleForEach(x => x.Items).SetValidator(x => x.EffectiveOrderType == OrderType.ALaCarte ? ALaCarteItems : MarmitaItems);
     }
+
+    private static bool IsDishOrCombo(PublicOrderItemInput item) => item.ItemKind is OrderItemKind.FixedDish or OrderItemKind.Combo;
 }
 
+/// Linha do envio. Os campos de outro tipo de item vêm nulos (`productId` num `FIXED_DISH`, `dishId` numa marmita), como
+/// no app (06 §6.9).
 internal sealed class PublicOrderItemValidator : AbstractValidator<PublicOrderItemInput>
 {
-    public PublicOrderItemValidator()
+    public const string OneTypeMessage = "O carrinho aceita um tipo de pedido por vez: envie as marmitas e os lanches em pedidos separados.";
+
+    public PublicOrderItemValidator(OrderType orderType)
     {
-        RuleFor(x => x.ItemKind).Must(k => k is OrderItemKind.Marmita or OrderItemKind.Beverage).WithMessage("A página vende só marmitas e bebidas.");
         RuleFor(x => x.Quantity).InclusiveBetween(1, PublicOrderLimits.MaxQuantityPerLine).WithMessage($"Deve ser entre 1 e {PublicOrderLimits.MaxQuantityPerLine}.");
         RuleFor(x => x.Notes).MaximumLength(PublicOrderLimits.NotesMaxLength);
+        if (orderType == OrderType.ALaCarte)
+        {
+            FixedMenuRules();
+            return;
+        }
+
+        RuleFor(x => x.ItemKind).Must(k => k is OrderItemKind.Marmita or OrderItemKind.Beverage)
+            .WithMessage(x => x.ItemKind is OrderItemKind.FixedDish or OrderItemKind.FixedBeverage or OrderItemKind.Combo
+                ? OneTypeMessage
+                : "A página vende só marmitas e bebidas.");
         RuleFor(x => x.MarmitaSizeId).NotNull().WithMessage("Escolha o tamanho da marmita.").When(x => x.ItemKind == OrderItemKind.Marmita);
         RuleFor(x => x.MainDishProductIds).Must(m => m is { Count: >= 1 and <= 10 }).WithMessage("Escolha pelo menos um prato.").When(x => x.ItemKind == OrderItemKind.Marmita);
         RuleFor(x => x.SideDishProductIds).Must(s => s is null || s.Count <= 20).When(x => x.ItemKind == OrderItemKind.Marmita);
@@ -390,6 +571,57 @@ internal sealed class PublicOrderItemValidator : AbstractValidator<PublicOrderIt
         RuleFor(x => x.ProductId).NotNull().WithMessage("Escolha a bebida.").When(x => x.ItemKind == OrderItemKind.Beverage);
         RuleFor(x => x.Addons).Must(a => a is null || a.Count == 0).WithMessage("Bebida não tem adicionais.").When(x => x.ItemKind == OrderItemKind.Beverage);
         RuleFor(x => x.MarmitaSizeId).Null().When(x => x.ItemKind == OrderItemKind.Beverage);
+        RuleFor(x => x).Must(x => x.DishId is null && x.DishSizeId is null && x.BeverageSizeId is null && x.BeverageFlavorId is null
+                && x.ComboId is null && x.GroupAddons is not { Count: > 0 } && x.Parts is not { Count: > 0 })
+            .OverridePropertyName("itemKind").WithMessage(OneTypeMessage)
+            .When(x => x.ItemKind is OrderItemKind.Marmita or OrderItemKind.Beverage);
+    }
+
+    /// `FIXED_DISH`, `FIXED_BEVERAGE` e `COMBO` no formato do `POST /orders` à la carte (06 §6.9, fatia 3).
+    private void FixedMenuRules()
+    {
+        RuleFor(x => x.ItemKind).Must(k => k is OrderItemKind.FixedDish or OrderItemKind.FixedBeverage or OrderItemKind.Combo)
+            .WithMessage(x => x.ItemKind is OrderItemKind.Marmita or OrderItemKind.Beverage
+                ? OneTypeMessage
+                : "A página da lanchonete vende pratos, bebidas e combos.");
+        RuleFor(x => x).Must(x => x.MarmitaSizeId is null && x.ProductId is null && x.MainDishProductIds is not { Count: > 0 }
+                && x.SideDishProductIds is not { Count: > 0 } && x.Addons is not { Count: > 0 })
+            .OverridePropertyName("itemKind").WithMessage(OneTypeMessage)
+            .When(x => x.ItemKind is OrderItemKind.FixedDish or OrderItemKind.FixedBeverage or OrderItemKind.Combo);
+
+        // Prato avulso: o prato, o tamanho (conferido contra o cardápio) e os adicionais de grupo.
+        RuleFor(x => x.DishId).NotNull().WithMessage("Escolha o prato.").When(x => x.ItemKind == OrderItemKind.FixedDish);
+        RuleFor(x => x.GroupAddons).Must(a => a is null || a.Count <= 10).WithMessage("Até 10 adicionais por prato.")
+            .When(x => x.ItemKind == OrderItemKind.FixedDish);
+        RuleForEach(x => x.GroupAddons).ChildRules(a => a.RuleFor(y => y.Quantity).InclusiveBetween(1, PublicOrderLimits.MaxAddonQuantity)
+                .WithMessage($"Deve ser entre 1 e {PublicOrderLimits.MaxAddonQuantity}."))
+            .When(x => x.ItemKind == OrderItemKind.FixedDish);
+        RuleFor(x => x).Must(x => x.BeverageSizeId is null && x.BeverageFlavorId is null && x.ComboId is null && x.Parts is not { Count: > 0 })
+            .OverridePropertyName("itemKind").WithMessage("Prato não tem bebida nem partes de combo.")
+            .When(x => x.ItemKind == OrderItemKind.FixedDish);
+
+        // Bebida avulsa: tamanho e sabor (conferido contra o cardápio).
+        RuleFor(x => x.BeverageSizeId).NotNull().WithMessage("Escolha a bebida.").When(x => x.ItemKind == OrderItemKind.FixedBeverage);
+        RuleFor(x => x).Must(x => x.DishId is null && x.DishSizeId is null && x.ComboId is null && x.GroupAddons is not { Count: > 0 } && x.Parts is not { Count: > 0 })
+            .OverridePropertyName("itemKind").WithMessage("Bebida não tem prato, adicionais nem partes de combo.")
+            .When(x => x.ItemKind == OrderItemKind.FixedBeverage);
+
+        // Combo: as escolhas de cada componente; observação e adicionais vão em cada prato.
+        RuleFor(x => x.ComboId).NotNull().WithMessage("Escolha o combo.").When(x => x.ItemKind == OrderItemKind.Combo);
+        RuleFor(x => x.Notes).Null().WithMessage("A observação do combo vai em cada prato.").When(x => x.ItemKind == OrderItemKind.Combo);
+        RuleFor(x => x).Must(x => x.DishId is null && x.DishSizeId is null && x.BeverageSizeId is null && x.BeverageFlavorId is null && x.GroupAddons is not { Count: > 0 })
+            .OverridePropertyName("itemKind").WithMessage("As escolhas do combo vão em parts.")
+            .When(x => x.ItemKind == OrderItemKind.Combo);
+        RuleFor(x => x.Parts).Must(p => p is null || p.Count <= 10).WithMessage("Até 10 componentes por combo.")
+            .When(x => x.ItemKind == OrderItemKind.Combo);
+        RuleForEach(x => x.Parts).ChildRules(part =>
+            {
+                part.RuleFor(p => p.Notes).MaximumLength(PublicOrderLimits.NotesMaxLength);
+                part.RuleFor(p => p.GroupAddons).Must(a => a is null || a.Count <= 10).WithMessage("Até 10 adicionais por prato.");
+                part.RuleForEach(p => p.GroupAddons).ChildRules(a => a.RuleFor(y => y.Quantity).InclusiveBetween(1, PublicOrderLimits.MaxAddonQuantity)
+                    .WithMessage($"Deve ser entre 1 e {PublicOrderLimits.MaxAddonQuantity}."));
+            })
+            .When(x => x.ItemKind == OrderItemKind.Combo);
     }
 }
 
@@ -483,14 +715,21 @@ internal static class WebOrderTracking
         var changedByStore = await db.Set<OrderChangeEvent>().AnyAsync(e => e.OrderId == order.Id, cancellationToken);
         var status = Status(order, now);
 
+        // Árvore do pedido (ADR-0058 item 9): no `COMBO`, as partes (com os adicionais de cada prato); nos demais, os
+        // adicionais. Nome de exibição do snapshot, como no app ("Açaí 500 ml", "Refrigerante Lata 350 ml · Coca-Cola").
         var active = order.Items.Where(i => i.Status == LineStatus.Active).ToList();
+        List<OrderItem> Children(OrderItem parent) =>
+            active.Where(a => a.ParentOrderItemId == parent.Id).OrderBy(a => a.CreatedAt).ThenBy(a => a.Id).ToList();
+        List<TrackingAddonDto> Addons(OrderItem parent) =>
+            Children(parent).Select(a => new TrackingAddonDto(a.DisplayName, a.Quantity, a.UnitPrice, a.LineTotal)).ToList();
+        TrackingItemDto Line(OrderItem i, IReadOnlyList<TrackingAddonDto> addons, IReadOnlyList<TrackingItemDto> parts) => new(
+            i.ItemKind, i.DisplayName, i.CompositionSnapshot, i.Quantity, i.UnitPrice, i.LineTotal, i.Notes, addons, parts);
+
         var items = active.Where(i => i.ParentOrderItemId is null)
             .OrderBy(i => i.CreatedAt).ThenBy(i => i.Id)
-            .Select(i => new TrackingItemDto(
-                i.ItemKind, i.NameSnapshot, i.CompositionSnapshot, i.Quantity, i.UnitPrice, i.LineTotal, i.Notes,
-                active.Where(a => a.ParentOrderItemId == i.Id).OrderBy(a => a.CreatedAt).ThenBy(a => a.Id)
-                    .Select(a => new TrackingAddonDto(a.NameSnapshot, a.Quantity, a.UnitPrice, a.LineTotal))
-                    .ToList()))
+            .Select(i => i.ItemKind == OrderItemKind.Combo
+                ? Line(i, [], Children(i).Select(part => Line(part, Addons(part), [])).ToList())
+                : Line(i, Addons(i), []))
             .ToList();
 
         var rejection = order.RejectionReasonCode is { } reason

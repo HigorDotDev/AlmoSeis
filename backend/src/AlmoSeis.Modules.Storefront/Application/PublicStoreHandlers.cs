@@ -8,6 +8,7 @@ using AlmoSeis.Modules.Storefront.Contracts;
 using AlmoSeis.Modules.Storefront.Domain;
 using AlmoSeis.SharedKernel.Application;
 using AlmoSeis.SharedKernel.Errors;
+using AlmoSeis.SharedKernel.Security;
 using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -46,7 +47,8 @@ internal sealed class StorefrontGate(
     ITenantContext tenant,
     StorefrontStatusCalculator status,
     PublicMenuBuilder menus,
-    IMapsAvailability maps) : IStorefrontGate
+    IMapsAvailability maps,
+    ITenantModules modules) : IStorefrontGate
 {
     public async Task<StorefrontOrderingContext> GetAsync(CancellationToken cancellationToken)
     {
@@ -56,7 +58,8 @@ internal sealed class StorefrontGate(
         var slug = await UpdateStorefrontHandler.CurrentSlugAsync(db, tenantId, cancellationToken);
         return new StorefrontOrderingContext(
             storeStatus, slug, settings.PublicName, settings.ContactPhone, settings.PublicAddress,
-            settings.OffersPickup, settings.IsDeliveryAvailableOnPage(maps.IsConfigured), date, settings.Version);
+            settings.OffersPickup, settings.IsDeliveryAvailableOnPage(maps.IsConfigured), date, settings.Version,
+            StoreSections.For([.. await modules.GetAsync(cancellationToken)]));
     }
 
     public Task<PublicMenuDto?> GetMenuAsync(DateOnly businessDate, CancellationToken cancellationToken) =>
@@ -100,14 +103,98 @@ internal sealed class PublicMenuBuilder(IMenuReader menus, ICatalogReader catalo
     }
 }
 
+/// Cardápio fixo da página da lanchonete (EP-003 RF-316, ADR-0057): do `IFixedMenuReader` (o mesmo do `GET /fixed-menu`),
+/// só o que **vende no site** e está vendável agora (`isSellable`: ativo e não pausado), pelo preço de site. Pausado não
+/// aparece. O combo vende pela chave dele (os componentes só precisam estar vendáveis, ADR-0057 item 4). Sabores e opções
+/// pausados ficam de fora; grupo sem opção visível também. O envio confere o carrinho com a mesma regra
+/// (`WebOrderCart.PriceFixedMenu` no Ordering), contra o `FixedMenuSnapshot`.
+internal sealed class PublicFixedMenuBuilder(IFixedMenuReader reader)
+{
+    public async Task<PublicFixedMenuDto> BuildAsync(CancellationToken cancellationToken) => Build(await reader.LoadMenuAsync(cancellationToken));
+
+    public static PublicFixedMenuDto Build(FixedMenuDto menu)
+    {
+        var groups = menu.AddonGroups
+            .Where(g => g.IsActive)
+            .Select(g => new PublicAddonGroupDto(
+                g.Id, g.Name, g.Options.Where(o => o.IsActive && !o.IsPaused).Select(o => new PublicAddonOptionDto(o.Id, o.Name, o.Price)).ToList()))
+            .Where(g => g.Options.Count > 0)
+            .ToList();
+        var visibleGroups = groups.Select(g => g.Id).ToHashSet();
+        var dishesById = menu.Dishes.ToDictionary(d => d.Id);
+        var beverageSizes = menu.BeverageTypes.Where(t => t.IsActive).SelectMany(t => t.Sizes).ToDictionary(z => z.Id);
+        var usedGroups = new HashSet<Guid>();
+        List<Guid> GroupsOf(Guid dishId)
+        {
+            var ids = dishesById.TryGetValue(dishId, out var dish) ? dish.AddonGroupIds.Where(visibleGroups.Contains).ToList() : [];
+            usedGroups.UnionWith(ids);
+            return ids;
+        }
+
+        var categories = new List<PublicDishCategoryDto>();
+        foreach (var category in menu.Categories.Where(c => c.IsActive))
+        {
+            var dishes = new List<PublicFixedDishDto>();
+            foreach (var d in menu.Dishes.Where(d => d.DishCategoryId == category.Id && d.IsSellable))
+            {
+                if (d.HasSizes)
+                {
+                    var sizes = d.Sizes.Where(z => z.IsSellable && z.SellsOnSite && z.SitePrice is not null)
+                        .Select(z => new PublicDishSizeDto(z.Id, z.Name, z.SitePrice!.Value)).ToList();
+                    if (sizes.Count > 0)
+                    {
+                        dishes.Add(new PublicFixedDishDto(d.Id, d.Name, d.Description, d.ImageUrl, true, null, sizes, GroupsOf(d.Id)));
+                    }
+                }
+                else if (d.SellsOnSite && d.SitePrice is { } price)
+                {
+                    dishes.Add(new PublicFixedDishDto(d.Id, d.Name, d.Description, d.ImageUrl, false, price, [], GroupsOf(d.Id)));
+                }
+            }
+
+            if (dishes.Count > 0)
+            {
+                categories.Add(new PublicDishCategoryDto(category.Id, category.Name, dishes));
+            }
+        }
+
+        var beverages = menu.BeverageTypes
+            .Where(t => t.IsActive)
+            .Select(t => new PublicBeverageTypeDto(t.Id, t.Name, t.Sizes
+                .Where(z => z.IsSellable && z.SellsOnSite && z.SitePrice is not null)
+                .Select(z => new PublicBeverageSizeDto(z.Id, z.Name, z.SitePrice!.Value, Flavors(z)))
+                .ToList()))
+            .Where(t => t.Sizes.Count > 0)
+            .ToList();
+
+        var combos = menu.Combos
+            .Where(c => c.IsSellable && c.SellsOnSite && c.SitePrice is not null)
+            .Select(c => new PublicComboDto(c.Id, c.Name, c.Description, c.ImageUrl, c.SitePrice!.Value, c.Components
+                .OrderBy(x => x.SortOrder)
+                .Select(x => x.Kind == ComboComponentKind.Dish
+                    ? new PublicComboComponentDto(x.Id, x.Kind, x.Name, x.Quantity, x.DishId is { } dishId ? GroupsOf(dishId) : [], [])
+                    : new PublicComboComponentDto(x.Id, x.Kind, x.Name, x.Quantity, [],
+                        x.BeverageSizeId is { } sizeId && beverageSizes.TryGetValue(sizeId, out var size) ? Flavors(size) : []))
+                .ToList()))
+            .ToList();
+
+        return new PublicFixedMenuDto(categories, beverages, combos, groups.Where(g => usedGroups.Contains(g.Id)).ToList());
+    }
+
+    private static List<PublicBeverageFlavorDto> Flavors(BeverageSizeDto size) =>
+        size.Flavors.Where(f => f.IsActive && !f.IsPaused).Select(f => new PublicBeverageFlavorDto(f.Id, f.Name, f.ExtraPrice)).ToList();
+}
+
 /// GET /public/stores/{slug} (06 §6.19). Cardápio só com o expediente aberto e a página disponível (OPEN ou PAUSED).
 internal sealed class GetPublicStoreQueryHandler(
     AppDbContext db,
     ITenantContext tenant,
     StorefrontStatusCalculator status,
     PublicMenuBuilder menus,
+    PublicFixedMenuBuilder fixedMenus,
     IMapsAvailability maps,
     ITenantSettingsReader tenantSettings,
+    ITenantModules modules,
     IOptions<TurnstileOptions> turnstile) : IQueryHandler<GetPublicStoreQuery, PublicStoreDto>, IPublicHandler
 {
     public const string OperatorName = "AlmoSeis";
@@ -122,16 +209,19 @@ internal sealed class GetPublicStoreQueryHandler(
         if (storeStatus == StoreStatus.Unavailable)
         {
             // "Página indisponível", sem dizer o motivo (ADR-0044 item 6, ADR-0045 item 16).
-            return new PublicStoreDto(slug, storeStatus, settings.PublicName, null, null, null, false, false, null, null, null, null, PublicOrderLimits.Dto);
+            return new PublicStoreDto(slug, storeStatus, settings.PublicName, [], null, null, null, false, false, null, null, null, null, null, PublicOrderLimits.Dto);
         }
 
-        var menu = date is { } businessDate ? await menus.BuildAsync(businessDate, cancellationToken) : null;
+        // Seções pelos módulos (EP-003 Q-317): marmita, cardápio fixo ou as duas. Cardápio só com o expediente aberto.
+        var sections = StoreSections.For([.. await modules.GetAsync(cancellationToken)]);
+        var menu = date is { } businessDate && sections.Contains(StoreSection.Marmita) ? await menus.BuildAsync(businessDate, cancellationToken) : null;
+        var fixedMenu = date is not null && sections.Contains(StoreSection.ALaCarte) ? await fixedMenus.BuildAsync(cancellationToken) : null;
         var delivery = settings.IsDeliveryAvailableOnPage(maps.IsConfigured);
         return new PublicStoreDto(
-            slug, storeStatus, settings.PublicName, settings.PublicAddress, settings.ContactPhone, settings.HoursText,
+            slug, storeStatus, settings.PublicName, sections, settings.PublicAddress, settings.ContactPhone, settings.HoursText,
             settings.OffersPickup, delivery, delivery ? await DeliveryRuleAsync(settings, cancellationToken) : null,
             new PublicPrivacyDto(settings.PublicName, settings.ContactPhone, OperatorName, ThirdParties(settings, delivery)),
-            date, menu, PublicOrderLimits.Dto);
+            date, menu, fixedMenu, PublicOrderLimits.Dto);
     }
 
     /// A regra da taxa só aparece com a entrega pela página disponível.

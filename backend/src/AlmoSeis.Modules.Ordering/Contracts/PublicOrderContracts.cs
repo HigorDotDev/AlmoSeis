@@ -25,7 +25,15 @@ public sealed record PublicDeliveryAddressInput(
 
 public sealed record PublicAddonInput(Guid ProductId, int Quantity);
 
-/// Linha do carrinho: `MARMITA` (tamanho, pratos, acompanhamentos, adicionais) ou `BEVERAGE`. Sem preço: o servidor
+/// Adicional de grupo do cardápio fixo (EP-003 fatia 5): uma opção de 1 a 10, como no app (06 §6.9).
+public sealed record PublicGroupAddonInput(Guid AddonOptionId, int Quantity);
+
+/// Escolhas de um componente do combo: no prato, observação e adicionais; na bebida, o sabor (06 §6.9 `COMBO`).
+public sealed record PublicComboPartInput(Guid ComboComponentId, Guid? BeverageFlavorId, string? Notes, IReadOnlyList<PublicGroupAddonInput>? GroupAddons);
+
+/// Linha do carrinho. Pedido `MARMITA`: `MARMITA` (tamanho, pratos, acompanhamentos, adicionais) ou `BEVERAGE`. Pedido
+/// `A_LA_CARTE` (EP-003 fatia 5, no formato do app da fatia 3): `FIXED_DISH` (`dishId`, `dishSizeId`, `groupAddons`),
+/// `FIXED_BEVERAGE` (`beverageSizeId`, `beverageFlavorId`) ou `COMBO` (`comboId`, `parts`). Sem preço: o servidor
 /// recalcula tudo (ADR-0044 item 21).
 public sealed record PublicOrderItemInput(
     OrderItemKind ItemKind,
@@ -35,10 +43,19 @@ public sealed record PublicOrderItemInput(
     IReadOnlyList<Guid>? MainDishProductIds,
     IReadOnlyList<Guid>? SideDishProductIds,
     IReadOnlyList<PublicAddonInput>? Addons,
-    string? Notes);
+    string? Notes,
+    Guid? DishId = null,
+    Guid? DishSizeId = null,
+    Guid? BeverageSizeId = null,
+    Guid? BeverageFlavorId = null,
+    Guid? ComboId = null,
+    IReadOnlyList<PublicGroupAddonInput>? GroupAddons = null,
+    IReadOnlyList<PublicComboPartInput>? Parts = null);
 
 /// POST /public/stores/{slug}/orders [I] (06 §6.19). `expectedTotal` é o total que o cliente viu; diferente do recalculado
-/// → `409 CartChanged`. `website` é o campo-isca: preenchido → `400` sem detalhes (ADR-0045 item 13).
+/// → `409 CartChanged`. `website` é o campo-isca: preenchido → `400` sem detalhes (ADR-0045 item 13). `orderType`
+/// (EP-003 fatia 5, Q-317): `MARMITA` (o padrão, quando ausente: a página do EP-002 não manda) ou `A_LA_CARTE`; um tipo
+/// por pedido.
 public sealed record PlaceWebOrderRequest(
     FulfillmentType FulfillmentType,
     string CustomerName,
@@ -50,7 +67,12 @@ public sealed record PlaceWebOrderRequest(
     string? Notes,
     IReadOnlyList<PublicOrderItemInput> Items,
     Money ExpectedTotal,
-    string? Website);
+    string? Website,
+    OrderType? OrderType = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public OrderType EffectiveOrderType => OrderType ?? Contracts.OrderType.Marmita;
+}
 
 /// `turnstileToken` vem do header `X-Turnstile-Token` (fora do hash de idempotência: é de uso único). `clientIp` só para o
 /// Turnstile e para o hash do IP; nunca é gravado em claro.
@@ -148,9 +170,11 @@ public sealed record TrackingRejectionDto(RejectionReason ReasonCode, string? Me
 
 public sealed record TrackingAddonDto(string Name, int Quantity, Money UnitPrice, Money LineTotal);
 
+/// `name`: o nome de exibição do snapshot ("Açaí 500 ml", "Refrigerante Lata 350 ml · Coca-Cola"). `parts`: no `COMBO`, as
+/// `COMBO_PART` (com os adicionais de cada prato em `addons`); nos demais, vazio.
 public sealed record TrackingItemDto(
     OrderItemKind ItemKind, string Name, string? Composition, int Quantity, Money UnitPrice, Money LineTotal, string? Notes,
-    IReadOnlyList<TrackingAddonDto> Addons);
+    IReadOnlyList<TrackingAddonDto> Addons, IReadOnlyList<TrackingItemDto> Parts);
 
 /// Entrega: só rua e número (ADR-0047 item 5); nunca complemento nem referência.
 public sealed record TrackingAddressDto(string Street, string? Number);

@@ -129,16 +129,21 @@ internal static class ExpoErrors
     public const string ReceiptUnavailable = "ReceiptUnavailable";
 }
 
-/// Título e corpo do push do pedido do site (ADR-0049 itens 2 e 3): só o tipo, a quantidade de marmitas e o modo. Sem
-/// nome, telefone, endereço nem valor, porque aparece na tela bloqueada.
+/// Título e corpo do push do pedido do site (ADR-0049 itens 2 e 3): só o tipo, a quantidade e o modo. Sem nome,
+/// telefone, endereço nem valor, porque aparece na tela bloqueada. Pedido de marmita: "2 marmitas"; à la carte (EP-003
+/// fatia 5, `marmitaCount` 0): "3 itens", pelo `itemCount` (pratos, combos e bebidas).
 internal static class WebOrderPushContent
 {
-    public static (string Title, string Body) For(PushKind kind, int marmitaCount, string fulfillmentType, int minutesLeft, string? tenantName)
+    public static (string Title, string Body) For(
+        PushKind kind, int marmitaCount, string fulfillmentType, int minutesLeft, string? tenantName, int itemCount = 0)
     {
         var title = kind == PushKind.WebOrderReminder ? "Pedido do site esperando" : "Novo pedido do site";
+        var count = marmitaCount > 0 || itemCount <= 0
+            ? $"{marmitaCount} {(marmitaCount == 1 ? "marmita" : "marmitas")}"
+            : $"{itemCount} {(itemCount == 1 ? "item" : "itens")}";
         var body = kind == PushKind.WebOrderReminder
             ? $"Faltam {minutesLeft} min para expirar"
-            : $"{marmitaCount} {(marmitaCount == 1 ? "marmita" : "marmitas")} · {Mode(fulfillmentType)} · aceite em até {minutesLeft} min";
+            : $"{count} · {Mode(fulfillmentType)} · aceite em até {minutesLeft} min";
         return (tenantName is null ? title : $"{title} · {tenantName}", body);
     }
 

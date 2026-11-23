@@ -302,4 +302,9 @@ public sealed record FixedMenuSnapshot(
 public interface IFixedMenuReader
 {
     Task<FixedMenuSnapshot> LoadAsync(CancellationToken cancellationToken);
+
+    /// O mesmo `GET /fixed-menu?includeInactive=false` (com descrição, imagem, ordem, `isSellable`, `sellsOnSite` e
+    /// `sitePrice`), para o Storefront montar o cardápio da página da lanchonete (EP-003 fatia 5). Nunca vai direto para
+    /// uma resposta pública: a página tem DTOs próprios (ADR-0045 item 7).
+    Task<FixedMenuDto> LoadMenuAsync(CancellationToken cancellationToken);
 }

@@ -241,6 +241,7 @@ internal sealed class OrderAwaitingAcceptanceMapper(ITenantContext tenant) : Int
         {
             fulfillmentType = UpperSnakeEnumConverter<FulfillmentType>.ToText(e.FulfillmentType),
             marmitaCount = e.MarmitaCount,
+            itemCount = e.ItemCount,
             totalAmount = e.TotalAmount.ToString(),
             acceptanceDeadline = e.AcceptanceDeadline,
         });
@@ -261,6 +262,7 @@ internal sealed class WebOrderPushMapper(ITenantContext tenant, Microsoft.Extens
             kind = WebOrderPushMessage.AwaitingAcceptance,
             fulfillmentType,
             marmitaCount = e.MarmitaCount,
+            itemCount = e.ItemCount,
         });
 
         if (options.Value.ReminderMinutes > 0 && e.OccurredAt.AddMinutes(options.Value.ReminderMinutes) is var remindAt && remindAt < e.AcceptanceDeadline)
@@ -270,6 +272,7 @@ internal sealed class WebOrderPushMapper(ITenantContext tenant, Microsoft.Extens
                 kind = WebOrderPushMessage.Reminder,
                 fulfillmentType,
                 marmitaCount = e.MarmitaCount,
+                itemCount = e.ItemCount,
             }, remindAt);
         }
     }

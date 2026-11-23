@@ -51,7 +51,7 @@ internal static class PushLimits
 }
 
 /// Mensagem `WebOrderPushRequested` do outbox, já lida pelo consumidor.
-internal sealed record WebOrderPushRequest(Guid EventId, Guid OrderId, PushKind Kind, string FulfillmentType, int MarmitaCount);
+internal sealed record WebOrderPushRequest(Guid EventId, Guid OrderId, PushKind Kind, string FulfillmentType, int MarmitaCount, int ItemCount = 0);
 
 /// Envia o push de um pedido do site no tenant da sessão (`InitializeForSystem`, RLS). Pelo menos uma vez, como o outbox:
 /// o reenvio da mesma mensagem pula os registros que já têm entrega gravada (`push_deliveries`), e cada lote de até 100
@@ -131,7 +131,7 @@ internal sealed class WebOrderPushService(
         {
             var messages = batch.Select(r =>
             {
-                var (title, body) = WebOrderPushContent.For(request.Kind, request.MarmitaCount, request.FulfillmentType, minutesLeft, r.ShowTenantName ? tenantName : null);
+                var (title, body) = WebOrderPushContent.For(request.Kind, request.MarmitaCount, request.FulfillmentType, minutesLeft, r.ShowTenantName ? tenantName : null, request.ItemCount);
                 return new PushMessage(r.ExpoPushToken, title, body, data, o.Sound, o.ChannelId, ttl);
             }).ToList();
 

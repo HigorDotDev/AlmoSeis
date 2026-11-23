@@ -12,6 +12,7 @@ using AlmoSeis.Modules.Storefront.Domain;
 using AlmoSeis.SharedKernel.Application;
 using AlmoSeis.SharedKernel.Domain;
 using AlmoSeis.SharedKernel.Errors;
+using AlmoSeis.SharedKernel.Security;
 using Microsoft.EntityFrameworkCore;
 
 namespace AlmoSeis.Modules.Storefront.Application;
@@ -108,12 +109,52 @@ internal sealed class GetStorefrontQueryHandler(AppDbContext db, ITenantContext 
     }
 }
 
+/// Ativar a página exige algo que vende no site em pelo menos uma seção (ADR-0044 item 11 complementado): na seção
+/// `MARMITA`, um tamanho de marmita ativo com "vende no site" (ADR-0057 item 3); na `A_LA_CARTE`, um prato ativo (sem
+/// tamanho, ou com um tamanho ativo) ou um combo ativo com "vende no site" (EP-003 RN-316.5 e Q-318: o pedido da lanchonete
+/// precisa de prato ou combo, então só bebida não basta). A pausa não conta: ela é passageira e não impede ativar.
+internal sealed class StorefrontActivation(ITenantModules modules, ICatalogReader catalog, IFixedMenuReader fixedMenu)
+{
+    public sealed record Result(bool HasSellableItem, string? MissingMessage)
+    {
+        public static readonly Result Ok = new(true, null);
+    }
+
+    public async Task<Result> CheckAsync(CancellationToken cancellationToken)
+    {
+        var sections = StoreSections.For([.. await modules.GetAsync(cancellationToken)]);
+        if (sections.Contains(StoreSection.Marmita) && (await catalog.ListActiveMarmitaSizesAsync(cancellationToken)).Any(s => s.SellsOnSite))
+        {
+            return Result.Ok;
+        }
+
+        if (sections.Contains(StoreSection.ALaCarte) && HasDishOrCombo(await fixedMenu.LoadMenuAsync(cancellationToken)))
+        {
+            return Result.Ok;
+        }
+
+        var message = sections switch
+        {
+            [StoreSection.ALaCarte] => "Para ativar a página, cadastre pelo menos um prato ou combo ativo que vende no site.",
+            [StoreSection.Marmita, StoreSection.ALaCarte] =>
+                "Para ativar a página, cadastre pelo menos um tamanho de marmita, prato ou combo ativo que vende no site.",
+            _ => StorefrontSettings.MissingMarmitaSizeMessage,
+        };
+        return new Result(false, message);
+    }
+
+    /// O `LoadMenuAsync` já vem sem os inativos (raízes e tamanhos).
+    public static bool HasDishOrCombo(FixedMenuDto menu) =>
+        menu.Dishes.Any(d => d.IsActive && (d.HasSizes ? d.Sizes.Any(z => z.IsActive && z.SellsOnSite) : d.SellsOnSite))
+        || menu.Combos.Any(c => c.IsActive && c.SellsOnSite);
+}
+
 /// PUT /storefront [M] (06 §6.18). Permissão `storefront.manage` (ADR-0046 item 22). Auditoria sem telefone nem endereço.
 internal sealed class UpdateStorefrontHandler(
     AppDbContext db,
     ITenantContext tenant,
     IConcurrencyContext concurrency,
-    ICatalogReader catalog,
+    StorefrontActivation activation,
     SlugWriter slugs,
     StorefrontStatusCalculator status,
     DeliveryQuoteCalculator maps,
@@ -143,8 +184,8 @@ internal sealed class UpdateStorefrontHandler(
             await slugs.ChangeAsync(tenantId, current, slug, now, cancellationToken);
         }
 
-        // A página precisa de um tamanho vendido no site (ADR-0057 item 3); sem ele, não haveria o que vender.
-        var hasActiveSize = !request.IsPageActive || (await catalog.ListActiveMarmitaSizesAsync(cancellationToken)).Any(s => s.SellsOnSite);
+        // A página precisa de algo vendido no site (ADR-0057 item 3); sem isso, não haveria o que vender.
+        var sellable = request.IsPageActive ? await activation.CheckAsync(cancellationToken) : StorefrontActivation.Result.Ok;
         var delivery = request.Delivery;
         var changed = settings.Update(
             new StorefrontChanges(
@@ -153,8 +194,9 @@ internal sealed class UpdateStorefrontHandler(
                 new DeliveryRule(delivery.FeeMode, delivery.PricePerKm, delivery.MinimumFee, StorefrontDtos.ParseKm(delivery.MaxDistanceKm)),
                 request.Location),
             slugChanged,
-            hasActiveSize,
-            now);
+            sellable.HasSellableItem,
+            now,
+            sellable.MissingMessage);
 
         // Endereço novo (ou ainda sem ponto): geocodifica uma vez ao salvar; o proprietário confirma no mapa (ADR-0048 item 3).
         if (settings.Latitude is null && await maps.GeocodeStoreAsync(settings, cancellationToken) is { } point)
