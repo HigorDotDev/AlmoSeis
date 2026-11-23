@@ -145,7 +145,7 @@ internal static class FixedMenuMapping
                 c.Components.OrderBy(x => x.SortOrder).Select(x =>
                 {
                     var (name, sellable) = availability.Component(x);
-                    return new FixedMenuComboComponent(x.Kind, x.DishId, x.DishSizeId, x.BeverageSizeId, x.Quantity, name, sellable);
+                    return new FixedMenuComboComponent(x.Id, x.Kind, x.DishId, x.DishSizeId, x.BeverageSizeId, x.Quantity, name, sellable);
                 }).ToList()));
         var options = data.AddonGroups.Where(g => g.IsActive)
             .SelectMany(g => g.Options.Where(o => o.IsActive).Select(o => (Group: g, Option: o)))

@@ -249,7 +249,7 @@ internal sealed class WebOrderSubmitter(
     {
         var day = await businessDays.GetOpenAsync(cancellationToken) ?? throw new BusinessException(ErrorCodes.BusinessDayRequired);
         // Todo pedido do site usa o preço de site (ADR-0057 item 6).
-        var resolved = await items.ResolveAsync(command.Items, day.BusinessDate, PriceList.Site, cancellationToken);
+        var resolved = await items.ResolveAsync(command.Items, new ItemResolution(day.BusinessDate, PriceList.Site, OrderType.Marmita), cancellationToken);
         var now = time.GetUtcNow();
 
         var order = Order.SubmitFromWeb(

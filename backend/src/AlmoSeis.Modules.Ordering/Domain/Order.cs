@@ -488,7 +488,7 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
         for (var i = 0; i < data.Items.Count; i++)
         {
             EnsureTopLevelKind(data.Items[i].Kind, $"items[{i}].itemKind");
-            AddTree(data.Items[i], parent: null, by, newId, now);
+            AddTree(data.Items[i], parent: null, by, newId, now, $"items[{i}]");
         }
 
         foreach (var weighing in data.Weighings)
@@ -604,18 +604,22 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
             var spec = items[i];
             if (spec.ParentOrderItemId is { } parentId)
             {
-                var parent = _items.SingleOrDefault(x => x.Id == parentId && x.Status == LineStatus.Active && x.ParentOrderItemId is null);
-                if (parent is null || spec.Kind != OrderItemKind.Addon || parent.ItemKind is not (OrderItemKind.Marmita or OrderItemKind.Pf))
+                // Incluído depois: ADDON numa marmita ou PF; GROUP_ADDON num prato avulso ou numa parte de prato do
+                // combo (ADR-0058 item 10). Nunca uma parte nova num combo já registrado.
+                var parent = _items.SingleOrDefault(x => x.Id == parentId && x.Status == LineStatus.Active);
+                if (parent is null || !(spec.Kind is OrderItemKind.Addon or OrderItemKind.GroupAddon) || !ChildFits(parent, spec.Kind))
                 {
-                    throw BusinessException.Validation($"items[{i}].parentOrderItemId", "Adicional vinculado só a uma marmita ou PF ativa deste pedido.");
+                    throw BusinessException.Validation(
+                        $"items[{i}].parentOrderItemId",
+                        "Adicional vinculado só a uma marmita, PF ou prato ativo deste pedido.");
                 }
 
-                added.AddRange(AddTree(spec, parent, by, newId, now));
+                added.AddRange(AddTree(spec, parent, by, newId, now, $"items[{i}]"));
             }
             else
             {
                 EnsureTopLevelKind(spec.Kind, $"items[{i}].itemKind");
-                added.AddRange(AddTree(spec, parent: null, by, newId, now));
+                added.AddRange(AddTree(spec, parent: null, by, newId, now, $"items[{i}]"));
             }
         }
 
@@ -651,23 +655,32 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
             return;
         }
 
-        item.Change(newQuantity, notes.GetValueOr(notesBefore), ParentQuantity(item));
-        foreach (var child in ChildrenOf(item))
+        // A parte do combo tem a quantidade do componente; muda-se a do COMBO (ADR-0058 item 10). O combo não vai à
+        // cozinha: a observação fica em cada prato dele.
+        if (item.ItemKind == OrderItemKind.ComboPart && newQuantity != quantityBefore)
         {
-            child.Reprice(item.Quantity);
+            throw BusinessException.Validation("quantity", "A quantidade da parte segue o combo: altere a quantidade do combo.");
         }
+
+        if (item.ItemKind == OrderItemKind.Combo && notes.GetValueOr(notesBefore) != notesBefore)
+        {
+            throw BusinessException.Validation("notes", "A observação vai em cada prato do combo.");
+        }
+
+        item.Change(newQuantity, notes.GetValueOr(notesBefore), AncestorQuantity(item));
+        RepriceDescendants(item);
 
         Recalculate();
         Changed(now);
 
         if (newQuantity != quantityBefore)
         {
-            RecordChange(OrderChangeKind.QuantityChanged, item.RequiresPreparation, ItemDetails(item, quantityBefore, item.Quantity), by, newId, now);
+            RecordChange(OrderChangeKind.QuantityChanged, AffectsProduction(item), ItemDetails(item, quantityBefore, item.Quantity), by, newId, now);
         }
 
         if (item.Notes != notesBefore)
         {
-            RecordChange(OrderChangeKind.ItemNotesChanged, true, new { itemId = item.Id, name = item.NameSnapshot, notesBefore, notesAfter = item.Notes }, by, newId, now);
+            RecordChange(OrderChangeKind.ItemNotesChanged, true, new { itemId = item.Id, name = item.DisplayName, notesBefore, notesAfter = item.Notes }, by, newId, now);
         }
     }
 
@@ -676,7 +689,14 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     {
         EnsureEditable();
         var item = ActiveItem(itemId);
-        var children = ChildrenOf(item).ToList();
+        if (item.ItemKind == OrderItemKind.ComboPart)
+        {
+            // Uma parte não sai sozinha: remove-se o combo inteiro (ADR-0058 item 10).
+            throw BusinessException.Validation("itemId", "Uma parte do combo não é removida sozinha: remova o combo.");
+        }
+
+        // O combo leva as partes e os adicionais delas; o prato e a marmita, os adicionais.
+        var children = DescendantsOf(item).ToList();
         // Valida antes de mutar: o agregado nunca fica num estado inválido, mesmo sem rollback.
         if (!_items.Any(i => i.Status == LineStatus.Active && i != item && !children.Contains(i))
             && !_weighings.Any(w => w.Status == LineStatus.Active))
@@ -692,7 +712,7 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
 
         Recalculate();
         Changed(now);
-        RecordChange(OrderChangeKind.ItemRemoved, item.RequiresPreparation, ItemDetails(item, item.Quantity, null), by, newId, now);
+        RecordChange(OrderChangeKind.ItemRemoved, item.RequiresPreparation || children.Any(c => c.RequiresPreparation), ItemDetails(item, item.Quantity, null), by, newId, now);
     }
 
     public IReadOnlyList<WeighingEntry> AddWeighings(IReadOnlyList<NewWeighing> weighings, Guid by, Func<Guid> newId, DateTimeOffset now)
@@ -840,35 +860,60 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     private bool IsDispatched => FulfillmentStatus is Contracts.FulfillmentStatus.OutForDelivery
         or Contracts.FulfillmentStatus.Delivered or Contracts.FulfillmentStatus.PickedUp;
 
-    private List<OrderItem> AddTree(NewItem spec, OrderItem? parent, Guid? by, Func<Guid> newId, DateTimeOffset now)
+    /// A linha e os filhos (e os netos, no combo: COMBO → COMBO_PART → GROUP_ADDON, ADR-0058 item 9). O valor de cada
+    /// filho usa a quantidade de todos os antepassados.
+    private List<OrderItem> AddTree(NewItem spec, OrderItem? parent, Guid? by, Func<Guid> newId, DateTimeOffset now, string field)
     {
         EnsureQuantity(spec.Quantity, "quantity");
-        var item = new OrderItem(newId(), TenantId, Id, parent?.Id, spec, parent?.Quantity ?? 1, by, newId, now);
-        var added = new List<OrderItem> { item };
-        foreach (var addon in spec.Addons)
+        if (parent is not null && !ChildFits(parent, spec.Kind))
         {
-            EnsureQuantity(addon.Quantity, "quantity");
-            added.Add(new OrderItem(newId(), TenantId, Id, item.Id, addon, item.Quantity, by, newId, now));
+            throw BusinessException.Validation(field, "Este item não pode ficar dentro do item escolhido.");
         }
 
-        _items.AddRange(added);
+        var ancestors = parent is null ? 1 : parent.Quantity * AncestorQuantity(parent);
+        var item = new OrderItem(newId(), TenantId, Id, parent, spec, ancestors, by, newId, now);
+        _items.Add(item);
+        var added = new List<OrderItem> { item };
+        foreach (var child in spec.Addons)
+        {
+            added.AddRange(AddTree(child, item, by, newId, now, field));
+        }
+
         return added;
     }
 
+    /// Um tipo por pedido (Q-317), e o tipo decide de onde vêm os itens (ADR-0058 item 3): marmita só em pedido de
+    /// marmita, PF só em PF; bebida e adicional do catálogo em marmita, PF e quilo (RN-002.5); o cardápio fixo só em
+    /// `A_LA_CARTE`. Parte de combo e adicional de grupo nunca ficam no primeiro nível.
+    public static bool KindFits(OrderType orderType, OrderItemKind kind) => kind switch
+    {
+        OrderItemKind.Marmita => orderType == OrderType.Marmita,
+        OrderItemKind.Pf => orderType == OrderType.Pf,
+        OrderItemKind.Beverage or OrderItemKind.Addon => orderType != OrderType.ALaCarte,
+        OrderItemKind.FixedDish or OrderItemKind.FixedBeverage or OrderItemKind.Combo => orderType == OrderType.ALaCarte,
+        _ => false,
+    };
+
+    public const string KindMismatchMessage = "Este tipo de item não combina com a modalidade do pedido.";
+
     private void EnsureTopLevelKind(OrderItemKind kind, string field)
     {
-        // Marmita só em pedido de marmita, PF só em PF; bebida e adicional avulso em qualquer modalidade (RN-002.5).
-        var ok = kind switch
+        if (!KindFits(OrderType, kind))
         {
-            OrderItemKind.Marmita => OrderType == OrderType.Marmita,
-            OrderItemKind.Pf => OrderType == OrderType.Pf,
-            _ => true,
-        };
-        if (!ok)
-        {
-            throw BusinessException.Validation(field, "Este tipo de item não combina com a modalidade do pedido.");
+            throw BusinessException.Validation(field, KindMismatchMessage);
         }
     }
+
+    /// As combinações do `ck_order_items_parent` (05 §5.17 0010): ADDON sob marmita/PF; COMBO_PART sob COMBO;
+    /// GROUP_ADDON sob prato avulso ou parte **de prato** (`ck_order_items_parent_dish`).
+    private static bool ChildFits(OrderItem parent, OrderItemKind kind) => kind switch
+    {
+        OrderItemKind.Addon => parent.ItemKind is OrderItemKind.Marmita or OrderItemKind.Pf,
+        OrderItemKind.ComboPart => parent.ItemKind == OrderItemKind.Combo,
+        OrderItemKind.GroupAddon => parent.ItemKind == OrderItemKind.FixedDish
+            || (parent.ItemKind == OrderItemKind.ComboPart && parent.DishId is not null),
+        _ => false,
+    };
 
     private OrderItem ActiveItem(Guid itemId) =>
         _items.SingleOrDefault(i => i.Id == itemId && i.Status == LineStatus.Active) ?? throw new NotFoundException("ORDER_ITEM", itemId);
@@ -876,8 +921,34 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     private IEnumerable<OrderItem> ChildrenOf(OrderItem item) =>
         _items.Where(i => i.ParentOrderItemId == item.Id && i.Status == LineStatus.Active);
 
-    private int ParentQuantity(OrderItem item) =>
-        item.ParentOrderItemId is { } parentId ? _items.Single(i => i.Id == parentId).Quantity : 1;
+    private IEnumerable<OrderItem> DescendantsOf(OrderItem item) =>
+        ChildrenOf(item).SelectMany(c => DescendantsOf(c).Prepend(c));
+
+    /// Produto das quantidades dos antepassados (1 no primeiro nível).
+    private int AncestorQuantity(OrderItem item)
+    {
+        var quantity = 1;
+        for (var current = item; current.ParentOrderItemId is { } parentId;)
+        {
+            current = _items.Single(i => i.Id == parentId);
+            quantity *= current.Quantity;
+        }
+
+        return quantity;
+    }
+
+    private void RepriceDescendants(OrderItem item)
+    {
+        var ancestors = item.Quantity * AncestorQuantity(item);
+        foreach (var child in ChildrenOf(item))
+        {
+            child.Reprice(ancestors);
+            RepriceDescendants(child);
+        }
+    }
+
+    /// O combo não vai à cozinha, mas as partes dele vão.
+    private bool AffectsProduction(OrderItem item) => item.RequiresPreparation || DescendantsOf(item).Any(c => c.RequiresPreparation);
 
     /// Pedido não aceito: sem edição, produção, pagamento, cancelamento nem atendimento (ADR-0046 item 4).
     public void EnsureAccepted()
@@ -947,7 +1018,7 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
     }
 
     private static object ItemDetails(OrderItem item, int? quantityBefore, int? quantityAfter) =>
-        new { itemId = item.Id, name = item.NameSnapshot, quantityBefore, quantityAfter };
+        new { itemId = item.Id, name = item.DisplayName, quantityBefore, quantityAfter };
 
     private static object WeighingDetails(WeighingEntry weighing) =>
         new { weighingId = weighing.Id, weightGrams = weighing.WeightGrams.Value, amount = weighing.Amount.ToString() };
@@ -960,11 +1031,16 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
         }
     }
 
+    /// ADR-0058 item 2: marmita é entrega ou retirada; PF e quilo, salão; à la carte, os três.
     private static void EnsureFulfillment(OrderType type, FulfillmentType fulfillment)
     {
-        var ok = type == OrderType.Marmita
-            ? fulfillment is FulfillmentType.Delivery or FulfillmentType.Pickup
-            : fulfillment == FulfillmentType.DineIn;
+        var ok = type switch
+        {
+            OrderType.Marmita => fulfillment is FulfillmentType.Delivery or FulfillmentType.Pickup,
+            OrderType.Pf or OrderType.Kilo => fulfillment == FulfillmentType.DineIn,
+            OrderType.ALaCarte => true,
+            _ => false,
+        };
         if (!ok)
         {
             throw BusinessException.Validation("fulfillmentType", "Marmita é entrega ou retirada; PF e quilo são no salão.");
@@ -1017,15 +1093,28 @@ internal sealed class OrderItem : Entity, ITenantOwned
     {
     }
 
-    internal OrderItem(Guid id, Guid tenantId, Guid orderId, Guid? parentId, NewItem spec, int parentQuantity, Guid? by, Func<Guid> newId, DateTimeOffset now)
+    /// `ancestorsQuantity`: produto das quantidades do pai e do avô (1 no primeiro nível).
+    internal OrderItem(Guid id, Guid tenantId, Guid orderId, OrderItem? parent, NewItem spec, int ancestorsQuantity, Guid? by, Func<Guid> newId, DateTimeOffset now)
     {
         Id = id;
         TenantId = tenantId;
         OrderId = orderId;
-        ParentOrderItemId = parentId;
+        ParentOrderItemId = parent?.Id;
+        // A API desta versão sempre grava o tipo do pai (05 §5.17 0010, janela do deploy); o prato do pai só no GROUP_ADDON.
+        ParentItemKind = parent?.ItemKind;
+        ParentDishId = spec.Kind == OrderItemKind.GroupAddon ? parent?.DishId : null;
         ItemKind = spec.Kind;
         ProductId = spec.ProductId;
         MarmitaSizeId = spec.MarmitaSizeId;
+        var fixedRefs = spec.Fixed ?? FixedMenuRefs.None;
+        DishId = fixedRefs.DishId;
+        DishSizeId = fixedRefs.DishSizeId;
+        BeverageSizeId = fixedRefs.BeverageSizeId;
+        BeverageFlavorId = fixedRefs.BeverageFlavorId;
+        ComboId = fixedRefs.ComboId;
+        AddonOptionId = fixedRefs.AddonOptionId;
+        SizeNameSnapshot = fixedRefs.SizeName;
+        FlavorNameSnapshot = fixedRefs.FlavorName;
         Quantity = spec.Quantity;
         UnitPrice = spec.UnitPrice;
         NameSnapshot = spec.Name;
@@ -1036,15 +1125,38 @@ internal sealed class OrderItem : Entity, ITenantOwned
         CreatedByEmployeeId = by;
         CreatedAt = now;
         _components.AddRange(spec.Components.Select(c => new OrderItemComponent(newId(), tenantId, id, c)));
-        Reprice(parentQuantity);
+        Reprice(ancestorsQuantity);
     }
 
     public Guid TenantId { get; private set; }
     public Guid OrderId { get; private set; }
     public Guid? ParentOrderItemId { get; private set; }
+
+    /// Cópia do tipo e do prato do pai, para os CHECKs da hierarquia (05 §5.17 0010). Nulos no primeiro nível; o
+    /// `ADDON` gravado pela API anterior na janela do deploy pode estar sem o tipo do pai.
+    public OrderItemKind? ParentItemKind { get; private set; }
+    public Guid? ParentDishId { get; private set; }
     public OrderItemKind ItemKind { get; private set; }
     public Guid? ProductId { get; private set; }
     public Guid? MarmitaSizeId { get; private set; }
+
+    // Cardápio fixo (ADR-0058 item 8): cada tipo com as suas referências (`ck_order_items_refs`).
+    public Guid? DishId { get; private set; }
+    public Guid? DishSizeId { get; private set; }
+    public Guid? BeverageSizeId { get; private set; }
+    public Guid? BeverageFlavorId { get; private set; }
+    public Guid? ComboId { get; private set; }
+    public Guid? AddonOptionId { get; private set; }
+
+    /// Snapshot do tamanho e do sabor, exatamente quando há tamanho e sabor (`ck_order_items_snapshots`).
+    public string? SizeNameSnapshot { get; private set; }
+    public string? FlavorNameSnapshot { get; private set; }
+
+    /// "Refrigerante Lata 350 ml · Coca-Cola Zero", "Açaí 500 ml", "Marmita M": nome base + tamanho + sabor.
+    public string DisplayName => DisplayNameOf(NameSnapshot, SizeNameSnapshot, FlavorNameSnapshot);
+
+    public static string DisplayNameOf(string name, string? size, string? flavor) =>
+        name + (size is null ? string.Empty : " " + size) + (flavor is null ? string.Empty : " · " + flavor);
     public int Quantity { get; private set; }
     public Money UnitPrice { get; private set; }
     public Money LineTotal { get; private set; }
@@ -1061,16 +1173,16 @@ internal sealed class OrderItem : Entity, ITenantOwned
     public DateTimeOffset? RemovedAt { get; private set; }
     public IReadOnlyList<OrderItemComponent> Components => _components;
 
-    /// Adicional filho: `UnitPrice × Quantity × quantidade do pai` (04 §4.7).
-    internal void Reprice(int parentQuantity) => LineTotal = UnitPrice * (Quantity * parentQuantity);
+    /// Filho: `UnitPrice × Quantity × quantidade do pai × quantidade do avô` (04 §4.7, ADR-0058 item 9).
+    internal void Reprice(int ancestorsQuantity) => LineTotal = UnitPrice * (Quantity * ancestorsQuantity);
 
     internal void ClearNotes() => Notes = null;
 
-    internal void Change(int quantity, string? notes, int parentQuantity)
+    internal void Change(int quantity, string? notes, int ancestorsQuantity)
     {
         Quantity = quantity;
         Notes = notes;
-        Reprice(parentQuantity);
+        Reprice(ancestorsQuantity);
     }
 
     internal void Remove(Guid by, DateTimeOffset now)
@@ -1190,7 +1302,23 @@ internal sealed record NewItem(
     bool RequiresPreparation,
     string? Notes,
     IReadOnlyList<NewComponent> Components,
-    IReadOnlyList<NewItem> Addons);
+    IReadOnlyList<NewItem> Addons,
+    FixedMenuRefs? Fixed = null);
+
+/// Referências e snapshots do cardápio fixo (ADR-0058 item 8). `Addons` do `NewItem` são os filhos: os `GROUP_ADDON`
+/// do prato, ou as `COMBO_PART` do combo (com os `GROUP_ADDON` delas).
+internal sealed record FixedMenuRefs(
+    Guid? DishId = null,
+    Guid? DishSizeId = null,
+    Guid? BeverageSizeId = null,
+    Guid? BeverageFlavorId = null,
+    Guid? ComboId = null,
+    Guid? AddonOptionId = null,
+    string? SizeName = null,
+    string? FlavorName = null)
+{
+    public static readonly FixedMenuRefs None = new();
+}
 
 internal sealed record NewWeighing(Grams Grams, Money PricePerKg);
 

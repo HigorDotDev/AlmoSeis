@@ -85,3 +85,13 @@ A lanchonete vende o mesmo cardápio fixo no salão, na entrega e na retirada, e
 - `Order.EnsureFulfillment`, `EnsureTopLevelKind` e a validação de filhos (`AddItems`) mudam; o `OrderItemResolver` ganha o ramo do cardápio fixo, sem `MenuNotFound`.
 - `order_items` aceita dois níveis de pai (ou um caminho equivalente) e o `CHECK` dos tipos de item muda; `daily_closing_lines` aceita `A_LA_CARTE`.
 - Testes: cada combinação de `OrderType` × atendimento; item do cardápio fixo recusado em PF; combo com 2 de quantidade reprecifica bacon e acréscimo; a cozinha não recebe a linha `COMBO`.
+
+## Complemento (2026-11-22, contrato e backend da fatia 3, detalhados em `docs/06-contratos-api.md` §6.9 e `docs/07-backend.md` §7.8)
+
+- **Módulo por atendimento (item 1):** `A_LA_CARTE` em `DINE_IN` exige o módulo `A_LA_CARTE`; em `DELIVERY` ou `PICKUP`, o módulo `DELIVERY`. Sem ele, `403 ModuleNotEnabled` antes do expediente, como as outras modalidades.
+- **Entrega e retirada antes da fatia 4:** o pedido à la carte de entrega ou retirada usa os campos de entrega que a marmita já tem (endereço obrigatório na entrega, taxa padrão, cliente opcional). As exigências do delivery por telefone (nome e telefone obrigatórios, forma prevista, troco, taxa digitada na criação) entram com o ADR-0059.
+- **Item 3 e Q-317:** item de outra modalidade num pedido (cardápio fixo em `MARMITA`/`PF`/`KILO`, ou `MARMITA`/`PF`/`BEVERAGE`/`ADDON` do catálogo em `A_LA_CARTE`) → `422 ValidationFailed` em `items[i].itemKind`, como a combinação incompatível de hoje.
+- **Itens 9 e 10 (Q-321, Q-322):** confirmados os três níveis. A quantidade da `COMBO_PART` é a do componente e não muda sozinha (`422`); a do `COMBO` reprecifica a árvore; a parte não é removida sozinha (`422`); o adicional de grupo pode ser incluído depois numa parte de prato; trocar o sabor de uma parte é remover e incluir o combo. O `COMBO` não tem observação nem adicionais próprios.
+- **Item 11:** na cozinha, a quantidade da parte é a de pratos a fazer (parte × combo); prato com `RequiresPreparation = false` também fica fora do painel, como a bebida.
+- **Item 13 (Q-311):** uma linha `A_LA_CARTE` no `byOrderType` do resumo, do fechamento e do mensal, sempre presente como as outras chaves (zerada no restaurante e nos fechamentos anteriores à 0010). A abertura por atendimento ainda não é calculada nem gravada. O "Vendido pelo site" (ADR-0057 item 12) é o `siteSoldTotal`.
+- **Item 14:** o `itemCount` do `OrderAwaitingAcceptance` fica para a fatia 5 (página da lanchonete).

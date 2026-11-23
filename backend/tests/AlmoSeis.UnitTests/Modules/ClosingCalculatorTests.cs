@@ -60,7 +60,7 @@ public sealed class ClosingCalculatorTests
 
         f.ExpectedCash.ShouldBe(M(45m));
         f.ReversedTotal.ShouldBe(M(35m));
-        f.ByOrderType.Select(l => l.Key).ShouldBe(["MARMITA", "PF", "KILO"]);
+        f.ByOrderType.Select(l => l.Key).ShouldBe(["MARMITA", "PF", "KILO", "A_LA_CARTE"]);
         f.ByPaymentMethod.Select(l => l.Key).ShouldBe(["CASH", "PIX", "CARD"]);
     }
 
@@ -73,6 +73,33 @@ public sealed class ClosingCalculatorTests
                 DailyClosing.Finalize(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), new DateOnly(2026, 10, 27), f, M(90m), " ", Guid.NewGuid(), Guid.NewGuid, DateTimeOffset.UnixEpoch))
             .ErrorCode.ShouldBe(ErrorCodes.JustificationRequired);
         DailyClosing.Finalize(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), new DateOnly(2026, 10, 27), f, M(100m), null, Guid.NewGuid(), Guid.NewGuid, DateTimeOffset.UnixEpoch)
-            .Lines.Count.ShouldBe(6);
+            .Lines.Count.ShouldBe(7); // 4 modalidades (com A_LA_CARTE) + 3 formas
+    }
+    /// "Vendido pelo site" (ADR-0057 item 12): só pedidos ativos com `price_list = 'SITE'`, parte do vendido; a linha
+    /// `A_LA_CARTE` sai como as outras modalidades (Q-311: uma linha).
+    [Fact]
+    public void Site_sold_total_and_a_la_carte_line()
+    {
+        var f = ClosingCalculator.Compute(new ClosingInputs(
+            M(0m),
+            [
+                new("MARMITA", false, 3, M(120m), M(10m), M(0m), M(45m)),
+                new("A_LA_CARTE", false, 2, M(109m), M(0m), M(36m)),
+                new("A_LA_CARTE", true, 1, M(22m), M(0m), M(22m), M(22m)),
+            ],
+            [new("A_LA_CARTE", "PIX", false, 1, M(73m))],
+            [],
+            M(0m),
+            M(0m)));
+
+        f.SiteSoldTotal.ShouldBe(M(45m));
+        f.TotalSold.ShouldBe(M(229m));
+        var aLaCarte = f.ByOrderType.Single(l => l.Key == "A_LA_CARTE");
+        aLaCarte.Count.ShouldBe(2);
+        aLaCarte.Sold.ShouldBe(M(109m));
+        aLaCarte.Received.ShouldBe(M(73m));
+        aLaCarte.Pending.ShouldBe(M(36m));
+        DailyClosing.Finalize(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), new DateOnly(2026, 11, 22), f, M(0m), null, Guid.NewGuid(), Guid.NewGuid, DateTimeOffset.UnixEpoch)
+            .SiteSoldTotal.ShouldBe(M(45m));
     }
 }

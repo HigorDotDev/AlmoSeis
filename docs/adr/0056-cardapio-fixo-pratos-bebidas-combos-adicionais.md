@@ -95,3 +95,8 @@ O catálogo atual não serve como está: `MarmitaSize` é global com um preço, 
 - A disponibilidade derivada precisa de teste: pausar a batata pausa os dois combos que a usam e nenhum outro.
 - O `OrderItemResolver` ganha um resolvedor para o cardápio fixo, sem ler cardápio `DAILY` (ADR-0058).
 - Revisitar limites de adicionais, combo variável e pizza meio a meio depois do piloto.
+
+## Complemento (2026-11-22, EP-003 fatia 3: contrato do pedido à la carte)
+
+- **Item 24, status do `ProductUnavailable`:** o texto acima dizia `409 ProductUnavailable`, mas o catálogo de erros (`06-contratos-api.md` §6.1) e a marmita já usam **`422 ProductUnavailable`**. Vale o do 06: incluir num pedido um item do cardápio fixo pausado, inativo ou fora de venda pela pausa derivada (combo com um componente pausado) responde `422 ProductUnavailable`, com o `detail` dizendo o que falta ("X-Burguer + batata + refri está indisponível. Pausado: Batata frita P."). O critério 2 da fatia 3 do EP-003 segue este complemento.
+- **Componente no pedido:** o pedido diz as escolhas de cada componente do combo pelo `id` do componente (`parts[].comboComponentId`), que a porta `IFixedMenuReader` passa a expor.

@@ -13,20 +13,45 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AlmoSeis.Modules.Ordering.Application;
 
+/// Onde os itens entram: a data do cardápio do dia, a tabela de preço, a modalidade e, em `POST /orders/{id}/items`, os
+/// itens já gravados (o pai de um adicional incluído depois).
+internal sealed record ItemResolution(DateOnly BusinessDate, PriceList PriceList, OrderType OrderType, IReadOnlyList<OrderItem>? Existing = null);
+
 /// Transforma os itens do corpo em `NewItem` com preço, nome e composição do catálogo e do cardápio do dia
-/// (ADR-0020). Nada de preço ou nome vem do cliente. O preço sai da tabela do pedido (ADR-0057): `SITE` usa o preço de
-/// site de quem vende no site (tamanho de marmita, bebida) e o de balcão no resto (Q-309); adicional, o mesmo (Q-308).
-internal sealed class OrderItemResolver(ICatalogReader catalog, IMenuReader menus)
+/// (ADR-0020), ou do cardápio fixo no pedido `A_LA_CARTE` (ADR-0058). Nada de preço ou nome vem do cliente. O preço sai
+/// da tabela do pedido (ADR-0057): `SITE` usa o preço de site de quem vende no site (tamanho de marmita, bebida, prato,
+/// tamanho de prato, tamanho de bebida, combo) e o de balcão no resto (Q-309); adicional e acréscimo de sabor, o mesmo (Q-308).
+internal sealed class OrderItemResolver(ICatalogReader catalog, IMenuReader menus, IFixedMenuReader fixedMenu)
 {
     public async Task<IReadOnlyList<NewItem>> ResolveAsync(
-        IReadOnlyList<OrderItemInput> inputs, DateOnly businessDate, PriceList priceList, CancellationToken cancellationToken)
+        IReadOnlyList<OrderItemInput> inputs, ItemResolution context, CancellationToken cancellationToken)
     {
+        // Um tipo por pedido (Q-317, ADR-0058 item 3): o item de outra modalidade é recusado antes de ler cardápio.
+        for (var i = 0; i < inputs.Count; i++)
+        {
+            var kind = inputs[i].ItemKind;
+            var fits = inputs[i].ParentOrderItemId is null
+                ? Order.KindFits(context.OrderType, kind)
+                : kind == (context.OrderType == OrderType.ALaCarte ? OrderItemKind.GroupAddon : OrderItemKind.Addon);
+            if (!fits)
+            {
+                throw BusinessException.Validation($"items[{i}].itemKind", Order.KindMismatchMessage);
+            }
+        }
+
+        if (context.OrderType == OrderType.ALaCarte)
+        {
+            return new FixedMenuItems(await fixedMenu.LoadAsync(cancellationToken), context).Resolve(inputs);
+        }
+
         var productIds = inputs
             .SelectMany(i => (i.MainDishProductIds ?? []).Concat(i.SideDishProductIds ?? []).Concat((i.Addons ?? []).Select(a => a.ProductId)))
             .Concat(inputs.Where(i => i.ProductId is not null).Select(i => i.ProductId!.Value))
             .Distinct()
             .ToList();
         var products = await catalog.GetProductsAsync(productIds, cancellationToken);
+        var businessDate = context.BusinessDate;
+        var priceList = context.PriceList;
 
         var marmitaMenu = inputs.Any(i => i.ItemKind == OrderItemKind.Marmita)
             ? await DailyMenuAsync(MenuType.Marmita, businessDate, cancellationToken)
@@ -239,11 +264,13 @@ internal sealed class OrderNumberGenerator(AppDbContext db, ITenantContext tenan
 internal static class OrderRules
 {
     /// Módulo de cada modalidade (ADR-0054 item 12). A pergunta é sempre pelo módulo, nunca pelo comportamento.
-    public static TenantModule ModuleOf(OrderType orderType) => orderType switch
+    /// `A_LA_CARTE`: comanda no salão → `A_LA_CARTE`; entrega e retirada → `DELIVERY` (ADR-0058 item 1).
+    public static TenantModule ModuleOf(OrderType orderType, FulfillmentType fulfillmentType = FulfillmentType.DineIn) => orderType switch
     {
         OrderType.Marmita => TenantModule.Marmita,
         OrderType.Pf => TenantModule.Pf,
         OrderType.Kilo => TenantModule.Kilo,
+        OrderType.ALaCarte => fulfillmentType == FulfillmentType.DineIn ? TenantModule.ALaCarte : TenantModule.Delivery,
         _ => throw new ArgumentOutOfRangeException(nameof(orderType), orderType, null),
     };
 
@@ -306,17 +333,26 @@ internal sealed class OrderDtoBuilder(IEmployeeDirectory employees, IOrderPaymen
         AuthorDto Author(Guid id) => new(id, names.GetValueOrDefault(id, string.Empty));
         AuthorDto? MaybeAuthor(Guid? id) => id is { } value ? Author(value) : null;
 
+        // Árvore do pedido (ADR-0058 item 9): primeiro nível → `addons` (ADDON/GROUP_ADDON) e, no COMBO, `parts`
+        // (COMBO_PART, cada uma com os seus `addons`).
+        IEnumerable<OrderItem> ChildrenOf(OrderItem parent) =>
+            active.Where(a => a.ParentOrderItemId == parent.Id).OrderBy(a => a.CreatedAt).ThenBy(a => a.Id);
+
+        OrderItemDto Item(OrderItem i) => new(
+            i.Id, i.ItemKind, i.MarmitaSizeId, i.ProductId, i.DishId, i.DishSizeId, i.BeverageSizeId, i.BeverageFlavorId, i.ComboId,
+            i.DisplayName, i.SizeNameSnapshot, i.FlavorNameSnapshot, i.CompositionSnapshot,
+            i.Components.OrderBy(c => c.Role).Select(c => new OrderItemComponentDto(c.ProductId, c.Role, c.NameSnapshot)).ToList(),
+            i.Quantity, i.UnitPrice, i.LineTotal, i.RequiresPreparation, i.Notes,
+            ChildrenOf(i).Where(a => a.ItemKind is OrderItemKind.Addon or OrderItemKind.GroupAddon)
+                .Select(a => new OrderAddonDto(a.Id, a.ItemKind, a.ProductId, a.AddonOptionId, a.DisplayName, a.Quantity, a.UnitPrice, a.LineTotal,
+                    a.RequiresPreparation, a.Notes, a.CreatedAt, MaybeAuthor(a.CreatedByEmployeeId)))
+                .ToList(),
+            ChildrenOf(i).Where(p => p.ItemKind == OrderItemKind.ComboPart).Select(Item).ToList(),
+            i.CreatedAt, MaybeAuthor(i.CreatedByEmployeeId));
+
         var items = active.Where(i => i.ParentOrderItemId is null)
             .OrderBy(i => i.CreatedAt).ThenBy(i => i.Id)
-            .Select(i => new OrderItemDto(
-                i.Id, i.ItemKind, i.MarmitaSizeId, i.ProductId, i.NameSnapshot, i.CompositionSnapshot,
-                i.Components.OrderBy(c => c.Role).Select(c => new OrderItemComponentDto(c.ProductId, c.Role, c.NameSnapshot)).ToList(),
-                i.Quantity, i.UnitPrice, i.LineTotal, i.RequiresPreparation, i.Notes,
-                active.Where(a => a.ParentOrderItemId == i.Id).OrderBy(a => a.CreatedAt).ThenBy(a => a.Id)
-                    .Select(a => new OrderAddonDto(a.Id, a.ItemKind, a.ProductId!.Value, a.NameSnapshot, a.Quantity, a.UnitPrice, a.LineTotal,
-                        a.RequiresPreparation, a.Notes, a.CreatedAt, MaybeAuthor(a.CreatedByEmployeeId)))
-                    .ToList(),
-                i.CreatedAt, MaybeAuthor(i.CreatedByEmployeeId)))
+            .Select(Item)
             .ToList();
 
         var customer = order.CustomerId is not null || order.CustomerName is not null

@@ -9,6 +9,9 @@ public enum OrderType
     Marmita,
     Pf,
     Kilo,
+
+    /// Cardápio fixo (EP-003, ADR-0058): comanda no salão, entrega ou retirada. Só itens do cardápio fixo.
+    ALaCarte,
 }
 
 public enum OrderOrigin
@@ -91,6 +94,23 @@ public enum OrderItemKind
     Pf,
     Beverage,
     Addon,
+
+    // Cardápio fixo (EP-003, ADR-0058 item 8): só em pedido `A_LA_CARTE`.
+
+    /// Prato avulso, com o tamanho quando o prato tem tamanho.
+    FixedDish,
+
+    /// Bebida avulsa: tamanho + acréscimo do sabor. Nunca vai à cozinha.
+    FixedBeverage,
+
+    /// O combo: preço fechado; não aparece na cozinha.
+    Combo,
+
+    /// Componente do combo, filho do `COMBO`: `0.00`, salvo o acréscimo do sabor.
+    ComboPart,
+
+    /// Opção de grupo de adicionais, filha de `FIXED_DISH` ou de uma parte de prato do combo.
+    GroupAddon,
 }
 
 public enum ComponentRole
@@ -128,10 +148,12 @@ public sealed record OrderCustomerDto(Guid? Id, string Name, string? PhoneNumber
 
 public sealed record OrderItemComponentDto(Guid ProductId, ComponentRole Role, string Name);
 
+/// `ADDON` (marmita/PF) traz `productId`; `GROUP_ADDON` (cardápio fixo) traz `addonOptionId`.
 public sealed record OrderAddonDto(
     Guid Id,
     OrderItemKind ItemKind,
-    Guid ProductId,
+    Guid? ProductId,
+    Guid? AddonOptionId,
     string Name,
     int Quantity,
     Money UnitPrice,
@@ -141,12 +163,22 @@ public sealed record OrderAddonDto(
     DateTimeOffset CreatedAt,
     AuthorDto? CreatedBy);
 
+/// `name`: o nome de exibição montado do snapshot (nome base + tamanho + " · " + sabor, ADR-0020); `sizeName` e
+/// `flavorName` são os snapshots do tamanho e do sabor (só nos tipos do cardápio fixo). `parts`: só no `COMBO`, com o
+/// mesmo formato (cada parte traz os seus `addons` e `parts: []`).
 public sealed record OrderItemDto(
     Guid Id,
     OrderItemKind ItemKind,
     Guid? MarmitaSizeId,
     Guid? ProductId,
+    Guid? DishId,
+    Guid? DishSizeId,
+    Guid? BeverageSizeId,
+    Guid? BeverageFlavorId,
+    Guid? ComboId,
     string Name,
+    string? SizeName,
+    string? FlavorName,
     string? Composition,
     IReadOnlyList<OrderItemComponentDto> Components,
     int Quantity,
@@ -155,6 +187,7 @@ public sealed record OrderItemDto(
     bool RequiresPreparation,
     string? Notes,
     IReadOnlyList<OrderAddonDto> Addons,
+    IReadOnlyList<OrderItemDto> Parts,
     DateTimeOffset CreatedAt,
     AuthorDto? CreatedBy);
 
@@ -254,7 +287,16 @@ public sealed record OrderSummaryDto(
 
 public sealed record AddonInput(Guid ProductId, int Quantity, string? Notes);
 
-/// Item de `POST /orders` e de `POST /orders/{id}/items`. Preço e nomes nunca vêm do corpo (07 §7.8).
+/// Adicional de grupo do cardápio fixo (ADR-0056 item 17): uma opção, de 1 a 10.
+public sealed record GroupAddonInput(Guid AddonOptionId, int Quantity);
+
+/// Escolhas de um componente do combo (ADR-0058 itens 9 e 10): no prato, adicionais e observação; na bebida, o sabor.
+public sealed record ComboPartInput(Guid ComboComponentId, Guid? BeverageFlavorId, string? Notes, IReadOnlyList<GroupAddonInput>? GroupAddons);
+
+/// Item de `POST /orders` e de `POST /orders/{id}/items`. Preço e nomes nunca vêm do corpo (07 §7.8). Os campos do
+/// cardápio fixo (EP-003, ADR-0058) ficam no fim e são opcionais: `FIXED_DISH` (`dishId`, `dishSizeId`,
+/// `groupAddons`), `FIXED_BEVERAGE` (`beverageSizeId`, `beverageFlavorId`), `COMBO` (`comboId`, `parts`) e, só em
+/// `POST /orders/{id}/items`, `GROUP_ADDON` (`parentOrderItemId`, `addonOptionId`).
 public sealed record OrderItemInput(
     OrderItemKind ItemKind,
     Guid? ParentOrderItemId,
@@ -264,7 +306,15 @@ public sealed record OrderItemInput(
     IReadOnlyList<Guid>? MainDishProductIds,
     IReadOnlyList<Guid>? SideDishProductIds,
     string? Notes,
-    IReadOnlyList<AddonInput>? Addons);
+    IReadOnlyList<AddonInput>? Addons,
+    Guid? DishId = null,
+    Guid? DishSizeId = null,
+    Guid? BeverageSizeId = null,
+    Guid? BeverageFlavorId = null,
+    Guid? ComboId = null,
+    Guid? AddonOptionId = null,
+    IReadOnlyList<GroupAddonInput>? GroupAddons = null,
+    IReadOnlyList<ComboPartInput>? Parts = null);
 
 public sealed record WeighingInput(int WeightGrams);
 

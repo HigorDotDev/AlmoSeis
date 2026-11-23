@@ -63,6 +63,8 @@ internal sealed class OrderingModelConfiguration : IModuleModelConfiguration
             b.Property(x => x.NameSnapshot).HasMaxLength(80);
             b.Property(x => x.CompositionSnapshot).HasMaxLength(500);
             b.Property(x => x.Notes).HasMaxLength(200);
+            b.Property(x => x.SizeNameSnapshot).HasMaxLength(30);
+            b.Property(x => x.FlavorNameSnapshot).HasMaxLength(40);
             b.HasMany(x => x.Components).WithOne().HasForeignKey(c => c.OrderItemId);
             b.Navigation(x => x.Components).UsePropertyAccessMode(PropertyAccessMode.Field);
             // Adicional filho depois do pai (a FK real é composta com o pedido).

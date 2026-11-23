@@ -121,6 +121,7 @@ public sealed record ClosingSummaryDto(
     int OrderCount,
     Money TotalSold,
     Money DeliveryFeesTotal,
+    Money SiteSoldTotal,
     Money TotalReceived,
     Money ReceivedFromPreviousDays,
     Money TotalPending,

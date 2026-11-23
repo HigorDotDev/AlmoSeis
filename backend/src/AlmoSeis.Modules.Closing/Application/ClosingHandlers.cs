@@ -154,6 +154,7 @@ internal sealed class FinalizeClosingHandler(
             closing.Justification,
             closing.NotAcceptedCount,
             closing.AutoRejectedCount,
+            siteSoldTotal = closing.SiteSoldTotal.ToString(),
         });
         return await dtos.FinalAsync(closing, day, cancellationToken);
     }
@@ -302,7 +303,7 @@ internal sealed class ClosingDtoBuilder(AppDbContext db, IEmployeeDirectory empl
     public async Task<ClosingSummaryDto> LiveAsync(
         BusinessDay day, ClosingFigures f, IReadOnlyList<ClosingAdjustment> adjustments, DateTimeOffset now, CancellationToken cancellationToken) =>
         new(
-            Day(day), false, null, now, f.OrderCount, f.TotalSold, f.DeliveryFeesTotal, f.TotalReceived, f.ReceivedFromPreviousDays, f.TotalPending,
+            Day(day), false, null, now, f.OrderCount, f.TotalSold, f.DeliveryFeesTotal, f.SiteSoldTotal, f.TotalReceived, f.ReceivedFromPreviousDays, f.TotalPending,
             new CountTotalDto(f.CanceledCount, f.CanceledTotal), new CountTotalDto(f.ReversedCount, f.ReversedTotal),
             new WebOrdersSummaryDto(f.AwaitingAcceptanceCount, 0, f.NotAcceptedCount), f.UnmarkedDeliveryCount,
             f.ByOrderType.Select(l => new OrderTypeLineDto(l.Key, l.Count, l.Sold, l.Received, l.Pending, l.Reversed)).ToList(),
@@ -318,11 +319,14 @@ internal sealed class ClosingDtoBuilder(AppDbContext db, IEmployeeDirectory empl
         Money M(Money? m) => m ?? Money.Zero;
 
         return new ClosingSummaryDto(
-            Day(day), true, c.Id, c.ClosedAt, c.OrderCount, c.TotalSold, c.DeliveryFeesTotal, c.TotalReceived, c.ReceivedFromPreviousDays,
+            Day(day), true, c.Id, c.ClosedAt, c.OrderCount, c.TotalSold, c.DeliveryFeesTotal, c.SiteSoldTotal, c.TotalReceived, c.ReceivedFromPreviousDays,
             c.TotalPending, new CountTotalDto(c.CanceledCount, c.CanceledTotal), new CountTotalDto(c.ReversedCount, c.ReversedTotal),
             new WebOrdersSummaryDto(0, c.AutoRejectedCount, c.NotAcceptedCount), c.UnmarkedDeliveryCount,
-            ClosingCalculator.OrderTypes.Select(t => c.Lines.Single(l => l.Dimension == ClosingDimension.OrderType && l.Key == t))
-                .Select(l => new OrderTypeLineDto(l.Key, l.Count, M(l.Sold), l.Received, M(l.Pending), l.Reversed)).ToList(),
+            // Fechamento anterior à 0010 não tem a linha `A_LA_CARTE`: vai zerada, como as chaves de sempre.
+            ClosingCalculator.OrderTypes.Select(t => c.Lines.SingleOrDefault(l => l.Dimension == ClosingDimension.OrderType && l.Key == t) is { } l
+                    ? new OrderTypeLineDto(l.Key, l.Count, M(l.Sold), l.Received, M(l.Pending), l.Reversed)
+                    : new OrderTypeLineDto(t, 0, Money.Zero, Money.Zero, Money.Zero, Money.Zero))
+                .ToList(),
             ClosingCalculator.PaymentMethods.Select(m => c.Lines.Single(l => l.Dimension == ClosingDimension.PaymentMethod && l.Key == m))
                 .Select(l => new PaymentMethodLineDto(l.Key, l.Count, l.Received, l.Reversed)).ToList(),
             new ClosingCashDto(c.OpeningBalance, c.CashReceived, c.CashReversed, c.Supplies, c.Withdrawals, c.ExpectedCash, c.CountedCash,

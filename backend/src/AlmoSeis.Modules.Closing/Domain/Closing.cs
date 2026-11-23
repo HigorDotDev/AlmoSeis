@@ -58,6 +58,9 @@ internal sealed class DailyClosing : Entity, ITenantOwned, ISyncTracked
     public int OrderCount { get; private set; }
     public Money TotalSold { get; private set; }
     public Money DeliveryFeesTotal { get; private set; }
+
+    /// "Vendido pelo site" (ADR-0057 item 12): pedidos `SITE` ativos e aceitos, parte do `TotalSold`. Só informativo.
+    public Money SiteSoldTotal { get; private set; }
     public Money TotalReceived { get; private set; }
     public Money ReceivedFromPreviousDays { get; private set; }
     public Money TotalPending { get; private set; }
@@ -110,6 +113,7 @@ internal sealed class DailyClosing : Entity, ITenantOwned, ISyncTracked
             OrderCount = f.OrderCount,
             TotalSold = f.TotalSold,
             DeliveryFeesTotal = f.DeliveryFeesTotal,
+            SiteSoldTotal = f.SiteSoldTotal,
             TotalReceived = f.TotalReceived,
             ReceivedFromPreviousDays = f.ReceivedFromPreviousDays,
             TotalPending = f.TotalPending,
@@ -227,7 +231,8 @@ internal enum ClosingDimension
 // ---------- Cálculo (04 §4.9) ----------
 
 /// Somas vindas do banco, por bloco. Chaves de texto: o Closing não referencia Ordering nem Payments (07 §7.1).
-internal sealed record OrderTotalsRow(string OrderType, bool Canceled, int Count, Money Sold, Money DeliveryFees, Money Pending);
+/// `SiteSold`: a parte de `Sold` com `price_list = 'SITE'` (ADR-0057 item 12).
+internal sealed record OrderTotalsRow(string OrderType, bool Canceled, int Count, Money Sold, Money DeliveryFees, Money Pending, Money SiteSold = default);
 
 internal sealed record PaymentTotalsRow(string OrderType, string PaymentMethod, bool FromPreviousDay, int Count, Money Amount);
 
@@ -271,12 +276,14 @@ internal sealed record ClosingFigures(
     Money ExpectedCash,
     int AwaitingAcceptanceCount,
     int NotAcceptedCount,
-    int UnmarkedDeliveryCount);
+    int UnmarkedDeliveryCount,
+    Money SiteSoldTotal);
 
 /// **Única** implementação das fórmulas do fechamento, usada pelo resumo parcial e pela finalização (07 §7.9).
 internal static class ClosingCalculator
 {
-    public static readonly string[] OrderTypes = ["MARMITA", "PF", "KILO"];
+    /// Uma linha por modalidade, sempre as quatro (EP-003: `A_LA_CARTE` numa linha só, Q-311).
+    public static readonly string[] OrderTypes = ["MARMITA", "PF", "KILO", "A_LA_CARTE"];
     public static readonly string[] PaymentMethods = ["CASH", "PIX", "CARD"];
 
     public static ClosingFigures Compute(ClosingInputs i)
@@ -328,6 +335,7 @@ internal static class ClosingCalculator
             expected,
             counts.AwaitingAcceptance,
             counts.NotAccepted,
-            counts.UnmarkedDeliveries);
+            counts.UnmarkedDeliveries,
+            Money.Sum(active.Select(o => o.SiteSold)));
     }
 }

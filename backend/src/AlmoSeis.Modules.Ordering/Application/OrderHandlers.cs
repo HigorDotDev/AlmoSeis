@@ -37,7 +37,7 @@ internal sealed class CreateOrderHandler(
     public async Task<OrderDto> HandleAsync(CreateOrderCommand command, CancellationToken cancellationToken)
     {
         // Modalidade de um módulo ausente → 403 ModuleNotEnabled, antes do expediente (ADR-0054 item 14).
-        await modules.EnsureAsync(OrderRules.ModuleOf(command.OrderType), cancellationToken);
+        await modules.EnsureAsync(OrderRules.ModuleOf(command.OrderType, command.FulfillmentType), cancellationToken);
         var day = await businessDays.GetOpenAsync(cancellationToken) ?? throw new BusinessException(ErrorCodes.BusinessDayRequired);
         var config = await settings.GetAsync(cancellationToken);
 
@@ -54,7 +54,7 @@ internal sealed class CreateOrderHandler(
         }
 
         var weighings = OrderRules.Weighings(command.Weighings ?? [], config.KiloPricePerKg);
-        var resolvedItems = await items.ResolveAsync(command.Items, day.BusinessDate, PriceList.Counter, cancellationToken);
+        var resolvedItems = await items.ResolveAsync(command.Items, new ItemResolution(day.BusinessDate, PriceList.Counter, command.OrderType), cancellationToken);
         var customer = await customers.ResolveAsync(command, cancellationToken);
         var number = await numbers.NextAsync(day.BusinessDate, cancellationToken);
 
@@ -150,14 +150,15 @@ internal sealed class AddOrderItemsHandler(
         order.EnsureVersion(concurrency.ExpectedVersion);
 
         // O cardápio é o da data do pedido, não o de hoje; a tabela de preço é a do pedido (ADR-0057 item 8, Q-309).
-        var specs = await resolver.ResolveAsync(command.Request.Items, order.BusinessDate, order.PriceList, cancellationToken);
+        var specs = await resolver.ResolveAsync(
+            command.Request.Items, new ItemResolution(order.BusinessDate, order.PriceList, order.OrderType, order.Items), cancellationToken);
         var added = order.AddItems(specs, tenant.EmployeeId!.Value, ids.New, time.GetUtcNow());
 
         foreach (var item in added)
         {
             audit.Add("OrderItemAdded", order.SyncEntityType, order.Id, order.Id, after: new
             {
-                itemId = item.Id, name = item.NameSnapshot, item.Quantity, lineTotal = item.LineTotal.ToString(), orderTotal = order.TotalAmount.ToString(),
+                itemId = item.Id, name = item.DisplayName, item.Quantity, lineTotal = item.LineTotal.ToString(), orderTotal = order.TotalAmount.ToString(),
             });
         }
 
@@ -181,7 +182,7 @@ internal sealed class UpdateOrderItemHandler(
         order.EnsureVersion(concurrency.ExpectedVersion);
 
         var item = order.Items.SingleOrDefault(i => i.Id == command.ItemId) ?? throw new NotFoundException("ORDER_ITEM", command.ItemId);
-        var before = new { itemId = item.Id, name = item.NameSnapshot, item.Quantity, item.Notes, lineTotal = item.LineTotal.ToString(), orderTotal = order.TotalAmount.ToString() };
+        var before = new { itemId = item.Id, name = item.DisplayName, item.Quantity, item.Notes, lineTotal = item.LineTotal.ToString(), orderTotal = order.TotalAmount.ToString() };
         var version = order.Version;
         order.ChangeItem(command.ItemId, command.Changes.Quantity, command.Changes.Notes, tenant.EmployeeId!.Value, ids.New, time.GetUtcNow());
 
@@ -189,7 +190,7 @@ internal sealed class UpdateOrderItemHandler(
         {
             audit.Add("OrderItemChanged", order.SyncEntityType, order.Id, order.Id, before, new
             {
-                itemId = item.Id, name = item.NameSnapshot, item.Quantity, item.Notes, lineTotal = item.LineTotal.ToString(), orderTotal = order.TotalAmount.ToString(),
+                itemId = item.Id, name = item.DisplayName, item.Quantity, item.Notes, lineTotal = item.LineTotal.ToString(), orderTotal = order.TotalAmount.ToString(),
             });
         }
 
@@ -216,7 +217,7 @@ internal sealed class RemoveOrderItemHandler(
         order.RemoveItem(command.ItemId, tenant.EmployeeId!.Value, ids.New, time.GetUtcNow());
 
         audit.Add("OrderItemRemoved", order.SyncEntityType, order.Id, order.Id,
-            before: new { itemId = item.Id, name = item.NameSnapshot, item.Quantity, lineTotal = item.LineTotal.ToString() },
+            before: new { itemId = item.Id, name = item.DisplayName, item.Quantity, lineTotal = item.LineTotal.ToString() },
             after: new { orderTotal = order.TotalAmount.ToString() });
         return await dtos.BuildAsync(order, cancellationToken);
     }
@@ -460,11 +461,11 @@ internal sealed class GetProductionBoardQueryHandler(AppDbContext db, IBusinessD
         var board = orders.Select(o =>
         {
             var active = o.Items.Where(i => i.Status == LineStatus.Active).ToList();
-            var items = active.Where(i => i.ParentOrderItemId is null).OrderBy(i => i.CreatedAt).ThenBy(i => i.Id)
-                .Select(i => new ProductionItemDto(
-                    i.Id, i.NameSnapshot, i.CompositionSnapshot, i.Quantity, i.Notes, i.RequiresPreparation,
-                    active.Where(a => a.ParentOrderItemId == i.Id).Select(a => new ProductionAddonDto(a.Id, a.NameSnapshot, a.Quantity, a.Notes)).ToList()))
-                .ToList();
+            var items = o.OrderType == OrderType.ALaCarte
+                ? KitchenLines(active)
+                : active.Where(i => i.ParentOrderItemId is null).OrderBy(i => i.CreatedAt).ThenBy(i => i.Id)
+                    .Select(i => Line(active, i, i.Quantity))
+                    .ToList();
             return (Status: o.ProductionStatus!.Value, Dto: new ProductionOrderDto(
                 o.Id, o.Version, o.OrderNumber!.Value, o.OrderType, o.Origin, o.FulfillmentType, o.FulfillmentStatus, o.Label, o.Notes, o.IsPaid,
                 o.CreatedAt, o.AcceptedAt ?? o.CreatedAt, items, counts.GetValueOrDefault(o.Id)));
@@ -475,6 +476,34 @@ internal sealed class GetProductionBoardQueryHandler(AppDbContext db, IBusinessD
             s => (IReadOnlyList<ProductionOrderDto>)board.Where(b => b.Status == s).Select(b => b.Dto).ToList());
         return new ProductionBoardDto(day.Id, groups);
     }
+
+    /// À la carte (ADR-0058 itens 11 e 12, RN-311.2): lista normal com os pratos avulsos e as partes de prato dos
+    /// combos que têm preparo, com os adicionais e a observação; sem a linha do combo e sem bebidas. A quantidade da
+    /// parte é a de pratos a fazer (parte × combo); a do adicional, por unidade do prato, como na marmita.
+    private static List<ProductionItemDto> KitchenLines(List<OrderItem> active)
+    {
+        IEnumerable<OrderItem> Ordered(IEnumerable<OrderItem> items) => items.OrderBy(i => i.CreatedAt).ThenBy(i => i.Id);
+        var lines = new List<ProductionItemDto>();
+        foreach (var top in Ordered(active.Where(i => i.ParentOrderItemId is null)))
+        {
+            if (top.ItemKind == OrderItemKind.FixedDish && top.RequiresPreparation)
+            {
+                lines.Add(Line(active, top, top.Quantity));
+            }
+            else if (top.ItemKind == OrderItemKind.Combo)
+            {
+                lines.AddRange(Ordered(active.Where(p => p.ParentOrderItemId == top.Id && p.RequiresPreparation))
+                    .Select(part => Line(active, part, part.Quantity * top.Quantity)));
+            }
+        }
+
+        return lines;
+    }
+
+    private static ProductionItemDto Line(List<OrderItem> active, OrderItem item, int quantity) => new(
+        item.Id, item.DisplayName, item.CompositionSnapshot, quantity, item.Notes, item.RequiresPreparation,
+        active.Where(a => a.ParentOrderItemId == item.Id).OrderBy(a => a.CreatedAt).ThenBy(a => a.Id)
+            .Select(a => new ProductionAddonDto(a.Id, a.DisplayName, a.Quantity, a.Notes)).ToList());
 }
 
 /// GET /orders/{id}/history: a auditoria do pedido, do mais recente ao mais antigo. Inclui pagamentos e estornos,

@@ -156,6 +156,14 @@ public sealed class EstablishmentBehaviorTests
     public void Each_order_type_belongs_to_a_module(OrderType orderType, TenantModule module) =>
         OrderRules.ModuleOf(orderType).ShouldBe(module);
 
+    /// ADR-0058 item 1: comanda no salão → `A_LA_CARTE`; entrega e retirada → `DELIVERY`.
+    [Theory]
+    [InlineData(FulfillmentType.DineIn, TenantModule.ALaCarte)]
+    [InlineData(FulfillmentType.Delivery, TenantModule.Delivery)]
+    [InlineData(FulfillmentType.Pickup, TenantModule.Delivery)]
+    public void A_la_carte_module_depends_on_the_fulfillment(FulfillmentType fulfillment, TenantModule module) =>
+        OrderRules.ModuleOf(OrderType.ALaCarte, fulfillment).ShouldBe(module);
+
     [Fact]
     public async Task Missing_module_is_403_with_the_module_extension()
     {

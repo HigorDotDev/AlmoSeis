@@ -282,8 +282,9 @@ public sealed record FixedMenuBeverageSize(
     bool IsSellable,
     IReadOnlyDictionary<Guid, FixedMenuBeverageFlavor> Flavors);
 
+/// `Id`: o componente, que o pedido usa para dizer as escolhas de cada parte (`parts[].comboComponentId`).
 public sealed record FixedMenuComboComponent(
-    ComboComponentKind Kind, Guid? DishId, Guid? DishSizeId, Guid? BeverageSizeId, int Quantity, string Name, bool IsSellable);
+    Guid Id, ComboComponentKind Kind, Guid? DishId, Guid? DishSizeId, Guid? BeverageSizeId, int Quantity, string Name, bool IsSellable);
 
 public sealed record FixedMenuCombo(Guid Id, string Name, FixedMenuPrice Price, bool IsSellable, IReadOnlyList<FixedMenuComboComponent> Components);
 

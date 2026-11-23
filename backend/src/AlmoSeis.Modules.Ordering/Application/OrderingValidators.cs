@@ -35,6 +35,84 @@ internal sealed class OrderItemInputValidator : AbstractValidator<OrderItemInput
             a.RuleFor(x => x.Quantity).InclusiveBetween(1, 99).WithMessage("A quantidade deve estar entre 1 e 99.");
             a.RuleFor(x => x.Notes).MaximumLength(200);
         });
+
+        // Cardápio fixo (ADR-0058 item 8): cada tipo só com os seus campos. Disponibilidade, tamanho, sabor e grupo do
+        // adicional dependem do cardápio e ficam no resolvedor.
+        var fixedKinds = new[] { OrderItemKind.FixedDish, OrderItemKind.FixedBeverage, OrderItemKind.Combo, OrderItemKind.GroupAddon };
+        RuleFor(x => x.ItemKind).NotEqual(OrderItemKind.ComboPart).WithMessage("As partes do combo vão em parts.");
+        When(x => fixedKinds.Contains(x.ItemKind), () =>
+        {
+            RuleFor(x => x.ProductId).Null().WithMessage("Item do cardápio fixo não usa productId.");
+            RuleFor(x => x.MarmitaSizeId).Null();
+            RuleFor(x => x.MainDishProductIds).Must(l => l is null || l.Count == 0);
+            RuleFor(x => x.SideDishProductIds).Must(l => l is null || l.Count == 0);
+            RuleFor(x => x.Addons).Must(l => l is null || l.Count == 0).WithMessage("Use groupAddons nos itens do cardápio fixo.");
+        });
+        When(x => !fixedKinds.Contains(x.ItemKind), () =>
+        {
+            RuleFor(x => x).Must(x => x.DishId is null && x.DishSizeId is null && x.BeverageSizeId is null && x.BeverageFlavorId is null
+                    && x.ComboId is null && x.AddonOptionId is null && (x.GroupAddons is null || x.GroupAddons.Count == 0)
+                    && (x.Parts is null || x.Parts.Count == 0))
+                .WithMessage("Campos do cardápio fixo só em itens do cardápio fixo.").OverridePropertyName("itemKind");
+        });
+        When(x => x.ItemKind == OrderItemKind.FixedDish, () =>
+        {
+            RuleFor(x => x.DishId).NotNull().WithMessage("Escolha o prato.");
+            RuleFor(x => new { x.BeverageSizeId, x.BeverageFlavorId, x.ComboId, x.AddonOptionId })
+                .Must(r => r.BeverageSizeId is null && r.BeverageFlavorId is null && r.ComboId is null && r.AddonOptionId is null)
+                .WithMessage("Prato avulso usa dishId, dishSizeId e groupAddons.").OverridePropertyName("itemKind");
+            RuleFor(x => x.Parts).Must(l => l is null || l.Count == 0);
+        });
+        When(x => x.ItemKind == OrderItemKind.FixedBeverage, () =>
+        {
+            RuleFor(x => x.BeverageSizeId).NotNull().WithMessage("Escolha a bebida.");
+            RuleFor(x => new { x.DishId, x.DishSizeId, x.ComboId, x.AddonOptionId })
+                .Must(r => r.DishId is null && r.DishSizeId is null && r.ComboId is null && r.AddonOptionId is null)
+                .WithMessage("Bebida usa beverageSizeId e beverageFlavorId.").OverridePropertyName("itemKind");
+            RuleFor(x => x.GroupAddons).Must(l => l is null || l.Count == 0).WithMessage("Bebida não tem adicionais.");
+            RuleFor(x => x.Parts).Must(l => l is null || l.Count == 0);
+        });
+        When(x => x.ItemKind == OrderItemKind.Combo, () =>
+        {
+            RuleFor(x => x.ComboId).NotNull().WithMessage("Escolha o combo.");
+            RuleFor(x => new { x.DishId, x.DishSizeId, x.BeverageSizeId, x.BeverageFlavorId, x.AddonOptionId })
+                .Must(r => r.DishId is null && r.DishSizeId is null && r.BeverageSizeId is null && r.BeverageFlavorId is null && r.AddonOptionId is null)
+                .WithMessage("Combo usa comboId e parts.").OverridePropertyName("itemKind");
+            RuleFor(x => x.Notes).Null().WithMessage("A observação vai em cada prato do combo (parts[].notes).");
+            RuleFor(x => x.GroupAddons).Must(l => l is null || l.Count == 0).WithMessage("Os adicionais vão em cada prato do combo (parts[].groupAddons).");
+            RuleForEach(x => x.Parts).ChildRules(p =>
+            {
+                p.RuleFor(x => x.ComboComponentId).NotEmpty().WithMessage("Informe o componente do combo.");
+                p.RuleFor(x => x.Notes).MaximumLength(200);
+                p.RuleForEach(x => x.GroupAddons).SetValidator(new GroupAddonInputValidator());
+            });
+        });
+        When(x => x.ItemKind == OrderItemKind.GroupAddon, () =>
+        {
+            RuleFor(x => x.ParentOrderItemId).NotNull().WithMessage("Adicional de grupo vai num prato do pedido.");
+            RuleFor(x => x.AddonOptionId).NotNull().WithMessage("Escolha o adicional.");
+            RuleFor(x => x.Quantity).InclusiveBetween(1, GroupAddonInputValidator.MaxQuantity).WithMessage(GroupAddonInputValidator.QuantityMessage);
+            RuleFor(x => new { x.DishId, x.DishSizeId, x.BeverageSizeId, x.BeverageFlavorId, x.ComboId })
+                .Must(r => r.DishId is null && r.DishSizeId is null && r.BeverageSizeId is null && r.BeverageFlavorId is null && r.ComboId is null)
+                .WithMessage("Adicional de grupo usa parentOrderItemId e addonOptionId.").OverridePropertyName("itemKind");
+            RuleFor(x => x.Notes).Null().WithMessage("A observação vai no prato.");
+            RuleFor(x => x.GroupAddons).Must(l => l is null || l.Count == 0);
+            RuleFor(x => x.Parts).Must(l => l is null || l.Count == 0);
+        });
+        RuleForEach(x => x.GroupAddons).SetValidator(new GroupAddonInputValidator());
+    }
+}
+
+/// ADR-0056 item 19: qualquer quantidade de 1 a 10 por opção, sem mínimo nem máximo por grupo nesta fase.
+internal sealed class GroupAddonInputValidator : AbstractValidator<GroupAddonInput>
+{
+    public const int MaxQuantity = 10;
+    public const string QuantityMessage = "A quantidade do adicional deve estar entre 1 e 10.";
+
+    public GroupAddonInputValidator()
+    {
+        RuleFor(x => x.AddonOptionId).NotEmpty().WithMessage("Escolha o adicional.");
+        RuleFor(x => x.Quantity).InclusiveBetween(1, MaxQuantity).WithMessage(QuantityMessage);
     }
 }
 

@@ -130,7 +130,7 @@ Conflito de versão (`409`) traz o estado atual em `current` (ADR-0034):
 | 422 | `PaymentExceedsBalance` | valor maior que o saldo (ADR-0021) |
 | 422 | `TotalBelowPaidAmount` | edição deixaria o total abaixo do já pago (ADR-0007) |
 | 422 | `PaymentMethodDisabled` | forma de pagamento desabilitada no estabelecimento |
-| 422 | `ProductUnavailable` | produto inativo, indisponível ou fora do cardápio do dia (o `detail` diz qual: "Costela não está disponível no cardápio de hoje.") |
+| 422 | `ProductUnavailable` | produto inativo, indisponível ou fora do cardápio do dia (o `detail` diz qual: "Costela não está disponível no cardápio de hoje."); no pedido à la carte, item do cardápio fixo inativo ou pausado, inclusive pela pausa derivada do combo ("X-Burguer + batata + refri está indisponível. Pausado: Batata frita P.", EP-003, ADR-0056 item 24) |
 | 422 | `KiloPriceNotConfigured` | pesagem sem preço do quilo configurado |
 | 422 | `JustificationRequired` | fechamento com diferença ≠ 0 sem justificativa |
 | 423 | `PinLocked` | PIN bloqueado (extensão `lockedUntil`) |
@@ -1556,7 +1556,14 @@ Fiado (`pendingAmount`, `pendingOrderCount` e `pending-orders`) só considera pe
       "itemKind": "MARMITA",
       "marmitaSizeId": "0192d6a0-0000-7000-8000-000000000202",
       "productId": null,
+      "dishId": null,
+      "dishSizeId": null,
+      "beverageSizeId": null,
+      "beverageFlavorId": null,
+      "comboId": null,
       "name": "Marmita M",
+      "sizeName": null,
+      "flavorName": null,
       "composition": "Frango grelhado · Arroz, Feijão",
       "components": [
         { "productId": "0192d6a0-0000-7000-8000-000000000101", "role": "MAIN_DISH", "name": "Frango grelhado" },
@@ -1573,6 +1580,7 @@ Fiado (`pendingAmount`, `pendingOrderCount` e `pending-orders`) só considera pe
           "id": "0192d6a0-0000-7000-8000-000000000602",
           "itemKind": "ADDON",
           "productId": "0192d6a0-0000-7000-8000-000000000131",
+          "addonOptionId": null,
           "name": "Ovo frito",
           "quantity": 1,
           "unitPrice": "2.00",
@@ -1583,6 +1591,7 @@ Fiado (`pendingAmount`, `pendingOrderCount` e `pending-orders`) só considera pe
           "createdBy": { "id": "0192d6a0-0000-7000-8000-000000000302", "displayName": "Bruno" }
         }
       ],
+      "parts": [],
       "createdAt": "2026-10-27T11:30:00Z",
       "createdBy": { "id": "0192d6a0-0000-7000-8000-000000000302", "displayName": "Bruno" }
     },
@@ -1591,7 +1600,14 @@ Fiado (`pendingAmount`, `pendingOrderCount` e `pending-orders`) só considera pe
       "itemKind": "BEVERAGE",
       "marmitaSizeId": null,
       "productId": "0192d6a0-0000-7000-8000-000000000121",
+      "dishId": null,
+      "dishSizeId": null,
+      "beverageSizeId": null,
+      "beverageFlavorId": null,
+      "comboId": null,
       "name": "Coca-Cola 350ml",
+      "sizeName": null,
+      "flavorName": null,
       "composition": null,
       "components": [],
       "quantity": 1,
@@ -1600,6 +1616,7 @@ Fiado (`pendingAmount`, `pendingOrderCount` e `pending-orders`) só considera pe
       "requiresPreparation": false,
       "notes": null,
       "addons": [],
+      "parts": [],
       "createdAt": "2026-10-27T11:48:00Z",
       "createdBy": { "id": "0192d6a0-0000-7000-8000-000000000302", "displayName": "Bruno" }
     }
@@ -1644,6 +1661,218 @@ Pedido `KILO`: `productionStatus: null`, e `weighings`:
   { "id": "0192d6a0-0000-7000-8000-000000000612", "weightGrams": 318, "pricePerKg": "59.90", "amount": "19.05", "createdAt": "2026-10-27T12:06:00Z", "createdBy": { "id": "0192d6a0-0000-7000-8000-000000000303", "displayName": "Carla" } }
 ]
 ```
+
+Pedido `A_LA_CARTE` (EP-003 fatia 3, ADR-0058): comanda da mesa 5 com 1 Açaí 500 ml + Granola, 1 lata de Coca-Cola e 2 combos "X-Burguer + batata + refri" com bacon e Coca-Cola Zero. Só os campos que mudam em relação ao exemplo acima:
+
+```json
+{
+  "orderType": "A_LA_CARTE",
+  "origin": "APP",
+  "priceList": "COUNTER",
+  "fulfillmentType": "DINE_IN",
+  "customer": null,
+  "deliveryAddress": null,
+  "tableLabel": "5",
+  "tabNumber": null,
+  "deliveryFee": "0.00",
+  "deliveryFeeSource": null,
+  "itemsTotal": "99.00",
+  "weighingsTotal": "0.00",
+  "totalAmount": "99.00",
+  "productionStatus": "OPEN",
+  "fulfillmentStatus": null,
+  "items": [
+    {
+      "id": "0192d6a0-0000-7000-8000-000000000641",
+      "itemKind": "FIXED_DISH",
+      "marmitaSizeId": null,
+      "productId": null,
+      "dishId": "0192d6a0-0000-7000-8000-000000000d03",
+      "dishSizeId": "0192d6a0-0000-7000-8000-000000000d32",
+      "beverageSizeId": null,
+      "beverageFlavorId": null,
+      "comboId": null,
+      "name": "Açaí 500 ml",
+      "sizeName": "500 ml",
+      "flavorName": null,
+      "composition": null,
+      "components": [],
+      "quantity": 1,
+      "unitPrice": "18.00",
+      "lineTotal": "18.00",
+      "requiresPreparation": true,
+      "notes": "Pouco leite condensado",
+      "addons": [
+        {
+          "id": "0192d6a0-0000-7000-8000-000000000642",
+          "itemKind": "GROUP_ADDON",
+          "productId": null,
+          "addonOptionId": "0192d6a0-0000-7000-8000-000000000e21",
+          "name": "Granola",
+          "quantity": 1,
+          "unitPrice": "2.00",
+          "lineTotal": "2.00",
+          "requiresPreparation": true,
+          "notes": null,
+          "createdAt": "2026-11-22T19:10:00Z",
+          "createdBy": { "id": "0192d6a0-0000-7000-8000-000000000302", "displayName": "Bruno" }
+        }
+      ],
+      "parts": [],
+      "createdAt": "2026-11-22T19:10:00Z",
+      "createdBy": { "id": "0192d6a0-0000-7000-8000-000000000302", "displayName": "Bruno" }
+    },
+    {
+      "id": "0192d6a0-0000-7000-8000-000000000643",
+      "itemKind": "FIXED_BEVERAGE",
+      "marmitaSizeId": null,
+      "productId": null,
+      "dishId": null,
+      "dishSizeId": null,
+      "beverageSizeId": "0192d6a0-0000-7000-8000-000000000f11",
+      "beverageFlavorId": "0192d6a0-0000-7000-8000-000000000f12",
+      "comboId": null,
+      "name": "Refrigerante Lata 350 ml · Coca-Cola",
+      "sizeName": "Lata 350 ml",
+      "flavorName": "Coca-Cola",
+      "composition": null,
+      "components": [],
+      "quantity": 1,
+      "unitPrice": "6.00",
+      "lineTotal": "6.00",
+      "requiresPreparation": false,
+      "notes": null,
+      "addons": [],
+      "parts": [],
+      "createdAt": "2026-11-22T19:10:00Z",
+      "createdBy": { "id": "0192d6a0-0000-7000-8000-000000000302", "displayName": "Bruno" }
+    },
+    {
+      "id": "0192d6a0-0000-7000-8000-000000000644",
+      "itemKind": "COMBO",
+      "marmitaSizeId": null,
+      "productId": null,
+      "dishId": null,
+      "dishSizeId": null,
+      "beverageSizeId": null,
+      "beverageFlavorId": null,
+      "comboId": "0192d6a0-0000-7000-8000-000000000c01",
+      "name": "X-Burguer + batata + refri",
+      "sizeName": null,
+      "flavorName": null,
+      "composition": null,
+      "components": [],
+      "quantity": 2,
+      "unitPrice": "32.00",
+      "lineTotal": "64.00",
+      "requiresPreparation": false,
+      "notes": null,
+      "addons": [],
+      "parts": [
+        {
+          "id": "0192d6a0-0000-7000-8000-000000000645",
+          "itemKind": "COMBO_PART",
+          "marmitaSizeId": null,
+          "productId": null,
+          "dishId": "0192d6a0-0000-7000-8000-000000000d01",
+          "dishSizeId": null,
+          "beverageSizeId": null,
+          "beverageFlavorId": null,
+          "comboId": null,
+          "name": "X-Burguer",
+          "sizeName": null,
+          "flavorName": null,
+          "composition": null,
+          "components": [],
+          "quantity": 1,
+          "unitPrice": "0.00",
+          "lineTotal": "0.00",
+          "requiresPreparation": true,
+          "notes": "Sem cebola",
+          "addons": [
+            {
+              "id": "0192d6a0-0000-7000-8000-000000000646",
+              "itemKind": "GROUP_ADDON",
+              "productId": null,
+              "addonOptionId": "0192d6a0-0000-7000-8000-000000000e11",
+              "name": "Bacon",
+              "quantity": 1,
+              "unitPrice": "4.00",
+              "lineTotal": "8.00",
+              "requiresPreparation": true,
+              "notes": null,
+              "createdAt": "2026-11-22T19:10:00Z",
+              "createdBy": { "id": "0192d6a0-0000-7000-8000-000000000302", "displayName": "Bruno" }
+            }
+          ],
+          "parts": [],
+          "createdAt": "2026-11-22T19:10:00Z",
+          "createdBy": { "id": "0192d6a0-0000-7000-8000-000000000302", "displayName": "Bruno" }
+        },
+        {
+          "id": "0192d6a0-0000-7000-8000-000000000647",
+          "itemKind": "COMBO_PART",
+          "marmitaSizeId": null,
+          "productId": null,
+          "dishId": "0192d6a0-0000-7000-8000-000000000d02",
+          "dishSizeId": "0192d6a0-0000-7000-8000-000000000d21",
+          "beverageSizeId": null,
+          "beverageFlavorId": null,
+          "comboId": null,
+          "name": "Batata frita P",
+          "sizeName": "P",
+          "flavorName": null,
+          "composition": null,
+          "components": [],
+          "quantity": 1,
+          "unitPrice": "0.00",
+          "lineTotal": "0.00",
+          "requiresPreparation": true,
+          "notes": null,
+          "addons": [],
+          "parts": [],
+          "createdAt": "2026-11-22T19:10:00Z",
+          "createdBy": { "id": "0192d6a0-0000-7000-8000-000000000302", "displayName": "Bruno" }
+        },
+        {
+          "id": "0192d6a0-0000-7000-8000-000000000648",
+          "itemKind": "COMBO_PART",
+          "marmitaSizeId": null,
+          "productId": null,
+          "dishId": null,
+          "dishSizeId": null,
+          "beverageSizeId": "0192d6a0-0000-7000-8000-000000000f11",
+          "beverageFlavorId": "0192d6a0-0000-7000-8000-000000000f13",
+          "comboId": null,
+          "name": "Refrigerante Lata 350 ml · Coca-Cola Zero",
+          "sizeName": "Lata 350 ml",
+          "flavorName": "Coca-Cola Zero",
+          "composition": null,
+          "components": [],
+          "quantity": 1,
+          "unitPrice": "0.50",
+          "lineTotal": "1.00",
+          "requiresPreparation": false,
+          "notes": null,
+          "addons": [],
+          "parts": [],
+          "createdAt": "2026-11-22T19:10:00Z",
+          "createdBy": { "id": "0192d6a0-0000-7000-8000-000000000302", "displayName": "Bruno" }
+        }
+      ],
+      "createdAt": "2026-11-22T19:10:00Z",
+      "createdBy": { "id": "0192d6a0-0000-7000-8000-000000000302", "displayName": "Bruno" }
+    }
+  ]
+}
+```
+
+- **Árvore em três níveis** (ADR-0058 item 9, Q-321): no primeiro nível ficam `FIXED_DISH`, `FIXED_BEVERAGE` e `COMBO`. O prato avulso traz os adicionais de grupo em `addons` (`itemKind: "GROUP_ADDON"`, com `addonOptionId` e `productId: null`). O combo traz `addons: []` e as partes em `parts` (`COMBO_PART`, uma por componente, na ordem do combo e no mesmo formato de item), e cada parte de prato traz os seus `GROUP_ADDON`. Fora do `COMBO`, `parts` é sempre `[]`. Nos itens de marmita, PF, bebida e adicional do catálogo, os campos do cardápio fixo (`dishId` a `comboId`, `sizeName`, `flavorName`, `addonOptionId`) são `null`.
+- **Valor:** `lineTotal` = `unitPrice × quantity × quantidade do pai × quantidade do avô`. No exemplo: combo 32,00 × 2 = 64,00; parte 0,00; Bacon 4,00 × 1 × 1 × 2 = 8,00; parte de bebida 0,50 (acréscimo da Coca-Cola Zero) × 1 × 2 = 1,00. A linha do combo soma **73,00**, e `itemsTotal` = 18,00 + 2,00 + 6,00 + 73,00 = **99,00**.
+- **Preço:** o prato custa o preço único ou o do tamanho. A bebida custa o tamanho mais o acréscimo do sabor (Suco 500 ml 9,00 + Laranja com acerola 1,00 = 10,00). O combo tem preço fechado, e a parte custa `0.00`, salvo o acréscimo do sabor da bebida. O adicional de grupo custa o preço da opção, igual em qualquer tamanho. Tudo sai da `priceList` do pedido: no app, sempre `COUNTER` (preço de balcão, no salão e na entrega por telefone, ADR-0058 item 4). O preço de site vale só no pedido da página (`SITE`, fatia 5). Adicional e acréscimo de sabor têm o mesmo preço nas duas tabelas (Q-308).
+- **Snapshot** (ADR-0020): `name` é o nome de exibição montado do snapshot (nome base + `sizeName` + " · " + `flavorName`). `sizeName` e `flavorName` só existem quando há tamanho e sabor. Mudar o cardápio fixo depois não altera o pedido.
+- **Cozinha:** o `requiresPreparation` do prato avulso e da parte de prato vem do prato (`requiresPreparation` do cadastro); o do adicional de grupo, do pai. `COMBO`, `FIXED_BEVERAGE` e a parte de bebida são sempre `false`.
+- `customer` e `deliveryAddress` seguem as regras de hoje: na comanda, `null` (ou o nome avulso); na entrega e na retirada, como na marmita.
 
 ### Pedido do site (ADR-0046)
 
@@ -1701,7 +1930,14 @@ Pedido "pagar na entrega/retirada" enviado pela página, aguardando aceite. A ro
       "itemKind": "MARMITA",
       "marmitaSizeId": "0192d6a0-0000-7000-8000-000000000202",
       "productId": null,
+      "dishId": null,
+      "dishSizeId": null,
+      "beverageSizeId": null,
+      "beverageFlavorId": null,
+      "comboId": null,
       "name": "Marmita M",
+      "sizeName": null,
+      "flavorName": null,
       "composition": "Frango grelhado · Arroz, Feijão",
       "components": [
         { "productId": "0192d6a0-0000-7000-8000-000000000101", "role": "MAIN_DISH", "name": "Frango grelhado" },
@@ -1714,6 +1950,7 @@ Pedido "pagar na entrega/retirada" enviado pela página, aguardando aceite. A ro
       "requiresPreparation": true,
       "notes": null,
       "addons": [],
+      "parts": [],
       "createdAt": "2026-10-27T12:00:00Z",
       "createdBy": null
     }
@@ -1903,9 +2140,76 @@ Quilo:
 }
 ```
 
+À la carte, comanda da mesa (EP-003 fatia 3, ADR-0058). É o pedido do exemplo `A_LA_CARTE` do `Order` acima (R$ 99,00):
+
+```json
+{
+  "orderType": "A_LA_CARTE",
+  "fulfillmentType": "DINE_IN",
+  "customerId": null,
+  "customerName": null,
+  "customerPhone": null,
+  "saveCustomer": false,
+  "customerAddressId": null,
+  "deliveryAddress": null,
+  "deliveryFee": null,
+  "tableLabel": "5",
+  "tabNumber": null,
+  "notes": null,
+  "items": [
+    {
+      "itemKind": "FIXED_DISH",
+      "dishId": "0192d6a0-0000-7000-8000-000000000d03",
+      "dishSizeId": "0192d6a0-0000-7000-8000-000000000d32",
+      "quantity": 1,
+      "notes": "Pouco leite condensado",
+      "groupAddons": [ { "addonOptionId": "0192d6a0-0000-7000-8000-000000000e21", "quantity": 1 } ]
+    },
+    {
+      "itemKind": "FIXED_BEVERAGE",
+      "beverageSizeId": "0192d6a0-0000-7000-8000-000000000f11",
+      "beverageFlavorId": "0192d6a0-0000-7000-8000-000000000f12",
+      "quantity": 1,
+      "notes": null
+    },
+    {
+      "itemKind": "COMBO",
+      "comboId": "0192d6a0-0000-7000-8000-000000000c01",
+      "quantity": 2,
+      "parts": [
+        {
+          "comboComponentId": "0192d6a0-0000-7000-8000-000000000c11",
+          "beverageFlavorId": null,
+          "notes": "Sem cebola",
+          "groupAddons": [ { "addonOptionId": "0192d6a0-0000-7000-8000-000000000e11", "quantity": 1 } ]
+        },
+        {
+          "comboComponentId": "0192d6a0-0000-7000-8000-000000000c13",
+          "beverageFlavorId": "0192d6a0-0000-7000-8000-000000000f13",
+          "notes": null,
+          "groupAddons": null
+        }
+      ]
+    }
+  ],
+  "weighings": []
+}
+```
+
+Regras do corpo `A_LA_CARTE`:
+- **Atendimento** (ADR-0058 item 2): `DINE_IN` (comanda), `DELIVERY` ou `PICKUP`. A comanda segue o fluxo do PF: `tableLabel` e/ou `tabNumber`, nome opcional. O balcão "para viagem" é uma comanda `DINE_IN` com `tabNumber` (Q-320).
+- **Entrega e retirada nesta fase:** valem os campos e as regras de entrega de hoje, como na marmita: `deliveryAddress` ou `customerAddressId` obrigatório em `DELIVERY`, `deliveryFee: null` = taxa padrão (outro valor exige `orders.delivery-fee.edit`), `customerId`/`saveCustomer` opcionais. Nome e telefone obrigatórios, forma prevista, troco e a taxa digitada na criação são da fatia 4 (ADR-0059) e ainda não são exigidos.
+- **Só cardápio fixo** (ADR-0058 item 3, Q-317): `itemKind` `FIXED_DISH`, `FIXED_BEVERAGE` ou `COMBO`. `MARMITA`, `PF`, `BEVERAGE` e `ADDON` (do catálogo) → `422 ValidationFailed` em `items[i].itemKind`, e os tipos do cardápio fixo num pedido `MARMITA`, `PF` ou `KILO` também. Pesagens → `422`. `COMBO_PART` e `GROUP_ADDON` nunca vão no primeiro nível: as partes vêm em `parts`, os adicionais em `groupAddons`.
+- **`FIXED_DISH`:** `dishId`, `dishSizeId` (obrigatório se o prato tem tamanho e proibido se não tem), `quantity` (1 a 99), `notes` (até 200), `groupAddons` (opções dos grupos ligados à categoria do prato ou ao próprio prato, ADR-0056 item 18; cada uma com `quantity` de 1 a 10).
+- **`FIXED_BEVERAGE`:** `beverageSizeId` e `beverageFlavorId` (obrigatório se o tamanho tem sabores, proibido se não tem), `quantity`, `notes`.
+- **`COMBO`:** `comboId`, `quantity` e `parts`, com as escolhas de cada componente (`comboComponentId` = `components[].id` do `GET /fixed-menu`, no máximo uma vez cada). Na parte de prato: `notes` e `groupAddons` próprios. Na parte de bebida: `beverageFlavorId` (obrigatório se o tamanho tem sabores), sem `notes` nem `groupAddons`. O componente sem escolha pode ficar fora de `parts`. O próprio combo não tem `notes` nem `groupAddons` (vão em cada prato). O servidor grava uma `COMBO_PART` por componente, com a quantidade do componente.
+- Campos de outro tipo no mesmo item (`productId` num `FIXED_DISH`, `dishId` num `PF`) → `422`.
+- **Disponibilidade** (ADR-0056 itens 23 e 24): prato, tamanho, tamanho de bebida, sabor, combo (inclusive pela pausa de um componente) ou opção de adicional inativos ou pausados → `422 ProductUnavailable`, com o `detail` dizendo o que falta. Item de outro tenant não existe para o pedido e também dá `422 ProductUnavailable`.
+- **Preço:** sempre de balcão (`priceList: "COUNTER"`), em qualquer atendimento.
+
 → `201`, `Location: /api/v1/orders/{id}`, `ETag: "1"`, corpo `Order`.
 
-Erros: `403 ModuleNotEnabled` (`orderType` de um módulo que o estabelecimento não tem: `MARMITA` → `MARMITA`, `PF` → `PF`, `KILO` → `KILO`; vem antes do expediente), `409 BusinessDayRequired`, `404 MenuNotFound`, `422 ProductUnavailable`, `422 KiloPriceNotConfigured`, `422 ValidationFailed` (pedido vazio, `itemKind` incompatível com `orderType`, endereço faltando em entrega).
+Erros: `403 ModuleNotEnabled` (`orderType` de um módulo que o estabelecimento não tem: `MARMITA` → `MARMITA`, `PF` → `PF`, `KILO` → `KILO`, `A_LA_CARTE` em `DINE_IN` → `A_LA_CARTE`, `A_LA_CARTE` em `DELIVERY`/`PICKUP` → `DELIVERY` (ADR-0058 item 1); vem antes do expediente), `409 BusinessDayRequired`, `404 MenuNotFound` (só marmita e PF: o à la carte não usa cardápio do dia), `422 ProductUnavailable`, `422 KiloPriceNotConfigured`, `422 ValidationFailed` (pedido vazio, `itemKind` incompatível com `orderType`, tamanho ou sabor faltando, adicional que não é do prato, endereço faltando em entrega).
 
 ```json
 {
@@ -1953,6 +2257,19 @@ Inclui um ou mais itens numa só confirmação (RN-012.3):
 }
 ```
 
+À la carte: os mesmos `FIXED_DISH`, `FIXED_BEVERAGE` e `COMBO` do `POST /orders`, e o adicional de grupo incluído depois num prato avulso ou numa parte **de prato** de um combo (ADR-0058 item 10):
+
+```json
+{
+  "items": [
+    { "itemKind": "COMBO", "comboId": "0192d6a0-0000-7000-8000-000000000c01", "quantity": 1, "parts": [ { "comboComponentId": "0192d6a0-0000-7000-8000-000000000c13", "beverageFlavorId": "0192d6a0-0000-7000-8000-000000000f12", "notes": null, "groupAddons": null } ] },
+    { "itemKind": "GROUP_ADDON", "parentOrderItemId": "0192d6a0-0000-7000-8000-000000000645", "addonOptionId": "0192d6a0-0000-7000-8000-000000000e11", "quantity": 1, "notes": null }
+  ]
+}
+```
+
+O `GROUP_ADDON` incluído depois paga pela quantidade dos antepassados (Bacon 4,00 numa parte de um combo com 2 de quantidade = 8,00). Pai que não é prato ativo do pedido (a parte de bebida, o próprio `COMBO`, um item removido) → `422` em `items[i].parentOrderItemId`. Um tipo por pedido vale aqui também (`PF` numa comanda → `422`). Não há parte nova num combo já registrado.
+
 → `200 Order`. O efeito colateral (RN-007.10): se algum item exigir preparo e o pedido estiver `COMPLETED`, ele volta para `IN_PROGRESS`. Gera `OrderChangeEvent`. Com o atendimento em `OUT_FOR_DELIVERY`, `DELIVERED` ou `PICKED_UP` → `409 OrderAlreadyDispatched` (ADR-0046 item 19): o atendente cria outro pedido. "Voltou sem entregar" (`PENDING`) libera de novo.
 
 ### `PATCH /orders/{id}/items/{itemId}` — `orders.edit` [M]
@@ -1961,11 +2278,11 @@ Inclui um ou mais itens numa só confirmação (RN-012.3):
 { "quantity": 3, "notes": "Sem cebola e sem tomate" }
 ```
 
-→ `200 Order`.
+→ `200 Order`. Combo (ADR-0058 item 10): a quantidade do `COMBO` reprecifica as partes e os adicionais delas (o neto usa o avô); a quantidade de uma `COMBO_PART` não muda sozinha (`422` em `quantity`), mas a observação da parte de prato muda; o `COMBO` não tem observação (`422` em `notes`). Trocar o sabor de uma parte é remover e incluir o combo de novo (Q-322).
 
 ### `DELETE /orders/{id}/items/{itemId}` — `orders.edit` [M]
 
-Remoção lógica, que leva junto os adicionais filhos. → `200 Order`. Não pode deixar o pedido vazio (`422`).
+Remoção lógica, que leva junto os adicionais filhos; o `COMBO` leva as partes e os adicionais delas. Uma `COMBO_PART` não sai sozinha (`422`: remova o combo). → `200 Order`. Não pode deixar o pedido vazio (`422`).
 
 ### `POST /orders/{id}/weighings` — `orders.edit` [I][M]
 
@@ -2177,7 +2494,7 @@ O `summary` é montado no servidor a partir de `details`: `+1 Coca-Cola 350ml`, 
 
 ### Produção — `GET /production/orders` — `production.view`
 
-Painel da cozinha (RN-007.4/7.5): só `MARMITA` e `PF` **aceitos** e ativos do expediente aberto, agrupados e do mais antigo para o mais novo **pelo aceite** (`acceptedAt`: o pedido do site nasce para a cozinha no aceite; no app, `acceptedAt = createdAt`). Sem expediente aberto → `409 BusinessDayRequired`.
+Painel da cozinha (RN-007.4/7.5): só `MARMITA`, `PF` e `A_LA_CARTE` **aceitos** e ativos do expediente aberto, agrupados e do mais antigo para o mais novo **pelo aceite** (`acceptedAt`: o pedido do site nasce para a cozinha no aceite; no app, `acceptedAt = createdAt`). Sem expediente aberto → `409 BusinessDayRequired`.
 
 ```json
 {
@@ -2210,7 +2527,17 @@ Painel da cozinha (RN-007.4/7.5): só `MARMITA` e `PF` **aceitos** e ativos do e
 }
 ```
 
-`label` = nome do cliente (marmita) ou mesa/comanda (PF).
+`label` = nome do cliente (marmita) ou mesa/comanda (PF e comanda à la carte; na entrega e na retirada à la carte sem mesa, o nome do cliente).
+
+À la carte (ADR-0058 itens 11 e 12, RN-311.2): `items` é a **lista normal** dos pratos avulsos e das partes de prato dos combos que têm preparo, na ordem do pedido, com a observação e os adicionais de grupo em `addons`. Não aparecem a linha do `COMBO`, nem bebidas (`FIXED_BEVERAGE` e partes de bebida), nem prato sem preparo, e não há preço. `quantity` da parte é a de pratos a fazer (quantidade da parte × quantidade do combo); a do adicional é por unidade do prato, como na marmita. A comanda do exemplo do `Order` à la carte chega assim (um pedido só de bebidas aparece com `items: []`, pela regra atual de produção):
+
+```json
+"items": [
+  { "id": "0192d6a0-0000-7000-8000-000000000641", "name": "Açaí 500 ml", "composition": null, "quantity": 1, "notes": "Pouco leite condensado", "requiresPreparation": true, "addons": [ { "id": "0192d6a0-0000-7000-8000-000000000642", "name": "Granola", "quantity": 1, "notes": null } ] },
+  { "id": "0192d6a0-0000-7000-8000-000000000645", "name": "X-Burguer", "composition": null, "quantity": 2, "notes": "Sem cebola", "requiresPreparation": true, "addons": [ { "id": "0192d6a0-0000-7000-8000-000000000646", "name": "Bacon", "quantity": 1, "notes": null } ] },
+  { "id": "0192d6a0-0000-7000-8000-000000000647", "name": "Batata frita P", "composition": null, "quantity": 2, "notes": null, "requiresPreparation": true, "addons": [] }
+]
+```
 
 ---
 
@@ -2345,6 +2672,7 @@ O fechamento **parcial**, calculado na hora (RN-010.1). Padrão: o expediente ab
   "orderCount": 96,
   "totalSold": "3650.00",
   "deliveryFeesTotal": "85.00",
+  "siteSoldTotal": "0.00",
   "totalReceived": "3430.00",
   "receivedFromPreviousDays": "35.00",
   "totalPending": "220.00",
@@ -2355,7 +2683,8 @@ O fechamento **parcial**, calculado na hora (RN-010.1). Padrão: o expediente ab
   "byOrderType": [
     { "orderType": "MARMITA", "count": 41, "sold": "1250.00", "received": "1100.00", "pending": "150.00", "reversed": "0.00" },
     { "orderType": "PF", "count": 30, "sold": "870.00", "received": "800.00", "pending": "70.00", "reversed": "0.00" },
-    { "orderType": "KILO", "count": 25, "sold": "1530.00", "received": "1530.00", "pending": "0.00", "reversed": "0.00" }
+    { "orderType": "KILO", "count": 25, "sold": "1530.00", "received": "1530.00", "pending": "0.00", "reversed": "0.00" },
+    { "orderType": "A_LA_CARTE", "count": 0, "sold": "0.00", "received": "0.00", "pending": "0.00", "reversed": "0.00" }
   ],
   "byPaymentMethod": [
     { "paymentMethod": "CASH", "count": 38, "received": "850.00", "reversed": "0.00" },
@@ -2379,7 +2708,8 @@ O fechamento **parcial**, calculado na hora (RN-010.1). Padrão: o expediente ab
 
 - Sem `businessDayId` e sem expediente aberto → `404 NoOpenBusinessDay`.
 - `closedAt` e `closedBy` existem nos dois formatos e só são preenchidos no fechamento finalizado.
-- `byOrderType` e `byPaymentMethod` sempre trazem as três chaves, mesmo zeradas.
+- `byOrderType` sempre traz as quatro chaves (`MARMITA`, `PF`, `KILO`, `A_LA_CARTE`) e `byPaymentMethod` as três, mesmo zeradas. O app mostra só as modalidades dos módulos do estabelecimento (e as que tiverem movimento). `A_LA_CARTE` é **uma linha** para salão, entrega e retirada (EP-003 Q-311; a abertura por atendimento não entra no snapshot nesta fase). Fechamentos anteriores à migração 0010 trazem a linha `A_LA_CARTE` zerada.
+- `siteSoldTotal` ("Vendido pelo site", ADR-0057 item 12): soma do `totalAmount` dos pedidos aceitos e ativos do expediente com `priceList: "SITE"`, já contida no `totalSold`. Só informativo: a cobrança da plataforma está em aberto (Q-310). Fechamentos anteriores à 0010: `"0.00"`.
 - **Só pedidos aceitos** entram em `orderCount`, vendido, pendente, cancelados e `byOrderType` (ADR-0046 item 4, RF-210). Pedido do site aceito entra como qualquer pedido `MARMITA`.
 - `webOrders` é informativo, fora do vendido (ADR-0046 item 13, RF-210.2): `awaitingAcceptanceCount` = pedidos do site do expediente ainda aguardando aceite, que a finalização vai recusar ("2 pedidos do site aguardando aceite serão recusados"); `notAcceptedCount` = recusados, expirados e desistências do expediente. No fechamento finalizado, `awaitingAcceptanceCount` é 0, `autoRejectedCount` diz quantos a finalização recusou, e eles já estão somados em `notAcceptedCount`.
 - `unmarkedDeliveryCount`: entregas aceitas e ativas sem `fulfillmentStatus: "DELIVERED"` ("N entregas sem marcação de entregue", ADR-0046 item 20). Só informa: a marcação é opcional.
@@ -2423,7 +2753,8 @@ Erros: `422 JustificationRequired`, `409 ClosingAlreadyFinalized`, `409 VersionC
   "byOrderType": [
     { "orderType": "MARMITA", "sold": "31250.00", "received": "30100.00" },
     { "orderType": "PF", "sold": "21750.00", "received": "21050.00" },
-    { "orderType": "KILO", "sold": "38250.00", "received": "37790.00" }
+    { "orderType": "KILO", "sold": "38250.00", "received": "37790.00" },
+    { "orderType": "A_LA_CARTE", "sold": "0.00", "received": "0.00" }
   ],
   "byPaymentMethod": [
     { "paymentMethod": "CASH", "received": "21250.00" },
