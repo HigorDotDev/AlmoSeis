@@ -108,7 +108,8 @@ internal sealed class ClosingInputsQuery(AppDbContext db, ITenantContext tenant)
             SELECT order_type, cancellation_status = 'CANCELED' AS canceled, count(*)::int AS count,
                    coalesce(sum(total_amount), 0) AS sold, coalesce(sum(delivery_fee), 0) AS delivery_fees,
                    coalesce(sum(total_amount - paid_amount), 0) AS pending,
-                   coalesce(sum(total_amount) FILTER (WHERE price_list = 'SITE'), 0) AS site_sold
+                   coalesce(sum(total_amount - delivery_fee) FILTER (WHERE price_list = 'SITE'), 0) AS site_sold,
+                   coalesce(sum(delivery_fee) FILTER (WHERE price_list = 'SITE'), 0) AS site_delivery_fees
               FROM orders
              WHERE tenant_id = {t} AND business_day_id = {businessDayId} AND acceptance_status = 'ACCEPTED'
              GROUP BY order_type, cancellation_status
@@ -155,7 +156,7 @@ internal sealed class ClosingInputsQuery(AppDbContext db, ITenantContext tenant)
 
         return new ClosingInputs(
             openingBalance,
-            orders.Select(o => new OrderTotalsRow(o.OrderType, o.Canceled, o.Count, Money.Of(o.Sold), Money.Of(o.DeliveryFees), Money.Of(o.Pending), Money.Of(o.SiteSold))).ToList(),
+            orders.Select(o => new OrderTotalsRow(o.OrderType, o.Canceled, o.Count, Money.Of(o.Sold), Money.Of(o.DeliveryFees), Money.Of(o.Pending), Money.Of(o.SiteSold), Money.Of(o.SiteDeliveryFees))).ToList(),
             payments.Select(p => new PaymentTotalsRow(p.OrderType, p.PaymentMethod, p.FromPreviousDay, p.Count, Money.Of(p.Amount))).ToList(),
             reversals.Select(r => new ReversalTotalsRow(r.OrderType, r.PaymentMethod, r.Count, Money.Of(r.Amount))).ToList(),
             Money.Of(movements.Where(m => m.MovementType == "SUPPLY").Sum(m => m.Amount)),
@@ -165,7 +166,7 @@ internal sealed class ClosingInputsQuery(AppDbContext db, ITenantContext tenant)
 
     private sealed record StatusCountsRow(int AwaitingAcceptance, int NotAccepted, int UnmarkedDeliveries);
 
-    private sealed record OrderRow(string OrderType, bool Canceled, int Count, decimal Sold, decimal DeliveryFees, decimal Pending, decimal SiteSold);
+    private sealed record OrderRow(string OrderType, bool Canceled, int Count, decimal Sold, decimal DeliveryFees, decimal Pending, decimal SiteSold, decimal SiteDeliveryFees);
 
     private sealed record PaymentRow(string OrderType, string PaymentMethod, bool FromPreviousDay, int Count, decimal Amount);
 

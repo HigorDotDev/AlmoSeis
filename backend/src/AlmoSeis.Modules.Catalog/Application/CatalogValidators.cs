@@ -14,7 +14,9 @@ internal sealed class CreateProductCommandValidator : AbstractValidator<CreatePr
         RuleFor(x => x.Description).MaximumLength(300);
         RuleFor(x => x.Category).MaximumLength(40);
         RuleFor(x => x.DefaultPrice).Must(p => p is null || p.Value >= Money.Zero).WithMessage("O preço não pode ser negativo.");
-        RuleFor(x => x.SitePrice).Must(p => p is null || p.Value > Money.Zero).WithMessage("O preço de site deve ser maior que zero.");
+        // Só a bebida tem preço de site, e ela pode ter 0,00 (água da casa, cafezinho: ADR-0057 item 2, revisão de
+        // 2026-11-23, I6); o domínio recusa o preço de site fora de BEVERAGE.
+        RuleFor(x => x.SitePrice).Must(p => p is null || p.Value >= Money.Zero).WithMessage("O preço de site não pode ser negativo.");
     }
 }
 
@@ -30,7 +32,7 @@ internal sealed class UpdateProductRequestValidator : AbstractValidator<UpdatePr
         RuleFor(x => x.DefaultPrice.Value).Must(p => p is null || p.Value >= Money.Zero).WithMessage("O preço não pode ser negativo.")
             .When(x => x.DefaultPrice.HasValue).OverridePropertyName("defaultPrice");
         RuleFor(x => x.ImageStorageKey.Value).MaximumLength(200).When(x => x.ImageStorageKey.HasValue).OverridePropertyName("imageStorageKey");
-        RuleFor(x => x.SitePrice.Value).Must(p => p is null || p.Value > Money.Zero).WithMessage("O preço de site deve ser maior que zero.")
+        RuleFor(x => x.SitePrice.Value).Must(p => p is null || p.Value >= Money.Zero).WithMessage("O preço de site não pode ser negativo.")
             .When(x => x.SitePrice.HasValue).OverridePropertyName("sitePrice");
     }
 }

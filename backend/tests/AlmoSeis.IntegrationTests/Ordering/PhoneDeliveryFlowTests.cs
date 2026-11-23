@@ -297,6 +297,123 @@ public sealed class PhoneDeliveryFlowTests(PostgresFixture db) : IDisposable
         (await b.ScalarAsync<long>("SELECT count(*) FROM customers WHERE tenant_id = @t")).ShouldBe(1);
     }
 
+    /// I1 (revisão de 2026-11-23, ADR-0059): a forma prevista e o "troco para" mudam pelo PATCH enquanto o pedido não
+    /// está quitado, com as regras da criação e a auditoria do antes/depois. Pedido de 55,00 em dinheiro com troco para
+    /// 100,00: vira Pix (o troco sai junto); dinheiro com troco para 50,00 → 422; para 60,00 passa; forma desabilitada →
+    /// 422; versão velha → 409; quitado → 409 OrderAlreadyPaid.
+    [Fact]
+    public async Task Patch_edits_the_expected_payment_and_change_for_until_paid()
+    {
+        var s = await OrderingScenario.CreateAsync(_api, db);
+        var order = await s.CreateOrderAsync(s.MarmitaDelivery(expectedPaymentMethod: "CASH", changeFor: "100.00"));
+        order.GetProperty("totalAmount").GetString().ShouldBe("55.00");
+
+        var pix = await Patch(s, order.Id(), new { expectedPaymentMethod = "PIX" }, order.Version(), HttpStatusCode.OK);
+        pix.GetProperty("expectedPaymentMethod").GetString().ShouldBe("PIX");
+        pix.GetProperty("changeFor").ValueKind.ShouldBe(JsonValueKind.Null);
+        pix.Version().ShouldBe(order.Version() + 1);
+
+        var before = await s.ScalarAsync<string>(
+            "SELECT before::text FROM audit_logs WHERE tenant_id = @t AND operation_type = 'OrderDetailsUpdated' AND entity_id = @o", ("o", order.Id()));
+        var after = await s.ScalarAsync<string>(
+            "SELECT after::text FROM audit_logs WHERE tenant_id = @t AND operation_type = 'OrderDetailsUpdated' AND entity_id = @o", ("o", order.Id()));
+        using (var b = JsonDocument.Parse(before))
+        using (var a = JsonDocument.Parse(after))
+        {
+            b.RootElement.GetProperty("expectedPaymentMethod").GetString().ShouldBe("CASH");
+            b.RootElement.GetProperty("changeFor").GetString().ShouldBe("100.00");
+            a.RootElement.GetProperty("expectedPaymentMethod").GetString().ShouldBe("PIX");
+            a.RootElement.GetProperty("changeFor").ValueKind.ShouldBe(JsonValueKind.Null);
+        }
+
+        (before + after).ShouldNotContain("99999");
+
+        (await Patch(s, order.Id(), new { expectedPaymentMethod = "CASH", changeFor = "50.00" }, pix.Version(), HttpStatusCode.UnprocessableEntity))
+            .GetProperty("errors").TryGetProperty("changeFor", out _).ShouldBeTrue();
+        (await Patch(s, order.Id(), new { expectedPaymentMethod = (string?)null }, pix.Version(), HttpStatusCode.UnprocessableEntity))
+            .GetProperty("errors").TryGetProperty("expectedPaymentMethod", out _).ShouldBeTrue();
+        var cash = await Patch(s, order.Id(), new { expectedPaymentMethod = "CASH", changeFor = "60.00" }, pix.Version(), HttpStatusCode.OK);
+        cash.GetProperty("changeFor").GetString().ShouldBe("60.00");
+        cash.GetProperty("changeForBelowTotal").GetBoolean().ShouldBeFalse();
+
+        await s.SqlAsync("UPDATE tenant_settings SET enabled_payment_methods = ARRAY['CASH', 'PIX'] WHERE tenant_id = @t");
+        (await Patch(s, order.Id(), new { expectedPaymentMethod = "CARD" }, cash.Version(), HttpStatusCode.UnprocessableEntity))
+            .GetProperty("errorCode").GetString().ShouldBe("PaymentMethodDisabled");
+        (await Patch(s, order.Id(), new { expectedPaymentMethod = "PIX" }, pix.Version(), HttpStatusCode.Conflict))
+            .GetProperty("errorCode").GetString().ShouldBe("VersionConflict");
+
+        await s.MarkPaidAsync(order.Id());
+        var paid = await s.GetOrderAsync(order.Id());
+        (await Patch(s, order.Id(), new { expectedPaymentMethod = "PIX" }, paid.Version(), HttpStatusCode.Conflict))
+            .GetProperty("errorCode").GetString().ShouldBe("OrderAlreadyPaid");
+        var noted = await Patch(s, order.Id(), new { notes = "Interfone 201" }, paid.Version(), HttpStatusCode.OK);
+        noted.GetProperty("expectedPaymentMethod").GetString().ShouldBe("CASH");
+
+        // Isolamento (ADR-0026): outro tenant não enxerga o pedido.
+        var other = await OrderingScenario.CreateAsync(_api, db);
+        (await Patch(other, order.Id(), new { expectedPaymentMethod = "PIX" }, noted.Version(), HttpStatusCode.NotFound))
+            .GetProperty("errorCode").GetString().ShouldBe("NotFound");
+        (await s.GetOrderAsync(order.Id())).GetProperty("expectedPaymentMethod").GetString().ShouldBe("CASH");
+    }
+
+    /// Q-316 no PATCH: a retirada que vira entrega precisa da forma prevista no mesmo corpo; o salão recusa a forma.
+    [Fact]
+    public async Task Pickup_turned_delivery_requires_the_expected_payment()
+    {
+        var s = await OrderingScenario.CreateAsync(_api, db);
+        var counter = new Dictionary<string, object?>(Body(s.MarmitaDelivery(expectedPaymentMethod: null)))
+        {
+            ["fulfillmentType"] = "PICKUP", ["deliveryAddress"] = null,
+        };
+        var pickup = await s.CreateOrderAsync(counter);
+        var address = new { street = "Rua das Acácias", number = "120", complement = (string?)null, neighborhood = (string?)null, reference = (string?)null };
+
+        (await Patch(s, pickup.Id(), new { fulfillmentType = "DELIVERY", deliveryAddress = address }, pickup.Version(), HttpStatusCode.UnprocessableEntity))
+            .GetProperty("errors").TryGetProperty("expectedPaymentMethod", out _).ShouldBeTrue();
+        var delivery = await Patch(s, pickup.Id(), new { fulfillmentType = "DELIVERY", deliveryAddress = address, expectedPaymentMethod = "PIX" },
+            pickup.Version(), HttpStatusCode.OK);
+        delivery.GetProperty("fulfillmentType").GetString().ShouldBe("DELIVERY");
+        delivery.GetProperty("expectedPaymentMethod").GetString().ShouldBe("PIX");
+
+        var pf = await s.CreateOrderAsync(s.Pf());
+        (await Patch(s, pf.Id(), new { expectedPaymentMethod = "PIX" }, pf.Version(), HttpStatusCode.UnprocessableEntity))
+            .GetProperty("errors").TryGetProperty("expectedPaymentMethod", out _).ShouldBeTrue();
+    }
+
+    /// I2 (revisão de 2026-11-23): incluir um item ou subir a taxa pode passar o total do "troco para" sem ser recusado;
+    /// o pedido e o resumo trazem `changeForBelowTotal: true`. Pedido de 55,00 com troco para 60,00; + 1 Coca (6,00) =
+    /// 61,00 > 60,00. Editar o próprio "troco para" volta a exigir o total.
+    [Fact]
+    public async Task Edit_that_passes_the_change_for_is_accepted_and_flagged()
+    {
+        var s = await OrderingScenario.CreateAsync(_api, db);
+        var order = await s.CreateOrderAsync(s.MarmitaDelivery(expectedPaymentMethod: "CASH", changeFor: "60.00"));
+        order.GetProperty("changeForBelowTotal").GetBoolean().ShouldBeFalse();
+
+        var added = await (await s.Client.SendWithKeyAsync(HttpMethod.Post, $"/api/v1/orders/{order.Id()}/items",
+                new { items = new[] { new { itemKind = "BEVERAGE", productId = s.Coca, quantity = 1, notes = (string?)null } } }, order.Version()))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+        added.GetProperty("totalAmount").GetString().ShouldBe("61.00");
+        added.GetProperty("changeFor").GetString().ShouldBe("60.00");
+        added.GetProperty("changeForBelowTotal").GetBoolean().ShouldBeTrue();
+
+        var card = (await ListAsync(s.Client, "?fulfillmentType=DELIVERY")).Single(o => o.Id() == order.Id());
+        card.GetProperty("changeForBelowTotal").GetBoolean().ShouldBeTrue();
+
+        (await Patch(s, order.Id(), new { changeFor = "60.50" }, added.Version(), HttpStatusCode.UnprocessableEntity))
+            .GetProperty("errors").TryGetProperty("changeFor", out _).ShouldBeTrue();
+        var fixedChange = await Patch(s, order.Id(), new { changeFor = "70.00" }, added.Version(), HttpStatusCode.OK);
+        fixedChange.GetProperty("changeForBelowTotal").GetBoolean().ShouldBeFalse();
+
+        // A taxa também pode passar o "troco para" sem ser recusada (o dono tem orders.delivery-fee.edit).
+        var fee = await Patch(s, order.Id(), new { deliveryFee = "15.00" }, fixedChange.Version(), HttpStatusCode.OK);
+        fee.GetProperty("totalAmount").GetString().ShouldBe("71.00");
+        fee.GetProperty("changeForBelowTotal").GetBoolean().ShouldBeTrue();
+    }
+
+    private async Task<JsonElement> Patch(OrderingScenario s, Guid orderId, object body, int version, HttpStatusCode status) =>
+        await (await s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/orders/{orderId}", body, version)).ExpectAsync(status, _api);
+
     private async Task<JsonElement> LookupAsync(HttpClient client, string phone) =>
         await (await Lookup(client, new { phoneNumber = phone })).ExpectAsync(HttpStatusCode.OK, _api);
 

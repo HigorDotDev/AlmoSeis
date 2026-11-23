@@ -2,6 +2,7 @@
 
 - **Status:** Proposto
 - **Data:** 2026-11-22
+- **Atualizado:** 2026-11-23, decisões do usuário sobre a revisão do EP-003 (item 5; ver "Complemento (2026-11-23)")
 - **Origem:** EP-003, RF-312 a RF-314; decisões do dono do produto em 2026-11-22 (itens 7 a 9)
 - **Relacionados:** ADR-0006, ADR-0007, ADR-0011, ADR-0021 (complementado), ADR-0024 (complementado), ADR-0044, ADR-0046 (complementado), ADR-0055, ADR-0058
 
@@ -22,6 +23,7 @@ A lanchonete recebe muitos pedidos por telefone, e o dono do produto quer um flu
 3. **Entrega:** endereço obrigatório (rua, número, complemento, bairro, referência) e **taxa de entrega manual**, digitada no pedido. O campo começa com a taxa padrão e quem cria o pedido pode alterá-lo só na criação, com auditoria; depois, só com `orders.delivery-fee.edit` (Q-315, decidida em 2026-11-22; ADR-0021).
 4. **Retirada:** sem endereço e sem taxa.
 5. **Forma de pagamento prevista** (`ExpectedPaymentMethod`: dinheiro, Pix ou cartão, dentro das formas habilitadas) e, se dinheiro, **"troco para quanto"** (`ChangeFor`, pelo menos o total), os mesmos campos do pedido do site. Obrigatória na entrega e opcional na retirada (Q-316, decidida em 2026-11-22). Vale também para a marmita.
+   *(Complementado em 2026-11-23, I1 e I2: os dois passam a ser **editáveis** enquanto o pedido não está quitado, e o "troco para" abaixo do total depois de uma edição é aceito e sinalizado. Ver o complemento abaixo.)*
 6. **Entra direto na cozinha e já ganha número**, sem fila de aceite: é um pedido do app (`Origin = APP`), que nasce `ACCEPTED` (ADR-0046 item 1). Não há `Origin` novo para telefone.
 7. Envio idempotente (ADR-0011): internet caindo no meio do registro não duplica o pedido.
 
@@ -45,6 +47,25 @@ A lanchonete recebe muitos pedidos por telefone, e o dono do produto quer um flu
 15. Telefone já cadastrado com outro nome: *recomendação (Q-314)*: o pedido guarda o nome digitado no snapshot e o cadastro não muda sozinho; o cadastro muda só pela tela de clientes.
 16. O cliente do delivery aparece na lista de clientes **sem saldo**. As pendências por cliente mostram só os pedidos com saldo, como hoje.
 17. LGPD pelo ADR-0024: o estabelecimento é o controlador; auditoria, log e evento não levam telefone nem endereço; a anonimização sob demanda vale para esses clientes.
+
+## Complemento (2026-11-23, revisão do EP-003: item 5, detalhado em `docs/06-contratos-api.md` §6.9 e `docs/07-backend.md` §7.8)
+
+Decisões do usuário sobre os achados I1 e I2 da revisão do EP-003.
+
+**Forma prevista e "troco para" editáveis (I1)**
+
+- `PATCH /orders/{id}` aceita `expectedPaymentMethod` e `changeFor` **enquanto o pedido não está quitado** (ADR-0007: quitado → `409 OrderAlreadyPaid`). Vale para o pedido do app e para o do site já aceito.
+- As regras são as da criação: só formas habilitadas (`422 PaymentMethodDisabled`, conferido quando a forma muda); proibidos no salão (`DINE_IN`), e trocar para o salão apaga os dois; "troco para" só com dinheiro.
+- **Quando o atendimento vira entrega, a forma prevista passa a ser obrigatória** (Q-316): a retirada ou a comanda que vira entrega precisa trazer a forma no mesmo `PATCH`, se o pedido não tinha. Enviar `expectedPaymentMethod: null` numa entrega também é recusado. Uma entrega antiga sem forma (anterior à fatia 4) continua editável nos outros campos, como o telefone (05 §5.17 0011).
+- A forma que deixa de ser dinheiro sem `changeFor` no corpo apaga o "troco para" gravado (ele só existe em dinheiro).
+- A auditoria `OrderDetailsUpdated` grava a forma e o "troco para" no antes e no depois (sem telefone nem endereço, item 17).
+
+**"Troco para" abaixo do total (I2)**
+
+- O "troco para" **deixa de ser recusado depois da criação**: incluir item, mudar quantidade ou a taxa pode passar o total do "troco para", e o servidor aceita.
+- O `Order` e o `OrderSummary` trazem o indicador derivado **`changeForBelowTotal`** (`true` quando há "troco para" e ele ficou abaixo do total), para o app mostrar o alerta e o atendente conferir o troco com o cliente.
+- Na **criação** e quando o **próprio "troco para" é editado** no `PATCH`, continua exigindo pelo menos o total (o total resultante do `PATCH`).
+- Exemplo: pedido de R$ 55,00 com "troco para R$ 60,00"; o atendente inclui uma Coca de R$ 6,00 → total R$ 61,00, `changeForBelowTotal: true`; editar o "troco para" para R$ 60,50 → `422`; para R$ 70,00 → aceito, `changeForBelowTotal: false`.
 
 ## Alternativas consideradas
 

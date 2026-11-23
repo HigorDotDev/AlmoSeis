@@ -155,6 +155,7 @@ internal sealed class FinalizeClosingHandler(
             closing.NotAcceptedCount,
             closing.AutoRejectedCount,
             siteSoldTotal = closing.SiteSoldTotal.ToString(),
+            siteDeliveryFeeTotal = closing.SiteDeliveryFeeTotal.ToString(),
         });
         return await dtos.FinalAsync(closing, day, cancellationToken);
     }
@@ -270,6 +271,9 @@ internal sealed class GetMonthlyClosingQueryHandler(AppDbContext db) : IQueryHan
             Money.Sum(closings.Select(c => c.TotalReceived)),
             Money.Sum(closings.Select(c => c.TotalPending)),
             Money.Sum(closings.Select(c => c.CashDifference)),
+            // "Vendido pelo site" e taxa do site do mês (M1): soma dos snapshots, como gravados.
+            Money.Sum(closings.Select(c => c.SiteSoldTotal)),
+            Money.Sum(closings.Select(c => c.SiteDeliveryFeeTotal)),
             ClosingCalculator.OrderTypes.Select(t =>
             {
                 var of = lines.Where(l => l.Dimension == ClosingDimension.OrderType && l.Key == t).ToList();
@@ -303,7 +307,7 @@ internal sealed class ClosingDtoBuilder(AppDbContext db, IEmployeeDirectory empl
     public async Task<ClosingSummaryDto> LiveAsync(
         BusinessDay day, ClosingFigures f, IReadOnlyList<ClosingAdjustment> adjustments, DateTimeOffset now, CancellationToken cancellationToken) =>
         new(
-            Day(day), false, null, now, f.OrderCount, f.TotalSold, f.DeliveryFeesTotal, f.SiteSoldTotal, f.TotalReceived, f.ReceivedFromPreviousDays, f.TotalPending,
+            Day(day), false, null, now, f.OrderCount, f.TotalSold, f.DeliveryFeesTotal, f.SiteSoldTotal, f.SiteDeliveryFeeTotal, f.TotalReceived, f.ReceivedFromPreviousDays, f.TotalPending,
             new CountTotalDto(f.CanceledCount, f.CanceledTotal), new CountTotalDto(f.ReversedCount, f.ReversedTotal),
             new WebOrdersSummaryDto(f.AwaitingAcceptanceCount, 0, f.NotAcceptedCount), f.UnmarkedDeliveryCount,
             f.ByOrderType.Select(l => new OrderTypeLineDto(l.Key, l.Count, l.Sold, l.Received, l.Pending, l.Reversed)).ToList(),
@@ -319,7 +323,7 @@ internal sealed class ClosingDtoBuilder(AppDbContext db, IEmployeeDirectory empl
         Money M(Money? m) => m ?? Money.Zero;
 
         return new ClosingSummaryDto(
-            Day(day), true, c.Id, c.ClosedAt, c.OrderCount, c.TotalSold, c.DeliveryFeesTotal, c.SiteSoldTotal, c.TotalReceived, c.ReceivedFromPreviousDays,
+            Day(day), true, c.Id, c.ClosedAt, c.OrderCount, c.TotalSold, c.DeliveryFeesTotal, c.SiteSoldTotal, c.SiteDeliveryFeeTotal, c.TotalReceived, c.ReceivedFromPreviousDays,
             c.TotalPending, new CountTotalDto(c.CanceledCount, c.CanceledTotal), new CountTotalDto(c.ReversedCount, c.ReversedTotal),
             new WebOrdersSummaryDto(0, c.AutoRejectedCount, c.NotAcceptedCount), c.UnmarkedDeliveryCount,
             // Fechamento anterior à 0010 não tem a linha `A_LA_CARTE`: vai zerada, como as chaves de sempre.

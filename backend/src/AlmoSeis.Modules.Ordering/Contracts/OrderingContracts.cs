@@ -219,6 +219,7 @@ public sealed record OrderDto(
     string? Notes,
     ExpectedPaymentMethod? ExpectedPaymentMethod,
     Money? ChangeFor,
+    bool ChangeForBelowTotal,
     WebOrderRiskFlag? RiskFlag,
     Money DeliveryFee,
     DeliveryFeeSource? DeliveryFeeSource,
@@ -281,6 +282,7 @@ public sealed record OrderSummaryDto(
     bool IsReadyForPickup,
     ExpectedPaymentMethod? ExpectedPaymentMethod,
     Money? ChangeFor,
+    bool ChangeForBelowTotal,
     int ItemCount,
     int PendingAlertCount,
     DateTimeOffset CreatedAt) : IVersionedDto;
@@ -346,7 +348,9 @@ public sealed record UpdateOrderRequest(
     Optional<Money> DeliveryFee,
     Optional<string?> TableLabel,
     Optional<string?> TabNumber,
-    Optional<string?> Notes);
+    Optional<string?> Notes,
+    Optional<ExpectedPaymentMethod?> ExpectedPaymentMethod = default,
+    Optional<Money?> ChangeFor = default);
 
 public sealed record UpdateOrderCommand(Guid OrderId, UpdateOrderRequest Changes);
 

@@ -258,11 +258,42 @@ public sealed class FixedMenuDomainTests
 
         var coca = Product.Create(Guid.NewGuid(), Tenant, ProductKind.Beverage, "Coca", null, null, M(6m), null, Now);
         coca.SitePrice.ShouldBe(M(6m), "a API sempre grava o preço de site da bebida visível");
-        var free = Product.Create(Guid.NewGuid(), Tenant, ProductKind.Beverage, "Água da casa", null, null, M(0m), null, Now);
-        free.IsVisibleOnPage.ShouldBeFalse("bebida de 0,00 não tem preço de site (> 0)");
-        free.SitePrice.ShouldBeNull();
         Should.Throw<BusinessException>(() => Product.Create(Guid.NewGuid(), Tenant, ProductKind.Addon, "Ovo", null, null, M(2m), null, Now, M(3m)));
     }
+
+    /// I6 (revisão de 2026-11-23, ADR-0057 item 2): a bebida do restaurante pode ter preço de site 0,00 e continua no
+    /// site; preço de site negativo e o de um adicional continuam recusados.
+    [Fact]
+    public void Free_beverage_stays_on_site_with_site_price_zero()
+    {
+        var free = Product.Create(Guid.NewGuid(), Tenant, ProductKind.Beverage, "Água da casa", null, null, M(0m), null, Now);
+        free.IsVisibleOnPage.ShouldBeTrue("bebida de 0,00 não sai mais do site");
+        free.SitePrice.ShouldBe(M(0m), "sem preço de site, vale o de balcão, mesmo 0,00");
+
+        var coffee = Product.Create(Guid.NewGuid(), Tenant, ProductKind.Beverage, "Cafezinho", null, null, M(3m), null, Now, M(0m));
+        coffee.SitePrice.ShouldBe(M(0m), "cortesia no site, cobrado no balcão");
+
+        // Escondida sem preço de site e mostrada de novo sem enviar o preço: volta com o de balcão (0,00), sem o 422 de antes.
+        free.Apply(ProductChangesWith(isVisibleOnPage: false, sitePrice: new Optional<Money?>(null)), kindLocked: false, Now);
+        free.SitePrice.ShouldBeNull();
+        free.Apply(ProductChangesWith(isVisibleOnPage: true), kindLocked: false, Now);
+        free.IsVisibleOnPage.ShouldBeTrue();
+        free.SitePrice.ShouldBe(M(0m));
+
+        coffee.Apply(ProductChangesWith(sitePrice: new Optional<Money?>(M(1m))), kindLocked: false, Now);
+        coffee.SitePrice.ShouldBe(M(1m));
+        coffee.Apply(ProductChangesWith(sitePrice: new Optional<Money?>(M(0m))), kindLocked: false, Now);
+        coffee.SitePrice.ShouldBe(M(0m));
+
+        Should.Throw<BusinessException>(() => coffee.Apply(ProductChangesWith(sitePrice: new Optional<Money?>(M(-1m))), kindLocked: false, Now));
+        Should.Throw<BusinessException>(() => coffee.Apply(ProductChangesWith(sitePrice: new Optional<Money?>(null)), kindLocked: false, Now))
+            .ErrorCode.ShouldBe(ErrorCodes.ValidationFailed);
+        Should.Throw<BusinessException>(() => Product.Create(Guid.NewGuid(), Tenant, ProductKind.Addon, "Ovo", null, null, M(2m), null, Now, M(0m)));
+    }
+
+    private static ProductChanges ProductChangesWith(bool? isVisibleOnPage = null, Optional<Money?> sitePrice = default) => new(
+        default, default, default, default, default, default, default, default, default,
+        isVisibleOnPage is { } v ? new Optional<bool>(v) : default, sitePrice);
 
     private static DishChanges Changes(bool? hasSizes = null, Money? price = null, IReadOnlyList<DishSizeSpec>? sizes = null) => new(
         default, default, default, default,

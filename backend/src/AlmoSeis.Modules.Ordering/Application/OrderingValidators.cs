@@ -1,4 +1,5 @@
 using AlmoSeis.Modules.Ordering.Contracts;
+using AlmoSeis.SharedKernel.Domain;
 using FluentValidation;
 
 namespace AlmoSeis.Modules.Ordering.Application;
@@ -176,6 +177,10 @@ internal sealed class UpdateOrderRequestValidator : AbstractValidator<UpdateOrde
         RuleFor(x => x.TableLabel.Value).MaximumLength(10).When(x => x.TableLabel.HasValue).OverridePropertyName("tableLabel");
         RuleFor(x => x.TabNumber.Value).MaximumLength(10).When(x => x.TabNumber.HasValue).OverridePropertyName("tabNumber");
         RuleFor(x => x.Notes.Value).MaximumLength(300).When(x => x.Notes.HasValue).OverridePropertyName("notes");
+        RuleFor(x => x.ExpectedPaymentMethod.Value).IsInEnum()
+            .When(x => x.ExpectedPaymentMethod is { HasValue: true, Value: not null }).OverridePropertyName("expectedPaymentMethod");
+        RuleFor(x => x.ChangeFor.Value).Must(c => c is null || c.Value > Money.Zero).WithMessage("Informe um valor maior que zero.")
+            .When(x => x.ChangeFor.HasValue).OverridePropertyName("changeFor");
     }
 }
 

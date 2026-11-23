@@ -59,8 +59,14 @@ internal sealed class DailyClosing : Entity, ITenantOwned, ISyncTracked
     public Money TotalSold { get; private set; }
     public Money DeliveryFeesTotal { get; private set; }
 
-    /// "Vendido pelo site" (ADR-0057 item 12): pedidos `SITE` ativos e aceitos, parte do `TotalSold`. Só informativo.
+    /// "Vendido pelo site" (ADR-0057 item 12, revisão de 2026-11-23, M1): Σ (total − taxa de entrega) dos pedidos `SITE`
+    /// ativos e aceitos, ou seja, os itens a preço de site. Com `SiteDeliveryFeeTotal` (Σ taxa deles), é a parte do site
+    /// no `TotalSold` (`ck_daily_closings_site_sold`). Só informativo. Fechamento anterior à 0012 que ela não conseguiu
+    /// separar fica com a taxa dentro e `SiteDeliveryFeeTotal = 0` (05 §5.17 0012).
     public Money SiteSoldTotal { get; private set; }
+
+    /// Taxa de entrega dos pedidos do site (M1), parte do `DeliveryFeesTotal` (`ck_daily_closings_site_delivery_fee`).
+    public Money SiteDeliveryFeeTotal { get; private set; }
     public Money TotalReceived { get; private set; }
     public Money ReceivedFromPreviousDays { get; private set; }
     public Money TotalPending { get; private set; }
@@ -114,6 +120,7 @@ internal sealed class DailyClosing : Entity, ITenantOwned, ISyncTracked
             TotalSold = f.TotalSold,
             DeliveryFeesTotal = f.DeliveryFeesTotal,
             SiteSoldTotal = f.SiteSoldTotal,
+            SiteDeliveryFeeTotal = f.SiteDeliveryFeeTotal,
             TotalReceived = f.TotalReceived,
             ReceivedFromPreviousDays = f.ReceivedFromPreviousDays,
             TotalPending = f.TotalPending,
@@ -231,8 +238,10 @@ internal enum ClosingDimension
 // ---------- Cálculo (04 §4.9) ----------
 
 /// Somas vindas do banco, por bloco. Chaves de texto: o Closing não referencia Ordering nem Payments (07 §7.1).
-/// `SiteSold`: a parte de `Sold` com `price_list = 'SITE'` (ADR-0057 item 12).
-internal sealed record OrderTotalsRow(string OrderType, bool Canceled, int Count, Money Sold, Money DeliveryFees, Money Pending, Money SiteSold = default);
+/// `SiteSold` + `SiteDeliveryFees`: a parte de `Sold` com `price_list = 'SITE'` (ADR-0057 item 12), separada em itens
+/// (total − taxa) e taxa de entrega (revisão de 2026-11-23, M1).
+internal sealed record OrderTotalsRow(
+    string OrderType, bool Canceled, int Count, Money Sold, Money DeliveryFees, Money Pending, Money SiteSold = default, Money SiteDeliveryFees = default);
 
 internal sealed record PaymentTotalsRow(string OrderType, string PaymentMethod, bool FromPreviousDay, int Count, Money Amount);
 
@@ -277,7 +286,8 @@ internal sealed record ClosingFigures(
     int AwaitingAcceptanceCount,
     int NotAcceptedCount,
     int UnmarkedDeliveryCount,
-    Money SiteSoldTotal);
+    Money SiteSoldTotal,
+    Money SiteDeliveryFeeTotal);
 
 /// **Única** implementação das fórmulas do fechamento, usada pelo resumo parcial e pela finalização (07 §7.9).
 internal static class ClosingCalculator
@@ -336,6 +346,7 @@ internal static class ClosingCalculator
             counts.AwaitingAcceptance,
             counts.NotAccepted,
             counts.UnmarkedDeliveries,
-            Money.Sum(active.Select(o => o.SiteSold)));
+            Money.Sum(active.Select(o => o.SiteSold)),
+            Money.Sum(active.Select(o => o.SiteDeliveryFees)));
     }
 }

@@ -2,6 +2,7 @@
 
 - **Status:** Proposto
 - **Data:** 2026-11-22
+- **Atualizado:** 2026-11-23, decisões do usuário sobre a revisão do EP-003 (itens 2 e 12; ver "Complemento (2026-11-23)")
 - **Origem:** EP-003, RF-309; decisões do dono do produto em 2026-11-22 (itens 5, 6 e 10)
 - **Relacionados:** ADR-0020 (complementado), ADR-0021, ADR-0044 (complementado), ADR-0048, ADR-0050 (complementado, item 19), ADR-0056, ADR-0058
 
@@ -29,6 +30,7 @@ O salão e o delivery por telefone usam o mesmo preço (o de balcão). Só o sit
    | Marmita (restaurante) | **cada tamanho de marmita** (`MarmitaSize`) |
 
 2. Ao ligar a chave, o preço de site vem preenchido com o preço de balcão. Com a chave ligada, o preço de site é obrigatório e maior que zero. Pode ser **maior, menor ou igual** ao de balcão.
+   *(Complementado em 2026-11-23, I6: a **bebida do restaurante** (`Product` `BEVERAGE`) aceita preço de site **`>= 0`**; sem preço de site informado vale o de balcão também quando é `0,00`, e a bebida de `0,00` continua na página. As outras unidades continuam `> 0`. O tamanho de marmita criado sem `sellsOnSite` continua fora do site.)*
 3. Desligada, a unidade **não aparece** na página. Um prato com tamanho aparece na página se pelo menos um tamanho vende no site.
 4. Um combo vende no site pela chave do próprio combo. Os componentes não precisam vender no site sozinhos; basta estarem vendáveis (ADR-0056 item 23).
 5. Bebidas do restaurante (`Product` `BEVERAGE`): *recomendação (Q-307)*: o `IsVisibleOnPage` atual passa a ser o "vende no site" delas, e elas ganham `SitePrice`. Adicionais (`Product` `ADDON`, opções de grupo) e acréscimos de sabor: *recomendação (Q-308)*: **mesmo preço** no balcão e no site nesta fase.
@@ -45,6 +47,7 @@ O salão e o delivery por telefone usam o mesmo preço (o de balcão). Só o sit
 
 11. Preço de site menor que o de balcão **não é desconto** (ADR-0021 continua: sem desconto), e maior não é taxa de serviço. É outra tabela de preço, decidida antes da venda. O vendido do fechamento soma o que foi cobrado.
 12. O fechamento ganha a informação "Vendido pelo site" (soma dos pedidos com `PriceList = SITE`), só informativa, para o estabelecimento conferir a cobrança da plataforma no futuro.
+    *(Complementado em 2026-11-23, M1: o "Vendido pelo site" passa a ser **sem a taxa de entrega**, Σ (total − taxa), e a taxa dos pedidos do site vai para um número próprio, "Taxa de entrega do site". Ver o complemento abaixo.)*
 
 **Motivo de negócio e cobrança da plataforma (em aberto)**
 
@@ -61,6 +64,27 @@ O salão e o delivery por telefone usam o mesmo preço (o de balcão). Só o sit
 **Migração**
 
 15. Para nenhuma página existente mudar de preço: todo `MarmitaSize` ativo recebe `SellsOnSite = true` e `SitePrice = Price`; toda bebida com `IsVisibleOnPage = true` recebe `SitePrice = DefaultPrice`. O estabelecimento ajusta depois.
+
+## Complemento (2026-11-23, revisão do EP-003: itens 2 e 12, detalhados em `docs/05-ddl.md` §5.17 0012, `docs/06-contratos-api.md` §6.5 e §6.11 e `docs/07-backend.md` §7.8 e §7.9)
+
+Decisões do usuário sobre os achados I6 e M1 da revisão do EP-003.
+
+**Item 2: bebida do restaurante com preço de site `0,00` (I6)**
+
+- A bebida do restaurante (água da casa, cafezinho) pode ter **preço de site `>= 0`** (`products_site_price_check`, 0012). `ck_products_site_price` continua: só `BEVERAGE` tem preço de site, e o adicional continua sem ele (Q-308).
+- Bebida visível **sem** preço de site informado recebe o de balcão, **mesmo `0,00`**: no cadastro ela nasce visível com preço de site `0,00` (antes nascia fora do site), e ao ser mostrada de novo sem preço também (antes, `422`). Apagar o preço de site de uma bebida que continua visível continua `422`. Preço de site negativo → `422`.
+- A bebida de `0,00` que a 0009 tirou da página volta pela correção de dados da 0012 (05 §5.17), salvo as que o dono escondeu.
+- Tamanho de marmita, prato, tamanho de prato, tamanho de bebida do cardápio fixo e combo **continuam `> 0`**.
+- **Tamanho de marmita criado sem `sellsOnSite`** continua `false` (fora do site). O app do EP-003 sempre envia a chave, e a versão mínima do app sobe na mesma release que leva esta API (09 §9.4, "Ordem de deploy do EP-003"), então o app antigo não cria tamanho por muito tempo. Os tamanhos **inativos** que nunca tiveram a chave ligada recebem `sellsOnSite = true` pela correção da 0012.
+
+**Item 12: "Vendido pelo site" sem a taxa de entrega (M1)**
+
+- `siteSoldTotal` = Σ (`total_amount` − `delivery_fee`) dos pedidos `SITE` aceitos e ativos do expediente: os **itens a preço de site**.
+- Novo `siteDeliveryFeeTotal` = Σ `delivery_fee` desses pedidos, contido no `deliveryFeesTotal`. Os dois juntos são a parte do site no vendido (`ck_daily_closings_site_sold`: `site_sold_total + site_delivery_fee_total <= total_sold`).
+- Exemplo: retirada do site R$ 40,00 + entrega do site R$ 45,00 (R$ 40,00 + R$ 5,00 de taxa) + PF do app R$ 48,00 → vendido R$ 133,00; "Vendido pelo site" R$ 80,00; "Taxa de entrega do site" R$ 5,00.
+- Vale no resumo parcial, no snapshot do fechamento (coluna nova `daily_closings.site_delivery_fee_total`) e no relatório mensal (soma dos snapshots).
+- Continua só informativo. A base da cobrança da plataforma (com ou sem a taxa) segue em aberto (Q-310): com os dois números no snapshot, qualquer das bases sai dele.
+- Fechamentos existentes: a 0012 separa a taxa quando os pedidos do expediente ainda batem com o snapshot; os demais ficam com a taxa dentro do `siteSoldTotal` e `siteDeliveryFeeTotal = 0` (limitação registrada em 09 §9.4).
 
 ## Alternativas consideradas
 

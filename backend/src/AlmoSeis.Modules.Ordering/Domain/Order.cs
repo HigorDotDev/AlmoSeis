@@ -258,24 +258,70 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
         return order;
     }
 
-    /// "Troco para R$ X" só em dinheiro e de pelo menos o total (ADR-0044 item 19; no app, ADR-0059 item 5). Conferido
-    /// só na criação: uma edição posterior pode passar o total do "troco para", que é só informação (05 §5.17 0011).
-    private void EnsureChangeFor()
+    /// "Troco para R$ X" só em dinheiro e de pelo menos o total (ADR-0044 item 19; no app, ADR-0059 item 5). O mínimo é
+    /// conferido na criação e quando o próprio "troco para" é editado (PATCH); uma edição de itens, quantidades ou taxa
+    /// pode passar o total do "troco para" sem ser recusada (ADR-0059, revisão de 2026-11-23, I2): o pedido expõe o
+    /// `ChangeForBelowTotal` para o app alertar.
+    private void EnsureChangeFor() => EnsureChangeFor(ExpectedPaymentMethod, ChangeFor, TotalAmount, checkMinimum: true);
+
+    private static void EnsureChangeFor(ExpectedPaymentMethod? method, Money? changeFor, Money total, bool checkMinimum)
     {
-        if (ChangeFor is not { } change)
+        if (changeFor is not { } change)
         {
             return;
         }
 
-        if (ExpectedPaymentMethod != Contracts.ExpectedPaymentMethod.Cash)
+        if (method != Contracts.ExpectedPaymentMethod.Cash)
         {
             throw BusinessException.Validation("changeFor", "Troco só para pagamento em dinheiro.");
         }
 
-        if (change < TotalAmount || change.IsZero || change.IsNegative)
+        if (checkMinimum && (change < total || change.IsZero || change.IsNegative))
         {
-            throw BusinessException.Validation("changeFor", $"O valor para troco precisa ser de pelo menos R$ {TotalAmount}.");
+            throw BusinessException.Validation("changeFor", $"O valor para troco precisa ser de pelo menos R$ {total}.");
         }
+    }
+
+    /// "Troco para" abaixo do total do pedido (ADR-0059, revisão de 2026-11-23, I2): o motoboy levaria troco a menos.
+    /// Só informação, nunca recusa.
+    public bool ChangeForBelowTotal => ChangeForBelowTotalRule(ChangeFor, TotalAmount);
+
+    public static bool ChangeForBelowTotalRule(Money? changeFor, Money totalAmount) => changeFor is { } change && change < totalAmount;
+
+    /// Forma prevista e "troco para" do PATCH (ADR-0059, revisão de 2026-11-23, I1), com as regras da criação: proibidos
+    /// no salão (trocar para `DINE_IN` apaga os dois); trocar o atendimento ou enviar a forma confere a obrigatoriedade
+    /// na entrega (Q-316), e um pedido de entrega antigo sem forma continua editável nos outros campos; "troco para" só
+    /// com dinheiro, e o mínimo (o total depois deste PATCH) só quando ele mesmo muda. A forma que deixa de ser dinheiro
+    /// sem `changeFor` no corpo leva o "troco para" guardado junto.
+    private (ExpectedPaymentMethod? Method, Money? ChangeFor) ResolveExpectedPayment(
+        OrderDetailsChanges changes, FulfillmentType fulfillment, Money total)
+    {
+        if (fulfillment == FulfillmentType.DineIn)
+        {
+            if (changes.ExpectedPaymentMethod is { HasValue: true, Value: not null })
+            {
+                throw BusinessException.Validation("expectedPaymentMethod", "Pedido no salão não tem forma de pagamento prevista.");
+            }
+
+            if (changes.ChangeFor is { HasValue: true, Value: not null })
+            {
+                throw BusinessException.Validation("changeFor", "Pedido no salão não tem troco previsto.");
+            }
+
+            return (null, null);
+        }
+
+        var method = changes.ExpectedPaymentMethod.GetValueOr(ExpectedPaymentMethod);
+        if (fulfillment != FulfillmentType || changes.ExpectedPaymentMethod.HasValue)
+        {
+            EnsureExpectedPayment(fulfillment, method);
+        }
+
+        var changeFor = changes.ChangeFor.HasValue
+            ? changes.ChangeFor.Value
+            : method == Contracts.ExpectedPaymentMethod.Cash ? ChangeFor : null;
+        EnsureChangeFor(method, changeFor, total, checkMinimum: Differs(changes.ChangeFor, ChangeFor));
+        return (method, changeFor);
     }
 
     /// Pedido da página que não virou venda (`REJECTED`, `EXPIRED`, `WITHDRAWN`), 7 dias depois (ADR-0052 item 3): nome,
@@ -518,9 +564,11 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
         EnsureAccepted();
         EnsureNotCanceled();
 
+        // Forma prevista e "troco para" (ADR-0059, revisão de 2026-11-23, I1) também só enquanto não quitado.
         var financial = Differs(changes.CustomerName, CustomerName) || Differs(changes.CustomerPhone, CustomerPhone)
             || Differs(changes.FulfillmentType, FulfillmentType) || Differs(changes.DeliveryAddress, DeliveryAddress)
-            || Differs(changes.DeliveryFee, DeliveryFee);
+            || Differs(changes.DeliveryFee, DeliveryFee)
+            || Differs(changes.ExpectedPaymentMethod, ExpectedPaymentMethod) || Differs(changes.ChangeFor, ChangeFor);
         if (financial && IsPaid)
         {
             throw new BusinessException(ErrorCodes.OrderAlreadyPaid);
@@ -550,6 +598,7 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
             ? changes.DeliveryFee.GetValueOr(Money.Zero)
             : changes.DeliveryFee.GetValueOr(FulfillmentType == FulfillmentType.Delivery ? DeliveryFee : defaultDeliveryFee);
         EnsureDelivery(fulfillment, address, fee);
+        var (method, changeFor) = ResolveExpectedPayment(changes, fulfillment, ItemsTotal + WeighingsTotal + fee);
 
         var before = new { FulfillmentType, DeliveryAddress, DeliveryFee, Notes };
         var notes = changes.Notes.GetValueOr(Notes);
@@ -557,7 +606,8 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
         var notesChanged = notes != Notes;
         var anyChange = fulfillmentChanged || notesChanged || customerName != CustomerName
             || changes.CustomerPhone.GetValueOr(CustomerPhone) != CustomerPhone
-            || changes.TableLabel.GetValueOr(TableLabel) != TableLabel || changes.TabNumber.GetValueOr(TabNumber) != TabNumber;
+            || changes.TableLabel.GetValueOr(TableLabel) != TableLabel || changes.TabNumber.GetValueOr(TabNumber) != TabNumber
+            || method != ExpectedPaymentMethod || changeFor != ChangeFor;
         if (!anyChange)
         {
             return;
@@ -578,13 +628,8 @@ internal sealed class Order : AggregateRoot, ITenantOwned, ISyncTracked
 
         CustomerName = customerName;
         CustomerPhone = customerPhone;
-        if (fulfillment == FulfillmentType.DineIn)
-        {
-            // A comanda do salão paga na mesa: sem forma prevista nem troco (ck_orders_expected_payment_fulfillment).
-            ExpectedPaymentMethod = null;
-            ChangeFor = null;
-        }
-
+        ExpectedPaymentMethod = method;
+        ChangeFor = changeFor;
         FulfillmentType = fulfillment;
         DeliveryAddress = address;
         DeliveryFee = fee;
@@ -1416,7 +1461,9 @@ internal sealed record OrderDetailsChanges(
     Optional<Money> DeliveryFee,
     Optional<string?> TableLabel,
     Optional<string?> TabNumber,
-    Optional<string?> Notes);
+    Optional<string?> Notes,
+    Optional<ExpectedPaymentMethod?> ExpectedPaymentMethod = default,
+    Optional<Money?> ChangeFor = default);
 
 // ---------- Eventos de domínio (06 §6.14) ----------
 

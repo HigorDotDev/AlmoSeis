@@ -920,7 +920,7 @@ Convite inexistente, expirado ou já usado → `404 NotFound` (não diferencia, 
 
 `isVisibleOnPage` (ADR-0044 item 5): bebidas e adicionais com `false` não aparecem na página de pedidos (§6.19). Nasce `true`; muda pelo `PATCH`. Pratos e acompanhamentos seguem o cardápio do dia.
 
-`sitePrice` (EP-003, ADR-0057 item 5, Q-307): **só em `BEVERAGE`**, `> 0`. Na bebida, `isVisibleOnPage` é o "vende no site", e o pedido do site cobra o `sitePrice` (§6.19); adicionais usam o mesmo preço no site (Q-308) e têm `sitePrice: null` (enviar um valor → `422` em `errors.sitePrice`). A API **sempre** grava o preço de site da bebida visível: sem `sitePrice` no `POST`, ou ao tornar a bebida visível sem ele, vale o `defaultPrice`. Bebida de `"0.00"` não tem preço de site: no `POST` ela nasce com `isVisibleOnPage: false`; no `PATCH`, ficar visível sem `sitePrice` → `422` em `errors.sitePrice`. Bebida criada antes da migração 0009 (ou pela API anterior durante o deploy) pode vir visível com `sitePrice: null`: a página usa o `defaultPrice` até a próxima edição gravar o preço de site.
+`sitePrice` (EP-003, ADR-0057 item 5, Q-307): **só em `BEVERAGE`**, `>= 0` (desde 2026-11-23, migração 0012: a bebida do restaurante pode ter preço de site `"0.00"`, como a água da casa ou o cafezinho de cortesia no site; ADR-0057 item 2 complementado). Na bebida, `isVisibleOnPage` é o "vende no site", e o pedido do site cobra o `sitePrice` (§6.19); adicionais usam o mesmo preço no site (Q-308) e têm `sitePrice: null` (enviar um valor, mesmo `"0.00"` → `422` em `errors.sitePrice`). Negativo → `422` em `errors.sitePrice`. A API **sempre** grava o preço de site da bebida visível: sem `sitePrice` no `POST`, ou ao tornar a bebida visível sem ele, vale o `defaultPrice`, **também quando é `"0.00"`** (a bebida de `"0.00"` nasce visível, com `sitePrice: "0.00"`, e aparece na página a `"0.00"`). No `PATCH`, apagar o preço de site (`sitePrice: null`) de uma bebida que continua visível → `422` em `errors.sitePrice`; escondida, o `null` é aceito. Bebida criada antes da migração 0009 (ou pela API anterior durante o deploy) pode vir visível com `sitePrice: null`: a página usa o `defaultPrice` (mesmo `"0.00"`) até a próxima edição gravar o preço de site. Os demais preços de site (tamanho de marmita, prato, tamanho de prato, tamanho de bebida do cardápio fixo e combo) continuam `> 0`.
 
 | Método e rota | Permissão | Corpo → resposta |
 |---|---|---|
@@ -994,7 +994,7 @@ As leituras (`GET /products`, `GET /products/{id}`) não mudam.
 
 `MarmitaSize`: `{ "id": "0192d6a0-0000-7000-8000-000000000202", "version": 1, "name": "M", "price": "20.00", "sortOrder": 2, "isActive": true, "sellsOnSite": true, "sitePrice": "21.90" }`
 
-`sellsOnSite` e `sitePrice` (EP-003, ADR-0057 item 1): o tamanho só aparece na página com `sellsOnSite: true`, e o pedido do site cobra o `sitePrice` (pode ser maior, menor ou igual ao `price`; não é desconto nem taxa, item 11). Ligar sem `sitePrice` (ausente ou `null`) grava o `price` como preço de site (item 2). Desligada, o `sitePrice` fica guardado. No `POST`, `sellsOnSite` ausente = `false`. A migração 0009 ligou a chave em todo tamanho ativo, com `sitePrice = price`.
+`sellsOnSite` e `sitePrice` (EP-003, ADR-0057 item 1): o tamanho só aparece na página com `sellsOnSite: true`, e o pedido do site cobra o `sitePrice` (pode ser maior, menor ou igual ao `price`; não é desconto nem taxa, item 11). Ligar sem `sitePrice` (ausente ou `null`) grava o `price` como preço de site (item 2). Desligada, o `sitePrice` fica guardado. No `POST`, `sellsOnSite` ausente = `false` (decidido em 2026-11-23, ADR-0057 item 2 complementado: o app do EP-003 sempre envia a chave, e a versão mínima do app sobe na mesma release, 09 §9.4; o app antigo que cria um tamanho sem a chave o cria fora do site). A migração 0009 ligou a chave em todo tamanho ativo, com `sitePrice = price`, e a 0012 nos inativos que nunca a tiveram (05 §5.17). `sitePrice` do tamanho `<= 0` → `422`.
 
 | Método e rota | Permissão | Corpo → resposta |
 |---|---|---|
@@ -1574,6 +1574,7 @@ Fiado (`pendingAmount`, `pendingOrderCount` e `pending-orders`) só considera pe
   "notes": "Entregar até 12h30",
   "expectedPaymentMethod": "PIX",
   "changeFor": null,
+  "changeForBelowTotal": false,
   "riskFlag": null,
   "deliveryFee": "5.00",
   "deliveryFeeSource": "FIXED_DEFAULT",
@@ -1948,6 +1949,7 @@ Pedido "pagar na entrega/retirada" enviado pela página, aguardando aceite. A ro
   "notes": null,
   "expectedPaymentMethod": "CASH",
   "changeFor": "50.00",
+  "changeForBelowTotal": false,
   "riskFlag": null,
   "deliveryFee": "3.60",
   "deliveryFeeSource": "DISTANCE",
@@ -2019,7 +2021,7 @@ Pedido "pagar na entrega/retirada" enviado pela página, aguardando aceite. A ro
 - Não aparece na lista padrão, no painel da cozinha, no fechamento nem nas pendências do cliente (RN-206.9). O app lê a faixa "Novos do site" com `GET /orders?acceptanceStatus=AWAITING_ACCEPTANCE` e conta o prazo com `acceptanceDeadline`.
 - Depois do aceite é um pedido comum (edita, recebe pagamento manual, pode ser cancelado pelo ADR-0022).
 - `customer.phoneNumber` não é verificado (ADR-0044): o app mostra "telefone não verificado" nos pedidos `WEB`.
-- `expectedPaymentMethod` (`CASH`, `PIX`, `CARD`: a forma que o cliente pretende usar, ADR-0044 item 19; **não** cria pagamento) e `changeFor` ("troco para R$ X", só com `CASH`) existem no pedido do site e, desde o EP-003 fatia 4, também no pedido do app de entrega e retirada (marmita e à la carte, ADR-0059 item 5; regras em `POST /orders`). Na comanda do salão (`DINE_IN`), sempre `null`. `riskFlag` (`CAPTCHA_UNAVAILABLE` quando o anti-robô não respondeu no envio, ADR-0045 item 12: o app pode destacar o pedido) continua só no pedido `WEB` (`null` nos do app).
+- `expectedPaymentMethod` (`CASH`, `PIX`, `CARD`: a forma que o cliente pretende usar, ADR-0044 item 19; **não** cria pagamento) e `changeFor` ("troco para R$ X", só com `CASH`) existem no pedido do site e, desde o EP-003 fatia 4, também no pedido do app de entrega e retirada (marmita e à la carte, ADR-0059 item 5; regras em `POST /orders`). Na comanda do salão (`DINE_IN`), sempre `null`. Desde 2026-11-23 os dois mudam pelo `PATCH /orders/{id}` enquanto o pedido não está quitado (ADR-0059 complementado, I1). `changeForBelowTotal` (I2, derivado, nunca gravado): `true` quando há `changeFor` e ele ficou **abaixo** do `totalAmount` (um item, quantidade ou taxa incluído depois passou o total do "troco para"); o app mostra o alerta "o troco para R$ X não cobre o total" para o atendente conferir o troco com o cliente. Sem `changeFor`, ou igual ou acima do total, `false`. `riskFlag` (`CAPTCHA_UNAVAILABLE` quando o anti-robô não respondeu no envio, ADR-0045 item 12: o app pode destacar o pedido) continua só no pedido `WEB` (`null` nos do app).
 - Pedidos do site que não viraram venda (`REJECTED`, `EXPIRED`, `WITHDRAWN`) têm nome, telefone, endereço e observações anonimizados 7 dias depois (ADR-0052 item 3): `customer.name = "Cliente anonimizado"`, `phoneNumber: null`, endereço `"Endereço anonimizado"`. Itens, valores e motivo ficam.
 - A partir da fatia 2 o envio é a rota pública `POST /public/stores/{slug}/orders` (§6.19).
 
@@ -2037,7 +2039,7 @@ Filtros:
 
 Ordenação: `createdAt` decrescente (na prática, pelo id UUID v7, que segue a ordem de criação). Sem `businessDayId` e sem expediente aberto, a lista vem vazia.
 
-`expectedPaymentMethod` e `changeFor` vêm também no resumo (EP-003 fatia 4), para o card do delivery mostrar o troco que o motoboy leva (`changeFor − balance`, ADR-0059 item 12). Fora de entrega e retirada, e quando ninguém informou, `null`.
+`expectedPaymentMethod` e `changeFor` vêm também no resumo (EP-003 fatia 4), para o card do delivery mostrar o troco que o motoboy leva (`changeFor − balance`, ADR-0059 item 12). Fora de entrega e retirada, e quando ninguém informou, `null`. `changeForBelowTotal` (2026-11-23, I2) vem no resumo com a mesma regra do `Order`, para o card mostrar o alerta em vez de um troco negativo.
 
 **Aba Delivery da lanchonete** (ADR-0059 itens 10 a 12, RF-315): `GET /orders?orderType=A_LA_CARTE&fulfillmentType=DELIVERY&fulfillmentType=PICKUP` lista os pedidos do telefone (`origin: "APP"`) e do site já aceitos (`origin: "WEB"`, selo "Site") do expediente aberto, com `fulfillmentStatus` para os filtros por status; a faixa "Novos do site" é a mesma lista com `acceptanceStatus=AWAITING_ACCEPTANCE`. "Pronto para retirar" é o `isReadyForPickup` (derivado, ADR-0046 item 2).
 
@@ -2067,6 +2069,7 @@ Ordenação: `createdAt` decrescente (na prática, pelo id UUID v7, que segue a 
       "isReadyForPickup": false,
       "expectedPaymentMethod": "PIX",
       "changeFor": null,
+      "changeForBelowTotal": false,
       "itemCount": 3,
       "pendingAlertCount": 1,
       "createdAt": "2026-10-27T11:30:00Z"
@@ -2104,6 +2107,7 @@ Ordenação: `createdAt` decrescente (na prática, pelo id UUID v7, que segue a 
       "isReadyForPickup": false,
       "expectedPaymentMethod": "CASH",
       "changeFor": "50.00",
+      "changeForBelowTotal": false,
       "itemCount": 1,
       "pendingAlertCount": 0,
       "createdAt": "2026-10-27T12:00:00Z"
@@ -2159,7 +2163,7 @@ Regras do corpo:
 - **Cliente:** `customerId` vincula o cadastro informado. Sem ele, `saveCustomer: true` cria o cliente com o endereço (o "salvar cliente" da marmita, Q-313). Sem os dois, em **entrega ou retirada** com `customerPhone`, o pedido é vinculado ao cliente desse telefone ou cria um novo **só com nome e telefone, sem endereço salvo** (ADR-0059 item 14), sem precisar marcar nada. Telefone já cadastrado com outro nome: o pedido guarda o nome digitado e o cadastro não muda (Q-314). Dois atendentes com o mesmo telefone novo ao mesmo tempo criam um cliente só (05 §5.14). No salão (`DINE_IN`), o telefone nunca cria cliente.
 - **Nome e telefone** (`customerName`, `customerPhone` em E.164; ADR-0059, Q-312): marmita sempre com nome; **entrega de marmita** também com telefone; retirada de marmita (balcão) com telefone opcional, como hoje. À la carte de **entrega ou retirada** (delivery por telefone) com nome e telefone. Faltando → `422 ValidationFailed` em `customerName` ou `customerPhone`.
 - **Formato do telefone** (normalizado no servidor, para o mesmo número não virar dois clientes): o número brasileiro passa pela mesma normalização da página de pedidos (§6.19) e aceita `"(34) 99999-1234"`, `"34999991234"`, `"+55 34 99999-1234"`, `"034999991234"` e `"+5534999991234"`, todos gravados (no pedido e no cliente) e devolvidos como `"+5534999991234"`; outro E.164 (estrangeiro) segue como veio. Fora dos dois → `422 ValidationFailed` em `customerPhone`. O `PATCH /orders/{id}` normaliza do mesmo jeito.
-- **Forma prevista e troco** (`expectedPaymentMethod`: `CASH`, `PIX`, `CARD`; `changeFor`: string de dinheiro; ADR-0059 item 5, Q-316): a forma é **obrigatória na entrega**, opcional na retirada e **proibida no salão** (`422` em `expectedPaymentMethod`). Precisa estar entre as formas habilitadas do estabelecimento (`422 PaymentMethodDisabled`). `changeFor` só com `CASH` e de pelo menos o total do pedido, conferido na criação (`422` em `changeFor`). É só informação para o entregador: **não cria pagamento** nem marca nada como pago; o pagamento é registrado na confirmação do recebimento (`POST /orders/{id}/payments`, ADR-0059 item 8). Uma edição posterior que passe o total do "troco para" não é recusada por isso (05 §5.17 0011).
+- **Forma prevista e troco** (`expectedPaymentMethod`: `CASH`, `PIX`, `CARD`; `changeFor`: string de dinheiro; ADR-0059 item 5, Q-316): a forma é **obrigatória na entrega**, opcional na retirada e **proibida no salão** (`422` em `expectedPaymentMethod`). Precisa estar entre as formas habilitadas do estabelecimento (`422 PaymentMethodDisabled`). `changeFor` só com `CASH` e de pelo menos o total do pedido, conferido na criação e quando o próprio `changeFor` é editado no `PATCH` (`422` em `changeFor`). É só informação para o entregador: **não cria pagamento** nem marca nada como pago; o pagamento é registrado na confirmação do recebimento (`POST /orders/{id}/payments`, ADR-0059 item 8). Uma edição posterior de itens, quantidades ou taxa que passe o total do "troco para" **não é recusada** (05 §5.17 0011; ADR-0059 complementado em 2026-11-23, I2): o pedido passa a vir com `changeForBelowTotal: true`.
 - **Cardápio do dia:** pratos e acompanhamentos precisam estar disponíveis no cardápio `MARMITA` da data (`422 ProductUnavailable`).
 
 PF:
@@ -2360,7 +2364,9 @@ Altera dados do pedido, não itens:
   "deliveryFee": "0.00",
   "tableLabel": null,
   "tabNumber": null,
-  "notes": "Cliente vai buscar"
+  "notes": "Cliente vai buscar",
+  "expectedPaymentMethod": "PIX",
+  "changeFor": null
 }
 ```
 
@@ -2369,7 +2375,12 @@ Campos ausentes não mudam. Em pedido pago, só `notes`, `tableLabel` e `tabNumb
 Desde o EP-003 fatia 4 (ADR-0059):
 - `deliveryFee` diferente da padrão exige `orders.delivery-fee.edit` (`403 PermissionDenied`, extensão `permission`), também para quem criou o pedido e digitou a taxa na criação (Q-315).
 - Nome e telefone seguem as regras da criação: trocar `fulfillmentType` confere os dois (comanda à la carte que vira retirada precisa de nome e telefone no mesmo `PATCH`); sem trocar, só o campo enviado é conferido (apagar o telefone de uma entrega → `422` em `customerPhone`). Um pedido antigo sem telefone continua editável.
-- `expectedPaymentMethod` e `changeFor` não mudam por esta rota. Trocar um pedido à la carte para `DINE_IN` apaga os dois (a comanda paga na mesa).
+- `expectedPaymentMethod` e `changeFor` (desde 2026-11-23, ADR-0059 complementado, I1) mudam enquanto o pedido **não está quitado**, com as regras da criação; quitado → `409 OrderAlreadyPaid` (ADR-0007). Também no pedido do site já aceito.
+  - A forma precisa estar entre as formas habilitadas (`422 PaymentMethodDisabled`, conferido só quando a forma muda). No salão (`DINE_IN`, ou trocando para ele) a forma e o troco são proibidos (`422` em `expectedPaymentMethod` ou `changeFor`); trocar para `DINE_IN` apaga os dois (a comanda paga na mesa).
+  - **Entrega exige a forma** (Q-316): trocar `fulfillmentType` para `DELIVERY` sem `expectedPaymentMethod` no mesmo `PATCH` (quando o pedido não tinha forma), ou enviar `expectedPaymentMethod: null` numa entrega → `422` em `expectedPaymentMethod`. Sem trocar o atendimento e sem enviar a forma, uma entrega antiga sem forma continua editável nos outros campos.
+  - `changeFor` só com `CASH` (`422` em `changeFor`). Ao **editar o próprio `changeFor`** (valor diferente do gravado), ele precisa ser de pelo menos o `totalAmount` resultante deste `PATCH` (`422` em `changeFor`, com a mesma mensagem da criação); `changeFor: null` apaga o troco. A forma que deixa de ser `CASH` sem `changeFor` no corpo apaga o "troco para" gravado (ele só existe em dinheiro); com `changeFor` diferente de `null` no corpo → `422`.
+  - Uma edição de `deliveryFee` (ou de itens, pelas rotas de item) que passe o total do "troco para" é aceita e o pedido volta com `changeForBelowTotal: true` (I2).
+  - A auditoria `OrderDetailsUpdated` leva `expectedPaymentMethod` e `changeFor` no antes e no depois.
 - O vínculo com o cliente (`customer.id`) não muda por esta rota.
 - Trocar `fulfillmentType` exige o módulo do **novo** atendimento, como na criação (ADR-0054 item 14, ADR-0058 item 1): no à la carte, `DINE_IN` → `A_LA_CARTE` e `DELIVERY`/`PICKUP` → `DELIVERY`; nas outras modalidades, o módulo delas. Sem ele → `403 ModuleNotEnabled` com `module`, antes da conferência da versão do `If-Match` (`409`) e das regras de nome e telefone. Editar sem trocar o atendimento não confere módulo.
 
@@ -2822,6 +2833,7 @@ O fechamento **parcial**, calculado na hora (RN-010.1). Padrão: o expediente ab
   "totalSold": "3650.00",
   "deliveryFeesTotal": "85.00",
   "siteSoldTotal": "0.00",
+  "siteDeliveryFeeTotal": "0.00",
   "totalReceived": "3430.00",
   "receivedFromPreviousDays": "35.00",
   "totalPending": "220.00",
@@ -2858,7 +2870,7 @@ O fechamento **parcial**, calculado na hora (RN-010.1). Padrão: o expediente ab
 - Sem `businessDayId` e sem expediente aberto → `404 NoOpenBusinessDay`.
 - `closedAt` e `closedBy` existem nos dois formatos e só são preenchidos no fechamento finalizado.
 - `byOrderType` sempre traz as quatro chaves (`MARMITA`, `PF`, `KILO`, `A_LA_CARTE`) e `byPaymentMethod` as três, mesmo zeradas. O app mostra só as modalidades dos módulos do estabelecimento (e as que tiverem movimento). `A_LA_CARTE` é **uma linha** para salão, entrega e retirada (EP-003 Q-311; a abertura por atendimento não entra no snapshot nesta fase). Fechamentos anteriores à migração 0010 trazem a linha `A_LA_CARTE` zerada.
-- `siteSoldTotal` ("Vendido pelo site", ADR-0057 item 12): soma do `totalAmount` dos pedidos aceitos e ativos do expediente com `priceList: "SITE"`, já contida no `totalSold`. Só informativo: a cobrança da plataforma está em aberto (Q-310). Fechamentos anteriores à 0010: `"0.00"`.
+- `siteSoldTotal` ("Vendido pelo site", ADR-0057 item 12, complementado em 2026-11-23, M1): soma de `totalAmount − deliveryFee` dos pedidos aceitos e ativos do expediente com `priceList: "SITE"`, ou seja, **os itens a preço de site, sem a taxa de entrega**. `siteDeliveryFeeTotal`: soma do `deliveryFee` desses pedidos, já contida no `deliveryFeesTotal`. Os dois juntos são a parte do site no `totalSold`. Exemplo: retirada do site 40,00 + entrega do site 45,00 (40,00 + 5,00 de taxa) → `siteSoldTotal: "80.00"`, `siteDeliveryFeeTotal: "5.00"`. Só informativo: a cobrança da plataforma e a base dela (com ou sem a taxa) estão em aberto (Q-310). Fechamentos anteriores à 0010: `"0.00"` nos dois. Fechamento anterior à 0012 cujos pedidos mudaram depois do fechamento fica com a taxa **dentro** do `siteSoldTotal` e `siteDeliveryFeeTotal: "0.00"` (05 §5.17 0012).
 - **Só pedidos aceitos** entram em `orderCount`, vendido, pendente, cancelados e `byOrderType` (ADR-0046 item 4, RF-210). Pedido do site aceito entra como qualquer pedido `MARMITA`.
 - `webOrders` é informativo, fora do vendido (ADR-0046 item 13, RF-210.2): `awaitingAcceptanceCount` = pedidos do site do expediente ainda aguardando aceite, que a finalização vai recusar ("2 pedidos do site aguardando aceite serão recusados"); `notAcceptedCount` = recusados, expirados e desistências do expediente. No fechamento finalizado, `awaitingAcceptanceCount` é 0, `autoRejectedCount` diz quantos a finalização recusou, e eles já estão somados em `notAcceptedCount`.
 - `unmarkedDeliveryCount`: entregas aceitas e ativas sem `fulfillmentStatus: "DELIVERED"` ("N entregas sem marcação de entregue", ADR-0046 item 20). Só informa: a marcação é opcional.
@@ -2899,6 +2911,8 @@ Erros: `422 JustificationRequired`, `409 ClosingAlreadyFinalized`, `409 VersionC
   "totalReceived": "88940.00",
   "totalPendingAtClosings": "4120.00",
   "cashDifferenceTotal": "-37.50",
+  "siteSoldTotal": "1840.00",
+  "siteDeliveryFeeTotal": "215.00",
   "byOrderType": [
     { "orderType": "MARMITA", "sold": "31250.00", "received": "30100.00" },
     { "orderType": "PF", "sold": "21750.00", "received": "21050.00" },
@@ -2915,6 +2929,8 @@ Erros: `422 JustificationRequired`, `409 ClosingAlreadyFinalized`, `409 VersionC
   ]
 }
 ```
+
+`siteSoldTotal` e `siteDeliveryFeeTotal` (2026-11-23, M1): somas dos snapshots dos fechamentos do mês, como gravados (o fechamento anterior à 0012 que ela não separou soma a taxa dentro do `siteSoldTotal`, §6.11 `GET /closing/summary`).
 
 ### `POST /closing/{id}/adjustments` — `closing.adjust` [I]
 

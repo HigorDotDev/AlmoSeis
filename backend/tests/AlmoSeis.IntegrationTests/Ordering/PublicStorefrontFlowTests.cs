@@ -878,6 +878,48 @@ public sealed class PublicStorefrontFlowTests(PostgresFixture db) : IDisposable
         };
     }
 
+    /// I6 (revisão de 2026-11-23, ADR-0057 item 2): a bebida do restaurante de 0,00 nasce visível com preço de site 0,00
+    /// e aparece na página a 0,00; o cafezinho de 3,00 no balcão pode sair de graça no site. Preço de site negativo e o
+    /// de um adicional continuam 422; o tamanho de marmita continua > 0.
+    [Fact]
+    public async Task Free_beverage_is_sold_on_site_at_zero()
+    {
+        var s = await OrderingScenario.CreateAsync(_api, db);
+        var slug = await ActivateAsync(s);
+
+        var water = await (await s.Client.PostAsJsonAsync("/api/v1/products",
+            new { kind = "BEVERAGE", name = "Água da casa", description = (string?)null, category = (string?)null, defaultPrice = "0.00", requiresPreparation = (bool?)null }, Ct))
+            .ExpectAsync(HttpStatusCode.Created, _api);
+        water.GetProperty("isVisibleOnPage").GetBoolean().ShouldBeTrue();
+        water.GetProperty("sitePrice").GetString().ShouldBe("0.00");
+
+        var coffee = await (await s.Client.PostAsJsonAsync("/api/v1/products",
+            new { kind = "BEVERAGE", name = "Cafezinho", description = (string?)null, category = (string?)null, defaultPrice = "3.00", requiresPreparation = (bool?)null, sitePrice = "0.00" }, Ct))
+            .ExpectAsync(HttpStatusCode.Created, _api);
+        coffee.GetProperty("sitePrice").GetString().ShouldBe("0.00");
+
+        // Escondida sem preço de site e mostrada de novo: volta com o de balcão (0,00), sem o 422 de antes.
+        var hidden = await (await s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/products/{water.Id()}", new { isVisibleOnPage = false, sitePrice = (string?)null }, water.Version()))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+        hidden.GetProperty("sitePrice").ValueKind.ShouldBe(JsonValueKind.Null);
+        var shown = await (await s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/products/{water.Id()}", new { isVisibleOnPage = true }, hidden.Version()))
+            .ExpectAsync(HttpStatusCode.OK, _api);
+        shown.GetProperty("sitePrice").GetString().ShouldBe("0.00");
+
+        var beverages = (await PublicGet(slug)).GetProperty("menu").GetProperty("beverages").EnumerateArray()
+            .ToDictionary(b => b.GetProperty("productId").GetGuid(), b => b.GetProperty("price").GetString());
+        beverages[water.Id()].ShouldBe("0.00");
+        beverages[coffee.Id()].ShouldBe("0.00");
+        beverages[s.Coca].ShouldBe("6.00");
+
+        (await (await s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/products/{coffee.Id()}", new { sitePrice = "-1.00" }, coffee.Version()))
+            .ExpectAsync(HttpStatusCode.UnprocessableEntity, _api)).GetProperty("errors").TryGetProperty("sitePrice", out _).ShouldBeTrue();
+        (await (await s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/products/{s.Ovo}", new { sitePrice = "0.00" }, 1))
+            .ExpectAsync(HttpStatusCode.UnprocessableEntity, _api)).GetProperty("errors").TryGetProperty("sitePrice", out _).ShouldBeTrue();
+        (await (await s.Client.SendJsonAsync(HttpMethod.Patch, $"/api/v1/marmita-sizes/{s.SizeM}", new { sitePrice = "0.00" }, 1))
+            .ExpectAsync(HttpStatusCode.UnprocessableEntity, _api)).GetProperty("errors").TryGetProperty("sitePrice", out _).ShouldBeTrue();
+    }
+
     /// Bebida ativa, mas escondida da página (ADR-0044 item 5).
     private async Task<Guid> HiddenBeverageAsync(OrderingScenario s)
     {

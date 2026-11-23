@@ -148,6 +148,103 @@ public sealed class PhoneDeliveryOrderTests
             .ShouldBe(["customerName"]);
     }
 
+    /// I1 (revisão de 2026-11-23): forma prevista e "troco para" mudam pelo PATCH com as regras da criação. Pedido de
+    /// 57,00 (52,00 + 5,00) com troco para 100,00: vira Pix (o troco sai junto), volta para dinheiro com troco para 60,00;
+    /// troco para 50,00 (abaixo do total) é recusado porque o próprio "troco para" foi editado.
+    [Fact]
+    public void Patch_changes_the_expected_payment_and_the_change_for_with_the_creation_rules()
+    {
+        var order = Create(OrderType.ALaCarte, FulfillmentType.Delivery, items: [32m, 20m], fee: 5m, method: ExpectedPaymentMethod.Cash, changeFor: 100m);
+        var version = order.Version;
+
+        order.UpdateDetails(Payment(method: ExpectedPaymentMethod.Pix), Money.Of(5m), By, Guid.NewGuid, Now);
+        order.ExpectedPaymentMethod.ShouldBe(ExpectedPaymentMethod.Pix);
+        order.ChangeFor.ShouldBeNull("a forma deixou de ser dinheiro: o troco guardado sai junto");
+        order.Version.ShouldBeGreaterThan(version);
+
+        order.UpdateDetails(Payment(method: ExpectedPaymentMethod.Cash, changeFor: 60m), Money.Of(5m), By, Guid.NewGuid, Now);
+        order.ChangeFor.ShouldBe(Money.Of(60m));
+        order.ChangeForBelowTotal.ShouldBeFalse();
+
+        Fields(() => order.UpdateDetails(Payment(changeFor: 50m), Money.Of(5m), By, Guid.NewGuid, Now)).ShouldBe(["changeFor"]);
+        Fields(() => order.UpdateDetails(Payment(method: ExpectedPaymentMethod.Card, changeFor: 60m), Money.Of(5m), By, Guid.NewGuid, Now))
+            .ShouldBe(["changeFor"]);
+        Fields(() => order.UpdateDetails(Payment(clearMethod: true), Money.Of(5m), By, Guid.NewGuid, Now)).ShouldBe(["expectedPaymentMethod"]);
+
+        // Mesmo valor, nada muda: a versão fica.
+        version = order.Version;
+        order.UpdateDetails(Payment(method: ExpectedPaymentMethod.Cash, changeFor: 60m), Money.Of(5m), By, Guid.NewGuid, Now);
+        order.Version.ShouldBe(version);
+    }
+
+    /// Q-316: a retirada que vira entrega precisa da forma prevista no mesmo PATCH.
+    [Fact]
+    public void Pickup_turned_delivery_requires_the_expected_payment()
+    {
+        var pickup = Create(OrderType.Marmita, FulfillmentType.Pickup, method: null);
+        Fields(() => pickup.UpdateDetails(Payment(fulfillment: FulfillmentType.Delivery, address: Address), Money.Of(5m), By, Guid.NewGuid, Now))
+            .ShouldBe(["expectedPaymentMethod"]);
+
+        pickup.UpdateDetails(Payment(fulfillment: FulfillmentType.Delivery, address: Address, method: ExpectedPaymentMethod.Pix), Money.Of(5m), By, Guid.NewGuid, Now);
+        pickup.FulfillmentType.ShouldBe(FulfillmentType.Delivery);
+        pickup.ExpectedPaymentMethod.ShouldBe(ExpectedPaymentMethod.Pix);
+    }
+
+    [Fact]
+    public void Dine_in_tab_cannot_receive_an_expected_payment()
+    {
+        var tab = Create(OrderType.ALaCarte, FulfillmentType.DineIn, name: null, phone: null);
+
+        Fields(() => tab.UpdateDetails(Payment(method: ExpectedPaymentMethod.Pix), Money.Of(5m), By, Guid.NewGuid, Now)).ShouldBe(["expectedPaymentMethod"]);
+        Fields(() => tab.UpdateDetails(Payment(changeFor: 50m), Money.Of(5m), By, Guid.NewGuid, Now)).ShouldBe(["changeFor"]);
+    }
+
+    /// ADR-0007: quitado, a forma prevista e o "troco para" não mudam.
+    [Fact]
+    public void Paid_order_keeps_the_expected_payment()
+    {
+        var order = Create(OrderType.Marmita, FulfillmentType.Delivery, items: [20m], fee: 5m, method: ExpectedPaymentMethod.Cash, changeFor: 50m);
+        order.ApplyPayment(Money.Of(25m), Now);
+
+        Should.Throw<BusinessException>(() => order.UpdateDetails(Payment(method: ExpectedPaymentMethod.Pix), Money.Of(5m), By, Guid.NewGuid, Now))
+            .ErrorCode.ShouldBe(ErrorCodes.OrderAlreadyPaid);
+        Should.Throw<BusinessException>(() => order.UpdateDetails(Payment(changeFor: 100m), Money.Of(5m), By, Guid.NewGuid, Now))
+            .ErrorCode.ShouldBe(ErrorCodes.OrderAlreadyPaid);
+    }
+
+    /// I2: a edição da taxa passa o total do "troco para" sem ser recusada; o pedido avisa. Total 25,00 com troco para
+    /// 30,00; taxa de 5,00 para 12,00 → total 32,00 > 30,00.
+    [Fact]
+    public void Edit_that_passes_the_change_for_is_accepted_and_flagged()
+    {
+        var order = Create(OrderType.Marmita, FulfillmentType.Delivery, items: [20m], fee: 5m, method: ExpectedPaymentMethod.Cash, changeFor: 30m);
+        order.ChangeForBelowTotal.ShouldBeFalse();
+
+        order.UpdateDetails(Payment(fee: 12m), Money.Of(5m), By, Guid.NewGuid, Now);
+
+        order.TotalAmount.ShouldBe(Money.Of(32m));
+        order.ChangeFor.ShouldBe(Money.Of(30m), "o \"troco para\" fica como o atendente anotou");
+        order.ChangeForBelowTotal.ShouldBeTrue();
+        Order.ChangeForBelowTotalRule(Money.Of(32m), Money.Of(32m)).ShouldBeFalse("exatamente o total não falta troco");
+        Order.ChangeForBelowTotalRule(null, Money.Of(32m)).ShouldBeFalse();
+
+        // Editar o próprio "troco para" volta a exigir o total.
+        Fields(() => order.UpdateDetails(Payment(changeFor: 31m), Money.Of(5m), By, Guid.NewGuid, Now)).ShouldBe(["changeFor"]);
+        order.UpdateDetails(Payment(changeFor: 50m), Money.Of(5m), By, Guid.NewGuid, Now);
+        order.ChangeForBelowTotal.ShouldBeFalse();
+    }
+
+    private static OrderDetailsChanges Payment(
+        ExpectedPaymentMethod? method = null, bool clearMethod = false, decimal? changeFor = null, FulfillmentType? fulfillment = null,
+        DeliveryAddressDto? address = null, decimal? fee = null) => new(
+        default, default,
+        fulfillment is { } f ? new Optional<FulfillmentType>(f) : default,
+        address is null ? default : new Optional<DeliveryAddressDto?>(address),
+        fee is { } value ? new Optional<Money>(Money.Of(value)) : default,
+        default, default, default,
+        method is not null || clearMethod ? new Optional<ExpectedPaymentMethod?>(method) : default,
+        changeFor is { } c ? new Optional<Money?>(Money.Of(c)) : default);
+
     private static OrderDetailsChanges Changes(FulfillmentType? fulfillment = null, Optional<string?> phone = default) => new(
         default, phone, fulfillment is { } f ? new Optional<FulfillmentType>(f) : default, default, default, default, default, default);
 

@@ -119,10 +119,19 @@ internal sealed class UpdateOrderHandler(
 
         order.EnsureVersion(concurrency.ExpectedVersion);
 
-        var defaultFee = (await settings.GetAsync(cancellationToken)).DefaultDeliveryFee;
+        var config = await settings.GetAsync(cancellationToken);
+        var defaultFee = config.DefaultDeliveryFee;
         if (c.DeliveryFee.HasValue && c.DeliveryFee.Value != order.DeliveryFee)
         {
             OrderRules.EnsureCanSetDeliveryFee(permissions, c.DeliveryFee.Value, defaultFee);
+        }
+
+        // Forma prevista trocada: dentro das formas habilitadas, como na criação (ADR-0059 item 5; revisão de
+        // 2026-11-23, I1). A forma que já estava no pedido não é conferida de novo.
+        if (c.ExpectedPaymentMethod is { HasValue: true, Value: { } method } && method != order.ExpectedPaymentMethod
+            && !config.EnabledPaymentMethods.Contains(UpperSnakeEnumConverter<ExpectedPaymentMethod>.ToText(method)))
+        {
+            throw new BusinessException(ErrorCodes.PaymentMethodDisabled);
         }
 
         // Mesmo formato do POST /orders (06 §6.9): o telefone brasileiro é gravado normalizado.
@@ -133,7 +142,9 @@ internal sealed class UpdateOrderHandler(
         var before = Details(order);
         var version = order.Version;
         order.UpdateDetails(
-            new OrderDetailsChanges(c.CustomerName, phone, c.FulfillmentType, c.DeliveryAddress, c.DeliveryFee, c.TableLabel, c.TabNumber, c.Notes),
+            new OrderDetailsChanges(
+                c.CustomerName, phone, c.FulfillmentType, c.DeliveryAddress, c.DeliveryFee, c.TableLabel, c.TabNumber, c.Notes,
+                c.ExpectedPaymentMethod, c.ChangeFor),
             defaultFee, tenant.EmployeeId!.Value, ids.New, time.GetUtcNow());
 
         if (order.Version != version)
@@ -144,11 +155,13 @@ internal sealed class UpdateOrderHandler(
         return await dtos.BuildAsync(order, cancellationToken);
     }
 
-    // Sem telefone nem endereço na auditoria (ADR-0024).
+    // Sem telefone nem endereço na auditoria (ADR-0024). Forma prevista e "troco para" com o antes/depois (I1).
     private static object Details(Order o) => new
     {
         fulfillmentType = UpperSnakeEnumConverter<FulfillmentType>.ToText(o.FulfillmentType),
         deliveryFee = o.DeliveryFee.ToString(),
+        expectedPaymentMethod = o.ExpectedPaymentMethod is { } m ? UpperSnakeEnumConverter<ExpectedPaymentMethod>.ToText(m) : null,
+        changeFor = o.ChangeFor?.ToString(),
         o.TableLabel,
         o.TabNumber,
         o.Notes,
@@ -474,7 +487,8 @@ internal sealed class ListOrdersQueryHandler(AppDbContext db, IBusinessDayReader
                 r.Id, r.Version, r.OrderNumber, r.BusinessDate, r.OrderType, r.Origin, r.FulfillmentType, r.CustomerName, r.TableLabel, r.TabNumber,
                 r.TotalAmount, r.PaidAmount, r.TotalAmount - r.PaidAmount, r.IsPaid, r.ProductionStatus, r.CancellationStatus,
                 r.AcceptanceStatus, r.AcceptanceDeadline, r.FulfillmentStatus,
-                Order.IsReadyForPickupRule(r.FulfillmentType, r.ProductionStatus, r.FulfillmentStatus), r.ExpectedPaymentMethod, r.ChangeFor, r.ItemCount,
+                Order.IsReadyForPickupRule(r.FulfillmentType, r.ProductionStatus, r.FulfillmentStatus), r.ExpectedPaymentMethod, r.ChangeFor,
+                Order.ChangeForBelowTotalRule(r.ChangeFor, r.TotalAmount), r.ItemCount,
                 counts.GetValueOrDefault(r.Id), r.CreatedAt))
             .ToList();
         return new PageDto<OrderSummaryDto>(items, rows.Count > query.Limit ? Paging.EncodeCursor(items[^1].Id) : null);

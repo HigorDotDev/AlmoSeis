@@ -115,8 +115,9 @@ internal sealed class Product : AggregateRoot, ITenantOwned, ISyncTracked
     }
 
     /// A API desta versão **sempre** grava `site_price` na bebida vendida no site (05 §5.17 0009, janela do deploy).
-    /// Sem preço de site informado, vem o de balcão (ADR-0057 item 2). Bebida de `0.00` não tem preço de site (> 0):
-    /// no cadastro ela nasce fora do site, como na correção da migration; na edição, ligar o site exige o preço.
+    /// Sem preço de site informado, vem o de balcão (ADR-0057 item 2), **também quando é `0.00`**: a bebida do
+    /// restaurante pode ter preço de site `>= 0` (água da casa, cafezinho; revisão de 2026-11-23, I6, 05 §5.17 0012).
+    /// Na edição, apagar o preço de site (`sitePrice: null`) da bebida visível continua recusado.
     private void ApplySitePrice(Optional<Money?> sitePrice, bool creating)
     {
         if (Kind != ProductKind.Beverage)
@@ -130,6 +131,11 @@ internal sealed class Product : AggregateRoot, ITenantOwned, ISyncTracked
             return;
         }
 
+        if (sitePrice is { HasValue: true, Value: { IsNegative: true } })
+        {
+            throw BusinessException.Validation("sitePrice", "O preço de site não pode ser negativo.");
+        }
+
         SitePrice = sitePrice.GetValueOr(SitePrice);
         if (!IsVisibleOnPage || SitePrice is not null)
         {
@@ -141,18 +147,8 @@ internal sealed class Product : AggregateRoot, ITenantOwned, ISyncTracked
             throw BusinessException.Validation("sitePrice", "Informe o preço de site da bebida vendida no site.");
         }
 
-        if (DefaultPrice is { } price && price > Money.Zero)
-        {
-            SitePrice = price;
-        }
-        else if (creating)
-        {
-            IsVisibleOnPage = false;
-        }
-        else
-        {
-            throw BusinessException.Validation("sitePrice", "Informe o preço de site da bebida vendida no site.");
-        }
+        // A bebida sempre tem preço de balcão (EnsurePriceMatchesKind), e ele vale como preço de site mesmo em 0,00.
+        SitePrice = DefaultPrice;
     }
 
     private object Snapshot() =>

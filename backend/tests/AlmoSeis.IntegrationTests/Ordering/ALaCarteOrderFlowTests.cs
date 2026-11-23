@@ -371,6 +371,7 @@ public sealed class ALaCarteOrderFlowTests(PostgresFixture db) : IDisposable
 
         var summary = await (await s.Client.GetAsync("/api/v1/closing/summary", Ct)).ExpectAsync(HttpStatusCode.OK, _api);
         summary.GetProperty("siteSoldTotal").GetString().ShouldBe("0.00");
+        summary.GetProperty("siteDeliveryFeeTotal").GetString().ShouldBe("0.00");
         summary.GetProperty("totalSold").GetString().ShouldBe("91.00");
         summary.GetProperty("canceled").GetProperty("total").GetString().ShouldBe("22.00");
         summary.GetProperty("byOrderType").EnumerateArray().Select(l => l.GetProperty("orderType").GetString()).ShouldBe(["MARMITA", "PF", "KILO", "A_LA_CARTE"]);
@@ -387,31 +388,55 @@ public sealed class ALaCarteOrderFlowTests(PostgresFixture db) : IDisposable
             .ExpectAsync(HttpStatusCode.Created, _api);
         closing.GetProperty("isFinal").GetBoolean().ShouldBeTrue();
         closing.GetProperty("siteSoldTotal").GetString().ShouldBe("0.00");
+        closing.GetProperty("siteDeliveryFeeTotal").GetString().ShouldBe("0.00");
         closing.GetProperty("byOrderType").EnumerateArray().Single(l => l.GetProperty("orderType").GetString() == "A_LA_CARTE")
             .GetProperty("sold").GetString().ShouldBe("91.00");
         (await Scalar<long>(s.TenantId, "SELECT count(*) FROM daily_closing_lines WHERE tenant_id = @t AND key = 'A_LA_CARTE'")).ShouldBe(1);
     }
 
-    /// "Vendido pelo site" (ADR-0057 item 12): só o pedido `SITE` aceito; o do app fica fora. Restaurante: a linha
-    /// `A_LA_CARTE` sai zerada.
+    /// "Vendido pelo site" (ADR-0057 item 12, revisão de 2026-11-23, M1): só o pedido `SITE` aceito, **sem a taxa de
+    /// entrega**, que vai para `siteDeliveryFeeTotal`; o do app fica fora. Retirada do site 40,00 + entrega do site 45,00
+    /// (40,00 + 5,00 de taxa) + PF do app 48,00: vendido 133,00, pelo site 80,00, taxa do site 5,00. O mesmo no resumo,
+    /// no snapshot e no mensal. Restaurante: a linha `A_LA_CARTE` sai zerada.
     [Fact]
-    public async Task Site_sold_total_counts_only_accepted_site_orders()
+    public async Task Site_sold_total_counts_only_accepted_site_orders_without_the_delivery_fee()
     {
         var r = await OrderingScenario.CreateAsync(_api, db);
         var web = await r.SubmitWebOrderAsync(delivery: false);
+        var webDelivery = await r.SubmitWebOrderAsync(delivery: true, phone: "+5534955554444");
         await r.SubmitWebOrderAsync(delivery: false, phone: "+5534977776666");
-        var accept = new HttpRequestMessage(HttpMethod.Post, $"/api/v1/orders/{web}/accept") { Content = JsonContent.Create(new { estimatedReadyMinutes = (int?)null }) };
-        accept.Headers.TryAddWithoutValidation("Idempotency-Key", Guid.NewGuid().ToString());
-        accept.Headers.TryAddWithoutValidation("If-Match", "\"1\"");
-        await (await r.Client.SendAsync(accept, Ct)).ExpectAsync(HttpStatusCode.OK, _api);
+        foreach (var id in new[] { web, webDelivery })
+        {
+            var accept = new HttpRequestMessage(HttpMethod.Post, $"/api/v1/orders/{id}/accept") { Content = JsonContent.Create(new { estimatedReadyMinutes = (int?)null }) };
+            accept.Headers.TryAddWithoutValidation("Idempotency-Key", Guid.NewGuid().ToString());
+            accept.Headers.TryAddWithoutValidation("If-Match", "\"1\"");
+            await (await r.Client.SendAsync(accept, Ct)).ExpectAsync(HttpStatusCode.OK, _api);
+        }
+
         await r.CreateOrderAsync(r.Pf());
 
         var summary = await (await r.Client.GetAsync("/api/v1/closing/summary", Ct)).ExpectAsync(HttpStatusCode.OK, _api);
-        summary.GetProperty("siteSoldTotal").GetString().ShouldBe("40.00");
-        summary.GetProperty("totalSold").GetString().ShouldBe("88.00"); // 40,00 do site + PF 2 × 24,00
+        summary.GetProperty("siteSoldTotal").GetString().ShouldBe("80.00");
+        summary.GetProperty("siteDeliveryFeeTotal").GetString().ShouldBe("5.00");
+        summary.GetProperty("deliveryFeesTotal").GetString().ShouldBe("5.00");
+        summary.GetProperty("totalSold").GetString().ShouldBe("133.00"); // 40,00 + 45,00 do site + PF 2 × 24,00
         var line = summary.GetProperty("byOrderType").EnumerateArray().Single(l => l.GetProperty("orderType").GetString() == "A_LA_CARTE");
         line.GetProperty("count").GetInt32().ShouldBe(0);
         line.GetProperty("sold").GetString().ShouldBe("0.00");
+
+        var day = summary.GetProperty("businessDay");
+        var closing = await (await r.Client.SendWithKeyAsync(HttpMethod.Post, "/api/v1/closing/finalize",
+                new { businessDayId = day.Id(), countedCash = summary.GetProperty("cash").GetProperty("expectedCash").GetString(), justification = (string?)null }, day.Version()))
+            .ExpectAsync(HttpStatusCode.Created, _api);
+        closing.GetProperty("siteSoldTotal").GetString().ShouldBe("80.00");
+        closing.GetProperty("siteDeliveryFeeTotal").GetString().ShouldBe("5.00");
+        (await r.ScalarAsync<string>("SELECT site_sold_total || '/' || site_delivery_fee_total FROM daily_closings WHERE tenant_id = @t"))
+            .ShouldBe("80.00/5.00");
+
+        var month = day.GetProperty("businessDate").GetString()![..7];
+        var monthly = await (await r.Client.GetAsync($"/api/v1/closing/monthly?month={month}", Ct)).ExpectAsync(HttpStatusCode.OK, _api);
+        monthly.GetProperty("siteSoldTotal").GetString().ShouldBe("80.00");
+        monthly.GetProperty("siteDeliveryFeeTotal").GetString().ShouldBe("5.00");
     }
 
     /// ADR-0058 item 2: entrega e retirada à la carte (os campos de entrega de hoje; as exigências do telefone são da fatia 4).

@@ -122,6 +122,7 @@ public sealed record ClosingSummaryDto(
     Money TotalSold,
     Money DeliveryFeesTotal,
     Money SiteSoldTotal,
+    Money SiteDeliveryFeeTotal,
     Money TotalReceived,
     Money ReceivedFromPreviousDays,
     Money TotalPending,
@@ -156,6 +157,8 @@ public sealed record MonthlyClosingDto(
     Money TotalReceived,
     Money TotalPendingAtClosings,
     Money CashDifferenceTotal,
+    Money SiteSoldTotal,
+    Money SiteDeliveryFeeTotal,
     IReadOnlyList<MonthlyOrderTypeDto> ByOrderType,
     IReadOnlyList<MonthlyPaymentMethodDto> ByPaymentMethod,
     IReadOnlyList<MonthlyDayDto> Days);
