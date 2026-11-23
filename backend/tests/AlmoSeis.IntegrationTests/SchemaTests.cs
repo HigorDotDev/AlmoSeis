@@ -51,7 +51,7 @@ public sealed class SchemaTests(PostgresFixture db)
 
         await transaction.RollbackAsync(Ct); // não deixa dados para os outros testes
 
-        notices.Count(n => n.StartsWith("ok:", StringComparison.Ordinal)).ShouldBe(84, string.Join(" | ", notices));
+        notices.Count(n => n.StartsWith("ok:", StringComparison.Ordinal)).ShouldBe(89, string.Join(" | ", notices));
     }
 
     /// 0003 (ADR-0046) num banco com pedidos: o backfill roda com a RLS `FORCE` de `orders` (o banco vazio dos outros
@@ -420,6 +420,84 @@ public sealed class SchemaTests(PostgresFixture db)
             reader.GetString(0).ShouldBe("MARMITA:-,ADDON:MARMITA,BEVERAGE:-", "só o adicional filho recebe o tipo do pai");
             reader.GetString(1).ShouldBe("0.00", "fechamento anterior à migração sem vendido pelo site");
             reader.GetBoolean(2).ShouldBeTrue("o FORCE da RLS de order_items volta depois do preenchimento");
+        }
+
+        NpgsqlConnection.ClearAllPools();
+        await db.ExecuteAsSuperuserAsync($"DROP DATABASE {database} WITH (FORCE)");
+    }
+
+    /// 0011 (ADR-0059) num banco com pedidos: o pedido do site com "troco para" e sem forma prevista (aceito pelo
+    /// `CHECK` da 0004, que passava com a forma nula) recebe a forma dinheiro com a RLS `FORCE` de `orders`, os outros
+    /// não mudam, o `CHECK` novo entra sobre os dados antigos e o `FORCE` volta.
+    [Fact]
+    public async Task Migration_0011_fixes_change_for_without_expected_payment()
+    {
+        var database = "almoseis_phone_" + Guid.NewGuid().ToString("N")[..8];
+        await db.ExecuteAsSuperuserAsync($"CREATE DATABASE {database} OWNER almoseis_migrator");
+        var superuser = new NpgsqlConnectionStringBuilder(db.SuperuserConnectionString) { Database = database }.ConnectionString;
+        var migrator = new NpgsqlConnectionStringBuilder(db.ConnectionStringFor("almoseis_migrator_login", PostgresFixture.MigratorPassword))
+        {
+            Database = database,
+        }.ConnectionString;
+
+        var options = new DbContextOptionsBuilder<AppDbContext>();
+        options.UseAlmoSeisNpgsql(migrator);
+        await using (var context = new AppDbContext(options.Options, new TenantContext(), Array.Empty<IModuleModelConfiguration>()))
+        {
+            await context.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>().MigrateAsync("20261127000000_ALaCarteOrders", Ct);
+        }
+
+        await using (var connection = new NpgsqlConnection(superuser))
+        {
+            await connection.OpenAsync(Ct);
+            await using var seed = new NpgsqlCommand(
+                """
+                INSERT INTO users (id, full_name, email, normalized_email, password_hash, security_stamp, concurrency_stamp, created_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000a1', 'Dona A', 'a@x.com', 'A@X.COM', 'h', 's', 'c', now());
+                INSERT INTO tenants (id, name, document_type, document_number, city, state, terms_version, terms_accepted_at, terms_accepted_by_user_id, created_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'Marmitaria A', 'CNPJ', '11222333000181', 'Uberlandia', 'MG', '2026-10', now(), 'aaaaaaaa-0000-0000-0000-0000000000a1', now());
+                INSERT INTO tenant_employees (id, tenant_id, user_id, display_name, status, security_stamp, joined_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000e1', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000a1', 'Dona A', 'ACTIVE', gen_random_uuid(), now());
+                INSERT INTO business_days (id, tenant_id, business_date, status, opening_balance, opened_by_employee_id, opened_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-0000000000d1', 'aaaaaaaa-0000-0000-0000-000000000001', '2026-11-22', 'OPEN', 0, 'aaaaaaaa-0000-0000-0000-0000000000e1', now());
+                -- c01 do app; c02 do site com troco e sem forma (o caso corrigido); c03 do site com Pix e sem troco
+                INSERT INTO orders (id, tenant_id, business_day_id, business_date, order_number, order_type, origin, fulfillment_type,
+                                    customer_name, items_total, weighings_total, total_amount, production_status, accepted_at,
+                                    fulfillment_status, fulfillment_status_changed_at, created_by_employee_id, created_at, updated_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-000000000c01', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-11-22', 1,
+                        'MARMITA', 'APP', 'PICKUP', 'Joao', 20.00, 0, 20.00, 'OPEN', now(), 'PENDING', now(), 'aaaaaaaa-0000-0000-0000-0000000000e1', now(), now());
+                INSERT INTO orders (id, tenant_id, business_day_id, business_date, order_number, order_type, origin, fulfillment_type, price_list,
+                                    customer_name, customer_phone, items_total, weighings_total, total_amount, acceptance_status, acceptance_deadline,
+                                    expected_payment_method, change_for, created_by_employee_id, created_at, updated_at)
+                VALUES ('aaaaaaaa-0000-0000-0000-000000000c02', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-11-22', NULL,
+                        'MARMITA', 'WEB', 'PICKUP', 'SITE', 'Carla', '+5534999991111', 20.00, 0, 20.00, 'AWAITING_ACCEPTANCE', now() + interval '10 minutes',
+                        NULL, 50.00, NULL, now(), now()),
+                       ('aaaaaaaa-0000-0000-0000-000000000c03', 'aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-0000000000d1', '2026-11-22', NULL,
+                        'MARMITA', 'WEB', 'PICKUP', 'SITE', 'Davi', '+5534999992222', 20.00, 0, 20.00, 'AWAITING_ACCEPTANCE', now() + interval '10 minutes',
+                        'PIX', NULL, NULL, now(), now());
+                """, connection);
+            await seed.ExecuteNonQueryAsync(Ct);
+        }
+
+        await using (var context = new AppDbContext(options.Options, new TenantContext(), Array.Empty<IModuleModelConfiguration>()))
+        {
+            await context.Database.MigrateAsync(Ct);
+        }
+
+        await using (var connection = new NpgsqlConnection(superuser))
+        {
+            await connection.OpenAsync(Ct);
+            await using var check = new NpgsqlCommand(
+                """
+                SELECT (SELECT string_agg(coalesce(expected_payment_method, '-') || ':' || coalesce(change_for::text, '-'), ',' ORDER BY id) FROM orders),
+                       (SELECT relforcerowsecurity FROM pg_class WHERE relname = 'orders'),
+                       (SELECT count(*) FROM pg_indexes WHERE indexname = 'ix_orders_customer_recent')
+                """, connection);
+            await using var reader = await check.ExecuteReaderAsync(Ct);
+            await reader.ReadAsync(Ct);
+            reader.GetString(0).ShouldBe("-:-,CASH:50.00,PIX:-", "só o pedido com troco e sem forma recebe a forma dinheiro");
+            reader.GetBoolean(1).ShouldBeTrue("o FORCE da RLS de orders volta depois da correção");
+            reader.GetInt64(2).ShouldBe(1);
         }
 
         NpgsqlConnection.ClearAllPools();

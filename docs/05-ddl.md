@@ -1028,6 +1028,22 @@ WHERE processed_at IS NULL
 ORDER BY occurred_at
 FOR UPDATE SKIP LOCKED
 LIMIT 100;
+
+-- Cliente pelo telefone (ADR-0059 item 14, migration 0011), na transação de criação do pedido. Cria uma vez só,
+-- mesmo com dois atendentes ao mesmo tempo, e nunca muda o nome de quem já existe (Q-314). O predicado repete o do
+-- índice parcial ux_customers_phone. Sem linha devolvida, o telefone já existe: SELECT id FROM customers
+-- WHERE tenant_id = @tenantId AND phone_number = @phone (o ON CONFLICT esperou o commit do outro atendente).
+-- Um INSERT comum abortaria a transação do pedido com unique_violation.
+INSERT INTO customers (id, tenant_id, name, phone_number, created_at)
+VALUES (@id, @tenantId, @name, @phone, @now)
+ON CONFLICT (tenant_id, phone_number) WHERE phone_number IS NOT NULL DO NOTHING
+RETURNING id;
+
+-- "Usar o endereço do último pedido" (Q-313, ix_orders_customer_recent)
+SELECT delivery_address FROM orders
+WHERE tenant_id = @tenantId AND customer_id = @customerId AND delivery_address IS NOT NULL
+ORDER BY created_at DESC
+LIMIT 1;
 ```
 
 Cada entidade [S] alterada na transação recebe seu próprio `seq`, porque a PK do feed é `(tenant_id, seq)`. Então o handler incrementa o contador **uma vez por entidade alterada**. A trava de linha obtida no primeiro incremento segura as outras escritas do mesmo tenant até o commit, e é isso que garante que a ordem de commit acompanha a ordem de `seq` (ADR-0032). O evento do outbox leva o `seq` da entidade principal da operação.
@@ -1056,7 +1072,7 @@ Cada entidade [S] alterada na transação recebe seu próprio `seq`, porque a PK
 | Slug único global, um atual por tenant, formato (ADR-0044) | PK de `store_slugs`, `ux_store_slugs_current`, `ck_store_slugs_format` (0004) |
 | Página ativa só com endereço (ADR-0044 item 11) | `ck_storefront_settings_active_address` (0004) |
 | Slug e token resolvíveis antes do tenant, gravados só pelo próprio tenant (ADR-0045) | políticas `public_lookup`/`tenant_insert`/`tenant_update` (0004); token só por `resolve_tracking_token` (0007) |
-| Troco só em dinheiro; campos da página só em pedido `WEB` (ADR-0044 item 19) | `ck_orders_change_for`, `ck_orders_web_fields` (0004) |
+| Troco só em dinheiro; campos da página só em pedido `WEB` (ADR-0044 item 19) | `ck_orders_change_for`, `ck_orders_web_fields` (0004; ver 0011) |
 | Um registro de push por instalação e tenant; um token em um registro só; push nunca cruza tenants (ADR-0049 item 4) | `ux_push_registrations_installation`, `ux_push_registrations_token`, RLS (0006) + `release_push_token`, só da mesma instalação (0007) |
 | Push enviado uma vez por mensagem do outbox e aparelho (ADR-0049 item 8) | PK de `push_deliveries`, `ck_push_deliveries_ticket` (0006) |
 | Comportamento da lista, autor coerente com a origem, nunca removido (ADR-0054 itens 1 a 6) | `tenant_behaviors` (`CHECK`s, PK, `ck_tenant_behaviors_enabled_by`), grants sem `UPDATE`/`DELETE` (0008) |
@@ -1074,10 +1090,12 @@ Cada entidade [S] alterada na transação recebe seu próprio `seq`, porque a PK
 | Snapshot de tamanho e sabor (ADR-0020); parte do combo a 0.00, salvo o acréscimo do sabor (ADR-0058 item 8) | `ck_order_items_snapshots`, `ck_order_items_combo_part_price` (0010) |
 | Combo e bebidas fora da cozinha (ADR-0058 itens 11 e 12) | `ck_order_items_preparation` (0010) |
 | Linha "À la carte" no fechamento; "Vendido pelo site" dentro do vendido (ADR-0058 item 13, ADR-0057 item 12) | `ck_daily_closing_lines_dimension`, `ck_daily_closings_site_sold` (0010) |
+| Forma prevista e "troco para" também no pedido do app, só em entrega e retirada; troco só com a forma dinheiro, nunca com a forma nula; risco do anti-robô só em `WEB` (ADR-0059 item 5, Q-316) | `ck_orders_expected_payment_fulfillment`, `ck_orders_change_for` (reescrito), `ck_orders_risk_flag` (0011, no lugar de `ck_orders_web_fields`) |
+| Um cliente por telefone no tenant, criado uma vez só e sem mudar o nome (ADR-0059 itens 14 e 15, Q-314) | `ux_customers_phone` (0001) + `ON CONFLICT … DO NOTHING` (§5.14) |
 
 ## 5.16 Validação
 
-O script foi validado em 2026-10-27 num PostgreSQL 16 (Docker): os blocos `sql` deste documento aplicados do zero (36 tabelas e 65 políticas na `0001`; 40 e 76 com as alterações até a `0004`; 42 e 80 até a `0005`; 44 e 86 até a `0006`; 44 e 87 até a `0007`; 46 e 91 até a `0008`; 57 e 113 até a `0009` e a `0010`) e depois o teste de fumaça [`05-ddl-smoke-test.sql`](05-ddl-smoke-test.sql), que roda como `almoseis_app`/`almoseis_platform` e confere 84 regras (22 da `0001`, 9 da `0003`, 10 da `0004`, 4 da `0005`, 5 da `0006`, 9 da `0008`, 15 da `0009`, 10 da `0010`): isolamento entre dois tenants, plataforma do aparelho compartilhado, login, convite por código, totais, cancelamento, troco, estorno, conciliação, imutabilidade, casos com `NULL` e, desde a `0003`, o pedido da página (sem número, sem produção e sem autor enquanto aguarda aceite; recusa coerente; atendimento só em entrega) e, desde a `0004`, a página de pedidos (endereço para ativar, slug atual único e no formato, troco só em dinheiro, campos da página só em `WEB`, idempotência anônima, slug e token resolvíveis por outro tenant mas nunca gravados por ele, perfil e hash do IP isolados) e, desde a `0005`, a taxa por distância (cotação por distância completa, confirmação do ponto só com ponto, origem da taxa só em entrega, cotação e cache isolados) e, desde a `0006`, o push (token no formato do Expo e único, entrega com ticket ou erro, registro e entregas isolados, só quem comprova o token tira o aparelho do outro tenant; desde a `0007`, só a mesma instalação, pela função, e o token de acompanhamento só pela função de resolução) e, desde a `0008`, os comportamentos e rótulos (comportamento e origem da lista, rótulo do comportamento certo e só de comportamento habilitado, comportamento nunca alterado nem apagado pela aplicação, rótulo removível, isolamento e acréscimo pela plataforma) e, desde a `0009`, o cardápio fixo e o preço de site (prato com preço único ou tamanhos, "vende no site" com preço de site maior que zero em prato, tamanho, bebida, combo e marmita, componente de combo com o tamanho do próprio prato, acréscimo do sabor, vínculo de grupo único com categoria ou prato, preço de site só em bebida, tabela de preço do pedido, itens inativados e nunca apagados, componentes e vínculos trocados na edição, isolamento e combo de um tenant sem prato do outro) e, desde a `0010`, o pedido à la carte (salão, entrega e retirada; combo em três níveis com o total do ADR-0058 e a cozinha sem o combo e sem bebidas; parte só sob combo; adicional de grupo só sob prato avulso ou parte de prato; adicional do restaurante só sob marmita ou PF, com ou sem o tipo do pai; referências por tipo, tamanho do próprio prato e sabor do próprio tamanho; snapshot de tamanho e sabor; preço da parte; linha `A_LA_CARTE` e vendido pelo site no fechamento; isolamento e item de um tenant sem cardápio fixo nem pai do outro). Toda mudança neste documento deve repetir os dois passos:
+O script foi validado em 2026-10-27 num PostgreSQL 16 (Docker): os blocos `sql` deste documento aplicados do zero (36 tabelas e 65 políticas na `0001`; 40 e 76 com as alterações até a `0004`; 42 e 80 até a `0005`; 44 e 86 até a `0006`; 44 e 87 até a `0007`; 46 e 91 até a `0008`; 57 e 113 até a `0009`, a `0010` e a `0011`) e depois o teste de fumaça [`05-ddl-smoke-test.sql`](05-ddl-smoke-test.sql), que roda como `almoseis_app`/`almoseis_platform` e confere 89 regras (22 da `0001`, 9 da `0003`, 10 da `0004`, 4 da `0005`, 5 da `0006`, 9 da `0008`, 15 da `0009`, 10 da `0010`, 5 da `0011`): isolamento entre dois tenants, plataforma do aparelho compartilhado, login, convite por código, totais, cancelamento, troco, estorno, conciliação, imutabilidade, casos com `NULL` e, desde a `0003`, o pedido da página (sem número, sem produção e sem autor enquanto aguarda aceite; recusa coerente; atendimento só em entrega) e, desde a `0004`, a página de pedidos (endereço para ativar, slug atual único e no formato, troco só em dinheiro, campos da página só em `WEB`, idempotência anônima, slug e token resolvíveis por outro tenant mas nunca gravados por ele, perfil e hash do IP isolados) e, desde a `0005`, a taxa por distância (cotação por distância completa, confirmação do ponto só com ponto, origem da taxa só em entrega, cotação e cache isolados) e, desde a `0006`, o push (token no formato do Expo e único, entrega com ticket ou erro, registro e entregas isolados, só quem comprova o token tira o aparelho do outro tenant; desde a `0007`, só a mesma instalação, pela função, e o token de acompanhamento só pela função de resolução) e, desde a `0008`, os comportamentos e rótulos (comportamento e origem da lista, rótulo do comportamento certo e só de comportamento habilitado, comportamento nunca alterado nem apagado pela aplicação, rótulo removível, isolamento e acréscimo pela plataforma) e, desde a `0009`, o cardápio fixo e o preço de site (prato com preço único ou tamanhos, "vende no site" com preço de site maior que zero em prato, tamanho, bebida, combo e marmita, componente de combo com o tamanho do próprio prato, acréscimo do sabor, vínculo de grupo único com categoria ou prato, preço de site só em bebida, tabela de preço do pedido, itens inativados e nunca apagados, componentes e vínculos trocados na edição, isolamento e combo de um tenant sem prato do outro) e, desde a `0010`, o pedido à la carte (salão, entrega e retirada; combo em três níveis com o total do ADR-0058 e a cozinha sem o combo e sem bebidas; parte só sob combo; adicional de grupo só sob prato avulso ou parte de prato; adicional do restaurante só sob marmita ou PF, com ou sem o tipo do pai; referências por tipo, tamanho do próprio prato e sabor do próprio tamanho; snapshot de tamanho e sabor; preço da parte; linha `A_LA_CARTE` e vendido pelo site no fechamento; isolamento e item de um tenant sem cardápio fixo nem pai do outro) e, desde a `0011`, o delivery por telefone (forma prevista e "troco para" no pedido do app sem pagamento; troco só com a forma dinheiro, inclusive com a forma nula; forma prevista fora do salão; cliente criado uma vez pelo telefone sem mudar o nome e endereço do último pedido; o mesmo telefone em outro tenant e o cliente de A invisível para B). Toda mudança neste documento deve repetir os dois passos:
 
 ```text
 docker run -d --name almoseis-ddl-test -e POSTGRES_PASSWORD=test postgres:16
@@ -1087,7 +1105,7 @@ psql -U postgres -c "ALTER SCHEMA public OWNER TO almoseis_migrator"   # depois 
 (echo 'SET ROLE almoseis_migrator;'; cat schema.sql) | psql -U postgres -v ON_ERROR_STOP=1 && psql -U postgres -f docs/05-ddl-smoke-test.sql
 ```
 
-**Regras que ficam só na aplicação** (dependem de outra tabela ou de estado): `menu_items.section = products.kind`; `pf_price` obrigatório em menu PF; pedido com ao menos um item ou pesagem ativa; `items_total`/`weighings_total` = soma dos filhos; `paid_amount` = soma dos pagamentos `CONFIRMED`; pedido pago imutável; pelo menos um `OWNER` ativo; método de pagamento habilitado no tenant; tipos de item conforme o `order_type` do pedido (cardápio fixo só em `A_LA_CARTE`, ADR-0058 item 3); tamanho e sabor obrigatórios quando o prato tem tamanho e o tamanho tem sabores; opção de adicional de um grupo ligado ao prato; valor do filho = `unit_price × quantity × quantidade do pai × quantidade do avô`; partes do combo = componentes do combo. Desde a `0010`, o adicional filho só de `MARMITA`/`PF` está no banco (`ck_order_items_parent`).
+**Regras que ficam só na aplicação** (dependem de outra tabela ou de estado): `menu_items.section = products.kind`; `pf_price` obrigatório em menu PF; pedido com ao menos um item ou pesagem ativa; `items_total`/`weighings_total` = soma dos filhos; `paid_amount` = soma dos pagamentos `CONFIRMED`; pedido pago imutável; pelo menos um `OWNER` ativo; método de pagamento habilitado no tenant; tipos de item conforme o `order_type` do pedido (cardápio fixo só em `A_LA_CARTE`, ADR-0058 item 3); tamanho e sabor obrigatórios quando o prato tem tamanho e o tamanho tem sabores; opção de adicional de um grupo ligado ao prato; valor do filho = `unit_price × quantity × quantidade do pai × quantidade do avô`; partes do combo = componentes do combo; nome e telefone obrigatórios na entrega e na retirada à la carte e na entrega de marmita, forma prevista obrigatória na entrega e "troco para" ≥ total (ADR-0059, Q-312, Q-316: ver 0011). Desde a `0010`, o adicional filho só de `MARMITA`/`PF` está no banco (`ck_order_items_parent`).
 
 ## 5.17 Alterações (ADR-0042)
 
@@ -1229,7 +1247,7 @@ Página de pedidos pela web (EP-002 fatia 2: F-201 a F-204, F-208, F-210, F-212)
 - **`order_tracking_tokens`** (plataforma, ADR-0047): só o SHA-256 do token, um por pedido, válido por 7 dias.
 - **RLS das duas tabelas de plataforma:** a resolução acontece **antes** de o tenant ser conhecido, então a leitura é aberta ao papel da aplicação (o slug é público e o token está em hash, ADR-0045 item 5). **Desde a 0007, a leitura aberta vale só para `store_slugs`**: `order_tracking_tokens` passou a ser lida no tenant da sessão, e a resolução do token antes do tenant é pela função `resolve_tracking_token`. A escrita continua presa ao tenant da sessão (`WITH CHECK (tenant_id = app_tenant_id())`): uma página de A nunca grava slug nem token de B. É mais restrito que o "sem RLS" do ADR-0045, com o mesmo efeito para a leitura.
 - **`web_order_intakes`** [T] (ADR-0045 item 14, ADR-0052 item 5): hash do IP (SHA-256 com sal diário) de cada pedido da página, para o limite de 3 pedidos aguardando aceite por IP e para investigar trote. Apagado em 7 dias.
-- **`orders`**: forma de pagamento prevista e "troco para" (ADR-0044 item 19; só informação, não cria pagamento), `risk_flag` (`CAPTCHA_UNAVAILABLE` quando o Turnstile não respondeu, ADR-0045 item 12) e `anonymized_at` (anonimização dos pedidos da página não aceitos após 7 dias, ADR-0052 item 3). Os três primeiros só existem em pedido `WEB`.
+- **`orders`**: forma de pagamento prevista e "troco para" (ADR-0044 item 19; só informação, não cria pagamento), `risk_flag` (`CAPTCHA_UNAVAILABLE` quando o Turnstile não respondeu, ADR-0045 item 12) e `anonymized_at` (anonimização dos pedidos da página não aceitos após 7 dias, ADR-0052 item 3). Os três primeiros só existem em pedido `WEB` (a forma prevista e o "troco para" passam ao pedido do app na 0011).
 - **`products.is_visible_on_page`** (ADR-0044 item 5): bebidas e adicionais podem ser escondidos da página.
 - **`idempotency_records.user_id`** passa a aceitar nulo: o envio pela página é anônimo, com escopo `(tenant_id, key)` (ADR-0045 item 10). `GET /operations/{key}` filtra por usuário, então registros anônimos nunca aparecem para o app.
 
@@ -2184,4 +2202,43 @@ ALTER TABLE daily_closing_lines ADD CONSTRAINT ck_daily_closing_lines_dimension 
 ALTER TABLE daily_closings
   ADD COLUMN site_sold_total numeric(12,2) NOT NULL DEFAULT 0 CHECK (site_sold_total >= 0);
 ALTER TABLE daily_closings ADD CONSTRAINT ck_daily_closings_site_sold CHECK (site_sold_total <= total_sold);
+```
+
+### 0011_PhoneDeliveryCustomer — 2026-11-22 (ADR-0059, ADR-0021, ADR-0024, ADR-0046)
+
+Delivery por telefone e cliente pelo telefone (EP-003 fatia 4, F-315 a F-318). ADR-0059 está `Proposto`. Quase tudo já existia; a alteração só abre a forma prevista ao pedido do app, corrige o `CHECK` do troco e indexa o último pedido do cliente:
+
+- **Já existia, sem mudança:** o snapshot do nome e do telefone no pedido (`customer_name`, `customer_phone`, E.164) e o vínculo `customer_id` (0001); o endereço **só no pedido** (`delivery_address`; `customer_addresses` continua para a marmita, Q-313); o telefone **único por tenant** em `customers` (`ux_customers_phone`, parcial em `phone_number IS NOT NULL`, desde a 0001: não há duplicados a normalizar, e o cliente anonimizado, de telefone nulo, libera o número); a origem `MANUAL` da taxa (`delivery_fee_source`, 0005). A taxa digitada na criação diferente da padrão grava `MANUAL` (Q-315); o autor é o `created_by_employee_id` e o valor digitado vai no `after` da auditoria da criação (`audit_logs`, sem coluna nova). "Cliente do delivery na lista sem saldo" (ADR-0059 item 16) é consulta: o saldo sai de `ix_orders_customer_pending`, e um cliente sem pedido em aberto aparece com zero. O cadastro que não muda sozinho (Q-314) é o `ON CONFLICT … DO NOTHING` de §5.14.
+- **Forma prevista e "troco para" no pedido do app** (ADR-0059 item 5, Q-316): `ck_orders_web_fields` sai e o que sobra dele, o risco do anti-robô só em `WEB`, vira `ck_orders_risk_flag`. A forma prevista fica só em entrega e retirada (`ck_orders_expected_payment_fulfillment`): a comanda do salão paga na mesa e não tem o campo.
+- **Troco só com a forma dinheiro, inclusive com a forma nula:** o `ck_orders_change_for` da 0004 (`change_for IS NULL OR expected_payment_method = 'CASH'`) passava com a forma nula, porque `NULL = 'CASH'` é `NULL` (05 §5.0). Reescrito com `IS NOT NULL`.
+- **"Troco para" pelo menos o total** (ADR-0059 item 5) fica **na aplicação**, conferido na criação e quando a forma prevista ou o "troco para" mudam, como no pedido do site ("≥ total no envio", 04 §4.7). Não é `CHECK`: uma edição posterior do item ou da taxa pode passar o total do "troco para", e o banco recusaria a edição do pedido por um campo informativo (o pagamento real registra `cash_received`, ADR-0021).
+- **"Usar o endereço do último pedido"** (Q-313) e o histórico do cliente: `ix_orders_customer_recent (tenant_id, customer_id, created_at)`. Antes, só as pendências do cliente tinham índice (`ix_orders_customer_pending`, parcial nos não pagos).
+
+**Ficam na aplicação**, e não em `CHECK` (05 §5.16): nome e telefone obrigatórios na entrega e na retirada à la carte e na entrega de marmita (Q-312), e a forma prevista obrigatória na entrega (Q-316). Os pedidos existentes não os têm (marmita com telefone opcional, desde a 0001; entrega à la carte gravada pela API da 0010), um `CHECK` com `NOT VALID` ainda recusaria o próximo `UPDATE` dessas linhas (pagamento, atendimento), e a anonimização do cliente apaga o telefone do snapshot (07, `Order.AnonymizeCustomer`).
+
+**Correção de dados:** pedido com "troco para" e sem forma prevista (nenhum esperado: a API sempre validou) recebe a forma `CASH`, a única com troco, para o `CHECK` novo entrar. A RLS de `orders` é `FORCE`: o `FORCE` sai só durante o `UPDATE`, na mesma transação (§5.1).
+
+**Expand/contract (09 §9.4):** só afrouxa (forma prevista no app) e aperta o que a API anterior nunca grava: ela não manda forma prevista nem troco em pedido do app, nem troco sem forma no site. **Contração pendente** (próxima release, com a API desta versão em produção), **condicionada**: se `SELECT count(*) FROM orders WHERE order_type = 'A_LA_CARTE' AND fulfillment_type <> 'DINE_IN' AND customer_name IS NULL` der 0 (sem entrega ou retirada à la carte sem nome gravada pela API da 0010), criar `ck_orders_a_la_carte_customer CHECK (order_type <> 'A_LA_CARTE' OR fulfillment_type = 'DINE_IN' OR customer_name IS NOT NULL)`, como o `ck_orders_marmita_customer` (a anonimização mantém o nome com o marcador "Cliente anonimizado"). Se der mais que 0, a regra fica só na aplicação e a contração é descartada. O telefone não entra: a anonimização o apaga.
+
+```sql
+-- Forma prevista e "troco para" também no pedido do app (ADR-0059 item 5); o risco do anti-robô continua só no WEB
+ALTER TABLE orders DROP CONSTRAINT ck_orders_web_fields;
+ALTER TABLE orders ADD CONSTRAINT ck_orders_risk_flag CHECK (origin = 'WEB' OR risk_flag IS NULL);
+
+-- "Troco para" sem forma prevista: nenhum esperado; recebe a forma dinheiro, a única com troco.
+-- A RLS de orders é FORCE: o FORCE sai só durante o UPDATE (§5.1).
+ALTER TABLE orders NO FORCE ROW LEVEL SECURITY;
+UPDATE orders SET expected_payment_method = 'CASH' WHERE change_for IS NOT NULL AND expected_payment_method IS NULL;
+ALTER TABLE orders FORCE ROW LEVEL SECURITY;
+
+-- Troco só com a forma dinheiro. O CHECK da 0004 passava com a forma nula (NULL = 'CASH' é NULL, §5.0).
+ALTER TABLE orders DROP CONSTRAINT ck_orders_change_for;
+ALTER TABLE orders ADD CONSTRAINT ck_orders_change_for CHECK (
+  change_for IS NULL OR (expected_payment_method IS NOT NULL AND expected_payment_method = 'CASH'));
+-- Forma prevista só em entrega e retirada: a comanda do salão paga na mesa (ADR-0059 item 5, Q-316)
+ALTER TABLE orders ADD CONSTRAINT ck_orders_expected_payment_fulfillment CHECK (
+  expected_payment_method IS NULL OR fulfillment_type IN ('DELIVERY', 'PICKUP'));
+
+-- "Usar o endereço do último pedido" e histórico do cliente (ADR-0059 item 13, Q-313)
+CREATE INDEX ix_orders_customer_recent ON orders (tenant_id, customer_id, created_at) WHERE customer_id IS NOT NULL;
 ```

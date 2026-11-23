@@ -291,8 +291,9 @@ DO $$ BEGIN
 EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: troco so em dinheiro'; END $$;
 
 DO $$ BEGIN
-  UPDATE orders SET expected_payment_method = 'CASH' WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c01';
-  RAISE EXCEPTION 'FALHOU: forma prevista em pedido do app aceita';
+  -- Desde a 0011 a forma prevista e o troco valem também no app (ADR-0059); o risco do anti-robô continua só no WEB
+  UPDATE orders SET risk_flag = 'CAPTCHA_UNAVAILABLE' WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c01';
+  RAISE EXCEPTION 'FALHOU: risco do anti-robo em pedido do app aceito';
 EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: campos da pagina so em pedido WEB'; END $$;
 
 -- Idempotência anônima da página: user_id nulo, escopo (tenant, key)
@@ -883,6 +884,65 @@ DO $$ BEGIN
   RAISE NOTICE 'ok: fechamento com a linha A_LA_CARTE e o vendido pelo site dentro do vendido';
 END $$;
 
+-- ===== Delivery por telefone e cliente pelo telefone (ADR-0059, migration 0011) =====
+-- Entrega com "troco para R$ 50,00" e retirada com Pix prevista, os dois do app; nada fica pago (ADR-0059 item 8)
+DO $$ BEGIN
+  UPDATE orders SET expected_payment_method = 'CASH', change_for = 50.00 WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c12';
+  UPDATE orders SET expected_payment_method = 'PIX' WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c11';
+  IF (SELECT count(*) FROM orders WHERE origin = 'APP' AND expected_payment_method IS NOT NULL) <> 2 THEN
+    RAISE EXCEPTION 'FALHOU: forma prevista no pedido do app';
+  END IF;
+  IF EXISTS (SELECT 1 FROM orders WHERE id IN ('aaaaaaaa-0000-0000-0000-000000000c11', 'aaaaaaaa-0000-0000-0000-000000000c12')
+               AND (paid_amount <> 0 OR is_paid)) THEN
+    RAISE EXCEPTION 'FALHOU: forma prevista marcou pagamento';
+  END IF;
+  RAISE NOTICE 'ok: forma prevista e troco no pedido do app, sem pagamento';
+END $$;
+
+DO $$ BEGIN
+  BEGIN
+    UPDATE orders SET expected_payment_method = NULL WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c12';
+    RAISE EXCEPTION 'FALHOU: troco sem forma prevista aceito';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    UPDATE orders SET expected_payment_method = 'CARD' WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c12';
+    RAISE EXCEPTION 'FALHOU: troco em cartao aceito no app';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  RAISE NOTICE 'ok: troco so com a forma dinheiro, inclusive com a forma nula';
+END $$;
+
+DO $$ BEGIN
+  UPDATE orders SET expected_payment_method = 'CASH' WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c10';
+  RAISE EXCEPTION 'FALHOU: forma prevista na comanda do salao';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'ok: forma prevista so em entrega e retirada'; END $$;
+
+-- Cliente pelo telefone: o primeiro pedido cria; o segundo atendente (outro nome) não cria outro nem muda o nome (Q-314)
+INSERT INTO customers (id, tenant_id, name, phone_number, created_at)
+VALUES ('aaaaaaaa-0000-0000-0000-000000011001', 'aaaaaaaa-0000-0000-0000-000000000001', 'Bia', '+5534999992222', now())
+ON CONFLICT (tenant_id, phone_number) WHERE phone_number IS NOT NULL DO NOTHING;
+UPDATE orders SET customer_id = 'aaaaaaaa-0000-0000-0000-000000011001', version = version + 1
+ WHERE id = 'aaaaaaaa-0000-0000-0000-000000000c12';
+DO $$
+DECLARE
+  created uuid;
+BEGIN
+  INSERT INTO customers (id, tenant_id, name, phone_number, created_at)
+  VALUES ('aaaaaaaa-0000-0000-0000-000000011002', 'aaaaaaaa-0000-0000-0000-000000000001', 'Beatriz', '+5534999992222', now())
+  ON CONFLICT (tenant_id, phone_number) WHERE phone_number IS NOT NULL DO NOTHING
+  RETURNING id INTO created;
+  IF created IS NOT NULL THEN RAISE EXCEPTION 'FALHOU: segundo cliente com o mesmo telefone'; END IF;
+  IF (SELECT string_agg(name, ',') FROM customers WHERE phone_number = '+5534999992222') <> 'Bia' THEN
+    RAISE EXCEPTION 'FALHOU: cadastro do telefone mudou ou duplicou';
+  END IF;
+  IF (SELECT delivery_address->>'street' FROM orders
+       WHERE tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001' AND customer_id = 'aaaaaaaa-0000-0000-0000-000000011001'
+         AND delivery_address IS NOT NULL
+       ORDER BY created_at DESC LIMIT 1) IS DISTINCT FROM 'Rua A' THEN
+    RAISE EXCEPTION 'FALHOU: endereco do ultimo pedido do cliente';
+  END IF;
+  RAISE NOTICE 'ok: cliente criado uma vez pelo telefone, sem mudar o nome; endereco do ultimo pedido';
+END $$;
+
 -- ===== Tenant B =====
 SELECT set_config('app.tenant_id', 'bbbbbbbb-0000-0000-0000-000000000002', false),
        set_config('app.user_id',   'bbbbbbbb-0000-0000-0000-0000000000b2', false);
@@ -1061,6 +1121,20 @@ DO $$ BEGIN
     RAISE EXCEPTION 'FALHOU: adicional de B sob item de A';
   EXCEPTION WHEN foreign_key_violation THEN NULL; END;
   RAISE NOTICE 'ok: comanda a la carte isolada; B nao usa cardapio fixo nem itens de A';
+END $$;
+
+-- Cliente pelo telefone: único por tenant, não entre tenants (ADR-0059, migration 0011)
+DO $$
+DECLARE
+  created uuid;
+BEGIN
+  IF (SELECT count(*) FROM customers) <> 0 THEN RAISE EXCEPTION 'FALHOU: tenant B ve clientes de A'; END IF;
+  INSERT INTO customers (id, tenant_id, name, phone_number, created_at)
+  VALUES ('bbbbbbbb-0000-0000-0000-000000011001', 'bbbbbbbb-0000-0000-0000-000000000002', 'Outra Bia', '+5534999992222', now())
+  ON CONFLICT (tenant_id, phone_number) WHERE phone_number IS NOT NULL DO NOTHING
+  RETURNING id INTO created;
+  IF created IS NULL THEN RAISE EXCEPTION 'FALHOU: telefone de A bloqueou o cliente de B'; END IF;
+  RAISE NOTICE 'ok: telefone unico por tenant; cliente de A invisivel para B';
 END $$;
 
 -- ===== Login: sem tenant ativo, o usuário A enxerga só os próprios vínculos =====

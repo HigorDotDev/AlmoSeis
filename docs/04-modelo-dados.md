@@ -373,7 +373,7 @@ Sem valor histórico (o pedido grava o snapshot): a edição do combo troca os c
 | Campo | Tipo | Regra |
 |---|---|---|
 | Name | string(80) | |
-| PhoneNumber | string(16)? | E.164; único por tenant quando presente |
+| PhoneNumber | string(16)? | E.164; único por tenant quando presente. No pedido do app com telefone (delivery por telefone, entrega de marmita), o cliente é **vinculado ou criado pelo telefone**, só com nome e telefone, sem `CustomerAddress` (ADR-0059 itens 13 e 14); dois atendentes com o mesmo telefone novo criam um só (`ON CONFLICT`, 05 §5.14). Telefone já cadastrado com outro nome: o cadastro não muda, o pedido guarda o nome digitado (Q-314) |
 | Notes | string(300)? | |
 | AnonymizedAt | DateTimeOffset? | após anonimizar: nome "Cliente anonimizado", telefone, endereços e notas apagados |
 | CreatedAt | | |
@@ -394,18 +394,18 @@ Sem valor histórico (o pedido grava o snapshot): a edição do combo troca os c
 | Origin | enum `APP`, `WEB` (futuro: `WHATSAPP`) | `WEB` = página de pedidos (EP-002, ADR-0044) |
 | FulfillmentType | enum `DELIVERY`, `PICKUP`, `DINE_IN` | `MARMITA` → `DELIVERY`/`PICKUP`; `PF`/`KILO` → `DINE_IN`; `A_LA_CARTE` → os três (o balcão "para viagem" da lanchonete é comanda `DINE_IN`, Q-320) |
 | CustomerId | Guid? | → Customer. Pedido `WEB`: vinculado só no aceite, pelo telefone (ADR-0044 item 20) |
-| CustomerName | string(80)? | snapshot; obrigatório em `MARMITA` |
-| CustomerPhone | string(16)? | snapshot |
-| DeliveryAddress | json? | snapshot do endereço; obrigatório se `DELIVERY` |
+| CustomerName | string(80)? | snapshot; obrigatório em `MARMITA` e, desde o EP-003, na entrega e na retirada `A_LA_CARTE` (ADR-0059 item 2) |
+| CustomerPhone | string(16)? | snapshot; obrigatório (na aplicação) na entrega e na retirada `A_LA_CARTE` e na entrega de `MARMITA` (ADR-0059, Q-312) |
+| DeliveryAddress | json? | snapshot do endereço; obrigatório se `DELIVERY`. No delivery por telefone o endereço fica **só no pedido**; o app oferece "usar o endereço do último pedido" do cliente (Q-313). A marmita mantém os endereços salvos (`CustomerAddress`) |
 | TableLabel | string(10)? | mesa (PF/KILO/A_LA_CARTE no salão) |
 | TabNumber | string(10)? | número da comanda física (ADR-0023) |
 | Notes | string(300)? | |
-| ExpectedPaymentMethod | enum `CASH`, `PIX`, `CARD`? | só `WEB`: forma que o cliente pretende usar (ADR-0044 item 19). Não cria `Payment` |
-| ChangeFor | Money? | só `WEB` e `CASH`: "troco para R$ X", ≥ total no envio |
+| ExpectedPaymentMethod | enum `CASH`, `PIX`, `CARD`? | forma que o cliente pretende usar, só em `DELIVERY`/`PICKUP`: pedido `WEB` (ADR-0044 item 19) e, desde o EP-003, pedido do app (ADR-0059 item 5), obrigatória na entrega e opcional na retirada (Q-316). Não cria `Payment` nem marca pago |
+| ChangeFor | Money? | só com `CASH` (`WEB` ou app): "troco para R$ X", ≥ total na criação e quando a forma ou o valor mudam (aplicação); uma edição posterior do total não é recusada por ele |
 | RiskFlag | enum `CAPTCHA_UNAVAILABLE`? | só `WEB`: o anti-robô não respondeu no envio (ADR-0045 item 12) |
 | AnonymizedAt | DateTimeOffset? | pedido `WEB` não aceito anonimizado 7 dias depois (nome, telefone, endereço e observações; ADR-0052 item 3) |
 | DeliveryFee | Money | 0 se não for `DELIVERY` |
-| DeliveryFeeSource | enum? `FIXED_DEFAULT`, `DISTANCE`, `MANUAL` | só em `DELIVERY` (ADR-0048 item 20): padrão do estabelecimento, calculada pela página, ou digitada/editada no app. Editar taxa ou endereço de um `DISTANCE` → `MANUAL`/`FIXED_DEFAULT`; nulo nas entregas anteriores à 0005 |
+| DeliveryFeeSource | enum? `FIXED_DEFAULT`, `DISTANCE`, `MANUAL` | só em `DELIVERY` (ADR-0048 item 20): padrão do estabelecimento, calculada pela página, ou digitada/editada no app (na criação, quem cria pode digitar outra taxa, gravada `MANUAL` com auditoria do valor; depois, só com `orders.delivery-fee.edit`, Q-315). Editar taxa ou endereço de um `DISTANCE` → `MANUAL`/`FIXED_DEFAULT`; nulo nas entregas anteriores à 0005 |
 | DeliveryDistanceMeters, DeliveryPricePerKm, DeliveryMinimumFee | int?, decimal(10,2)?, Money? | snapshot da regra por distância (os três juntos; obrigatórios em `DISTANCE`; ficam como histórico se a taxa for editada) |
 | ItemsTotal | Money | Σ `OrderItem.LineTotal` ativos |
 | WeighingsTotal | Money | Σ `WeighingEntry.Amount` ativas |
@@ -439,7 +439,7 @@ Sem valor histórico (o pedido grava o snapshot): a edição do combo troca os c
 4. `CANCELED` → somente leitura. Só pode ser cancelado com `PaidAmount == 0` (ADR-0022).
 5. Incluir item com `RequiresPreparation` em pedido `COMPLETED` → `ProductionStatus = IN_PROGRESS` (RN-007.10).
 6. `WeighingEntry` só em `KILO`. Itens `MARMITA` só em pedido `MARMITA`, itens `PF` só em pedido `PF`. Bebidas e adicionais do restaurante (`Product`) avulsos em `MARMITA`, `PF` e `KILO` (RN-002.5). Pedido `A_LA_CARTE` só com itens do cardápio fixo (`FIXED_DISH`, `FIXED_BEVERAGE`, `COMBO` e filhos), e esses itens só em `A_LA_CARTE`: a comanda nunca mistura PF ou quilo com cardápio fixo (ADR-0058 item 3).
-7. Taxa de entrega diferente da padrão exige `orders.delivery-fee.edit`.
+7. Taxa de entrega diferente da padrão exige `orders.delivery-fee.edit`, salvo **na criação** do pedido do app, quando quem cria (`orders.create`) pode digitá-la, com auditoria (ADR-0021 complementado, Q-315).
 8. **Pedido não aceito** (`AcceptanceStatus ≠ ACCEPTED`, ADR-0046 item 4): sem número, sem produção, sem cliente vinculado, sem pagamento; não pode ser editado nem cancelado (`409 OrderNotAccepted`) e não gera `OrderChangeEvent`. **Não entra no fechamento** (vendido, pendente, quantidade), na cozinha nem nas pendências do cliente: toda consulta desses filtra `AcceptanceStatus = ACCEPTED`. Pertence ao expediente aberto no envio.
 9. **Aceite** (`orders.accept`): na mesma transação, `OrderNumber` do `BusinessDateCounter`, `ProductionStatus = OPEN`, `FulfillmentStatus = PENDING`, vínculo com `Customer`. Depois do prazo → `409 WebOrderExpired`; aceite e expiração disputam pela `Version`. Ao **finalizar o fechamento**, os `AWAITING_ACCEPTANCE` do expediente viram `REJECTED` (`BUSINESS_DAY_CLOSED`) na mesma transação.
 10. **Atendimento** (`orders.fulfillment.update`): `PENDING → OUT_FOR_DELIVERY → DELIVERED` (entrega), `PENDING → PICKED_UP` (retirada), "voltou sem entregar" (`OUT_FOR_DELIVERY → PENDING`) e correções de um passo. Sair ou ser retirado exige `ProductionStatus = COMPLETED` ("Concluir e marcar" conclui na mesma transação, exigindo também `production.update`). Independente do financeiro. Com o pedido fora (`OUT_FOR_DELIVERY`, `DELIVERED`, `PICKED_UP`), incluir item → `409 OrderAlreadyDispatched` (ADR-0046 item 19). Vale também para entrega e retirada criadas no app (uso opcional).
