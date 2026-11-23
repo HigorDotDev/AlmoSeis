@@ -449,6 +449,57 @@ dialog {
 dialog::backdrop {
   background: rgba(0, 0, 0, 0.5);
 }
+.builder-dialog {
+  width: min(32rem, calc(100vw - 2rem));
+}
+
+/* Abas do cardápio (categorias, Bebidas, Combos, Marmitas): rolam na horizontal e ficam no topo. */
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+  padding: 0.5rem 0;
+  margin-bottom: 0.5rem;
+  scrollbar-width: thin;
+}
+.tab {
+  flex-shrink: 0;
+  min-height: var(--tap);
+  padding: 0 1rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tab[aria-selected='true'] {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-text);
+}
+
+/* Partes do combo (montagem e acompanhamento) */
+.combo-part {
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+  margin-top: 0.75rem;
+}
+.combo-parts {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0 0 0 0.75rem;
+  border-left: 3px solid var(--border);
+}
+.combo-parts > li + li {
+  margin-top: 0.25rem;
+}
 
 details > summary {
   cursor: pointer;

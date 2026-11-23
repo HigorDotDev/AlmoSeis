@@ -6,7 +6,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { browserApi } from '@/lib/api/client';
 import type { WebOrderTracking } from '@/lib/api/types';
 import { useVisibleInterval } from '@/lib/hooks';
-import { formatApiMoney } from '@/lib/money';
+import { formatApiMoney, formatBRL, parseMoney } from '@/lib/money';
+import { trackingItemTotalCents } from '@/lib/tracking';
 import { formatE164, whatsappLink } from '@/lib/phone';
 import { findOrder, markOrderFinished, saveCart } from '@/lib/storage';
 import {
@@ -251,8 +252,34 @@ export function TrackingClient({ slug, token, justSubmitted }: Props) {
                 <strong>
                   {item.quantity}× {item.name}
                 </strong>
-                <span className="price">{formatApiMoney(item.lineTotal)}</span>
+                {/* Combo: o total é a soma da árvore (combo + partes + adicionais das partes). */}
+                <span className="price">
+                  {item.parts?.length ? formatBRL(trackingItemTotalCents(item)) : formatApiMoney(item.lineTotal)}
+                </span>
               </div>
+              {item.parts && item.parts.length > 0 && (
+                <ul className="combo-parts" aria-label={`Itens de ${item.name}`}>
+                  {item.parts.map((part, k) => (
+                    <li key={k}>
+                      <div className="row-between small">
+                        <span>
+                          {part.quantity}× {part.name}
+                        </span>
+                        {parseMoney(part.lineTotal) > 0 && <span className="price">+ {formatApiMoney(part.lineTotal)}</span>}
+                      </div>
+                      {part.addons.map((a, j) => (
+                        <div key={j} className="row-between small">
+                          <span>
+                            + {a.quantity}× {a.name}
+                          </span>
+                          <span className="price">{formatApiMoney(a.lineTotal)}</span>
+                        </div>
+                      ))}
+                      {part.notes && <p className="muted small">Obs.: {part.notes}</p>}
+                    </li>
+                  ))}
+                </ul>
+              )}
               {item.composition && <p className="muted small">{item.composition}</p>}
               {item.addons.map((a, j) => (
                 <div key={j} className="row-between small">

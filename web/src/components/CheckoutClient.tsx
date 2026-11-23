@@ -7,7 +7,9 @@ import { browserApi } from '@/lib/api/client';
 import type { DeliveryAddressInput, DeliveryQuote, ExpectedPaymentMethod, PublicStore, RecalculatedCart } from '@/lib/api/types';
 import {
   applyCartChanged,
+  cartOrderType,
   describeIssue,
+  ORDER_TYPE_TEXT,
   previewCart,
   removeLine,
   setQuantity,
@@ -18,10 +20,12 @@ import {
   buildOrderRequest,
   EMPTY_ADDRESS,
   interpretSubmitFailure,
+  splitFieldErrors,
   validateCheckout,
   type CheckoutForm,
   type FieldErrors,
 } from '@/lib/checkout';
+import { catalogOf, storeSections } from '@/lib/fixed-menu';
 import { useCart, useLiveStore } from '@/lib/hooks';
 import {
   addressFingerprint,
@@ -87,6 +91,8 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
   const [remember, setRemember] = useState(true);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [lineErrors, setLineErrors] = useState<Record<number, string>>({});
+  /** 422 em `items` ou `orderType` (um tipo por pedido, pelo menos 1 prato ou combo). */
+  const [itemsError, setItemsError] = useState<string | null>(null);
   const [message, setMessage] = useState<{ tone: 'danger' | 'warning' | 'success'; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [cartChanged, setCartChanged] = useState<RecalculatedCart | null>(null);
@@ -135,12 +141,16 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
     if (message) messageRef.current?.focus();
   }, [message]);
 
-  const menu = store.menu;
+  // O cardápio da seção do carrinho (um tipo por pedido, Q-317): marmita → `menu`; à la carte → `fixedMenu`.
+  const catalog = catalogOf(store);
+  const cartType = cartOrderType(cart);
+  const sectionOffered = !cartType || storeSections(store).includes(cartType);
+  const menu = !sectionOffered ? null : cartType === 'A_LA_CARTE' ? catalog.fixedMenu : catalog.menu;
   const isDelivery = form.fulfillmentType === 'DELIVERY';
   const qState: QuoteState = quoteState(quoted, form.address, now);
   const deliveryFeeCents = isDelivery && quoted && qState === 'valid' ? parseMoney(quoted.quote.deliveryFee) : 0;
-  const preview = menu ? previewCart(cart, menu, deliveryFeeCents) : null;
-  const cartIssues: CartIssue[] = menu ? validateCart(cart, menu, store.limits) : [];
+  const preview = menu ? previewCart(cart, catalog, deliveryFeeCents) : null;
+  const cartIssues: CartIssue[] = menu ? validateCart(cart, catalog, store.limits) : [];
   const globalIssues = cartIssues.filter((i) => !('lineId' in i));
   const issuesByLine = new Map<string, CartIssue[]>();
   for (const issue of cartIssues) {
@@ -238,6 +248,7 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
     if (submitting || !menu || !preview) return;
     setMessage(null);
     setLineErrors({});
+    setItemsError(null);
     const localErrors = validateCheckout(form, preview, store.limits.notesMaxLength, isDelivery ? qState : 'none');
     setErrors(localErrors);
     if (Object.keys(localErrors).length > 0 || cartIssues.length > 0) {
@@ -308,13 +319,9 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
         setMessage({ tone: 'warning', text: outcome.message });
         break;
       case 'fieldErrors': {
-        const items: Record<number, string> = {};
-        const fields: FieldErrors = {};
-        for (const [k, v] of Object.entries(outcome.errors)) {
-          const m = /^items\[(\d+)\]/.exec(k);
-          if (m) items[Number(m[1])] = [items[Number(m[1])], v].filter(Boolean).join(' ');
-          else fields[k] = v;
-        }
+        // `items[i].*` (inclusive `items[i].dishSizeId` e `items[i].parts[k].beverageFlavorId`) vai para a linha.
+        const { lines: items, items: itemsMessage, fields } = splitFieldErrors(outcome.errors);
+        setItemsError(itemsMessage);
         if (fields.deliveryQuoteId || Object.keys(fields).some((k) => k.startsWith('deliveryAddress.'))) {
           // Cotação inexistente (9a) ou endereço não localizado no recálculo (9b): cotar de novo.
           setQuoted(null);
@@ -418,9 +425,14 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
           <p>{STORE_STATUS_TEXT[store.status].body}</p>
         </div>
       )}
-      {store.status === 'OPEN' && !menu && (
+      {cartType && !sectionOffered && (
         <div className="notice notice-warning" role="status">
-          O cardápio de hoje ainda não foi publicado.
+          Este restaurante não vende {ORDER_TYPE_TEXT[cartType]} pela página agora. Tire os itens do pedido para continuar.
+        </div>
+      )}
+      {store.status === 'OPEN' && sectionOffered && !menu && (
+        <div className="notice notice-warning" role="status">
+          {cartType === 'A_LA_CARTE' ? 'O cardápio da página não está disponível agora.' : 'O cardápio de hoje ainda não foi publicado.'}
         </div>
       )}
 
@@ -475,6 +487,7 @@ export function CheckoutClient({ initialStore }: { initialStore: PublicStore }) 
             {describeIssue(issue)}
           </p>
         ))}
+        {itemsError && <p className="field-error">{itemsError}</p>}
         <ul className="list">
           {cart.lines.map((line, index) => {
             const lp = preview?.lines[index];

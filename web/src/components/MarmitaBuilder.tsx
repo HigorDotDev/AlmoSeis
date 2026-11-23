@@ -11,7 +11,10 @@ interface Props {
   limits: PublicLimits;
   /** PAUSED: o cardápio aparece só para consulta (ADR-0044 item 6). */
   readOnly: boolean;
-  onAdd: (line: MarmitaLine) => void;
+  /** `false`: não entrou agora (o carrinho tem outro tipo de pedido e a página pediu confirmação); a montagem fica. */
+  onAdd: (line: MarmitaLine) => boolean;
+  /** Título da seção; com as duas seções, a aba já diz "Marmitas". */
+  title?: string;
 }
 
 function initialSides(menu: PublicMenu): string[] {
@@ -19,7 +22,7 @@ function initialSides(menu: PublicMenu): string[] {
 }
 
 /** Monta uma marmita: tamanho, prato(s), acompanhamentos, adicionais, quantidade e observação (RN-203.3). */
-export function MarmitaBuilder({ menu, limits, readOnly, onAdd }: Props) {
+export function MarmitaBuilder({ menu, limits, readOnly, onAdd, title = 'Monte sua marmita' }: Props) {
   const ids = useId();
   const firstSize = menu.marmitaSizes[0]?.id ?? '';
   const [sizeId, setSizeId] = useState(firstSize);
@@ -62,7 +65,7 @@ export function MarmitaBuilder({ menu, limits, readOnly, onAdd }: Props) {
       document.getElementById(`${ids}-main`)?.focus();
       return;
     }
-    onAdd({ ...line, id: newLineId(), notes: notes.trim() });
+    if (!onAdd({ ...line, id: newLineId(), notes: notes.trim() })) return;
     setAnnouncement(`${quantity > 1 ? `${quantity} marmitas adicionadas` : 'Marmita adicionada'} ao pedido.`);
     setMainIds([]);
     setSideIds(initialSides(menu));
@@ -83,7 +86,7 @@ export function MarmitaBuilder({ menu, limits, readOnly, onAdd }: Props) {
 
   return (
     <section className="card" aria-labelledby={`${ids}-title`}>
-      <h2 id={`${ids}-title`}>Monte sua marmita</h2>
+      <h2 id={`${ids}-title`}>{title}</h2>
 
       <fieldset disabled={readOnly}>
         <legend>Tamanho</legend>

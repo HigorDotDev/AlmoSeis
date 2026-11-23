@@ -8,7 +8,7 @@ import type {
   RecalculatedCart,
   StoreStatus,
 } from './api/types';
-import { expectedTotal, toOrderItems, type Cart, type CartPreview } from './cart';
+import { cartOrderType, expectedTotal, toOrderItems, type Cart, type CartPreview } from './cart';
 import {
   DELIVERY_UNAVAILABLE_TEXT,
   normalizeAddressInput,
@@ -79,6 +79,8 @@ export function buildOrderRequest(form: CheckoutForm, cart: Cart, preview: CartP
   const isDelivery = form.fulfillmentType === 'DELIVERY';
   const change = form.paymentMethod === 'CASH' ? parseUserMoney(form.changeFor) : null;
   return {
+    // Um tipo por pedido (Q-317): o das linhas do carrinho.
+    orderType: cartOrderType(cart) ?? 'MARMITA',
     fulfillmentType: form.fulfillmentType,
     customerName: form.name.trim(),
     customerPhone: form.phone.trim(),
@@ -192,4 +194,28 @@ export function interpretSubmitFailure(failure: ApiFailure): SubmitOutcome {
     return { kind: 'message', message: 'Não foi possível enviar o pedido.' };
   }
   return { kind: 'message', message: problem.title ?? 'Não foi possível enviar o pedido. Tente de novo.' };
+}
+
+/**
+ * Separa os erros por campo do `422`: `items[i].*` (inclusive `items[i].dishSizeId` e
+ * `items[i].parts[k].beverageFlavorId`) vão para a linha `i` do carrinho; `items` e `orderType` (um tipo por pedido,
+ * pelo menos 1 prato ou combo) vão para o bloco dos itens; o resto fica no campo do formulário.
+ */
+export function splitFieldErrors(errors: FieldErrors): { lines: Record<number, string>; items: string | null; fields: FieldErrors } {
+  const lines: Record<number, string> = {};
+  const fields: FieldErrors = {};
+  const items: string[] = [];
+  for (const [key, value] of Object.entries(errors)) {
+    if (!value) continue;
+    const m = /^items\[(\d+)\]/.exec(key);
+    if (m) {
+      const i = Number(m[1]);
+      lines[i] = [lines[i], value].filter(Boolean).join(' ');
+    } else if (key === 'items' || key === 'orderType') {
+      items.push(value);
+    } else {
+      fields[key] = value;
+    }
+  }
+  return { lines, items: items.length ? items.join(' ') : null, fields };
 }

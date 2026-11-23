@@ -19,6 +19,7 @@ const json = (status: number, body: unknown, headers: Record<string, string> = {
 const header = (call: Call, name: string) => (call.init.headers as Record<string, string>)[name];
 
 const body: PlaceWebOrderRequest = {
+  orderType: 'MARMITA',
   fulfillmentType: 'PICKUP',
   customerName: 'Carla Souza',
   customerPhone: '(34) 98888-7777',

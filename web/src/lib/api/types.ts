@@ -41,10 +41,107 @@ export interface PublicMenu {
   beverages: PublicPricedProduct[];
 }
 
+/**
+ * Seção da página (EP-003 Q-317): o que ela vende, pelo comportamento do estabelecimento. O nome é o `orderType` do
+ * pedido: `MARMITA` (marmitas e bebidas do cardápio do dia, em `menu`) e `A_LA_CARTE` (cardápio fixo da lanchonete, em
+ * `fixedMenu`). Um pedido é de uma seção só.
+ */
+export type StoreSection = 'MARMITA' | 'A_LA_CARTE';
+export type WebOrderType = StoreSection;
+
+// --- Cardápio fixo da lanchonete (§6.19, EP-003 fatia 5; ADR-0057). Só o que vende no site e não está pausado. ---
+
+export interface PublicDishSize {
+  id: string;
+  name: string;
+  price: Money;
+}
+
+/** Sem tamanho: `price` e `sizes: []`. Com tamanho: `price: null` e o cliente escolhe um de `sizes`. */
+export interface PublicFixedDish {
+  id: string;
+  name: string;
+  description: string | null;
+  imageUrl: string | null;
+  hasSizes: boolean;
+  price: Money | null;
+  sizes: PublicDishSize[];
+  addonGroupIds: string[];
+}
+
+export interface PublicDishCategory {
+  id: string;
+  name: string;
+  dishes: PublicFixedDish[];
+}
+
+export interface PublicBeverageFlavor {
+  id: string;
+  name: string;
+  extraPrice: Money;
+}
+
+/** `flavors` não vazio → sabor obrigatório. Preço = `price` + `extraPrice` do sabor. */
+export interface PublicBeverageSize {
+  id: string;
+  name: string;
+  price: Money;
+  flavors: PublicBeverageFlavor[];
+}
+
+export interface PublicBeverageType {
+  id: string;
+  name: string;
+  sizes: PublicBeverageSize[];
+}
+
+export interface PublicComboComponent {
+  id: string;
+  kind: 'DISH' | 'BEVERAGE';
+  name: string;
+  quantity: number;
+  /** `DISH`: grupos de adicionais do prato. `BEVERAGE`: `[]`. */
+  addonGroupIds: string[];
+  /** `BEVERAGE`: sabores (vazio = sem escolha). `DISH`: `[]`. */
+  flavors: PublicBeverageFlavor[];
+}
+
+export interface PublicCombo {
+  id: string;
+  name: string;
+  description: string | null;
+  imageUrl: string | null;
+  price: Money;
+  components: PublicComboComponent[];
+}
+
+export interface PublicAddonOption {
+  id: string;
+  name: string;
+  price: Money;
+}
+
+export interface PublicAddonGroup {
+  id: string;
+  name: string;
+  options: PublicAddonOption[];
+}
+
+export interface PublicFixedMenu {
+  categories: PublicDishCategory[];
+  beverages: PublicBeverageType[];
+  combos: PublicCombo[];
+  addonGroups: PublicAddonGroup[];
+}
+
 export interface PublicLimits {
   maxMarmitas: number;
+  /** Lanchonete (Q-318): pratos e combos somados; bebidas não contam. */
+  maxDishesAndCombos: number;
   maxLines: number;
   maxQuantityPerLine: number;
+  /** Quantidade de cada opção de adicional de grupo. */
+  maxAddonQuantity: number;
   notesMaxLength: number;
 }
 
@@ -72,6 +169,8 @@ export interface PublicStore {
   slug: string;
   status: StoreStatus;
   name: string;
+  /** Ordem `MARMITA`, `A_LA_CARTE`; `[]` em `UNAVAILABLE`. */
+  sections: StoreSection[];
   address: PublicAddress | null;
   contactPhone: string | null;
   hoursText: string | null;
@@ -80,7 +179,10 @@ export interface PublicStore {
   deliveryRule: PublicDeliveryRule | null;
   privacy: PublicPrivacy | null;
   businessDate: string | null;
+  /** Seção `MARMITA` (senão `null`). */
   menu: PublicMenu | null;
+  /** Seção `A_LA_CARTE`, só em `OPEN`/`PAUSED` (senão `null`). */
+  fixedMenu: PublicFixedMenu | null;
   limits: PublicLimits;
 }
 
@@ -98,7 +200,8 @@ export interface DeliveryAddressInput {
   reference: string | null;
 }
 
-export interface WebOrderItemInput {
+/** Linha de um pedido `MARMITA`. */
+export interface MarmitaOrderItemInput {
   itemKind: 'MARMITA' | 'BEVERAGE';
   marmitaSizeId: string | null;
   productId: string | null;
@@ -109,7 +212,50 @@ export interface WebOrderItemInput {
   notes: string | null;
 }
 
+export interface GroupAddonInput {
+  addonOptionId: string;
+  quantity: number;
+}
+
+/** Linhas de um pedido `A_LA_CARTE` (§6.19, formato do §6.9). Os campos de outro tipo ficam ausentes. */
+export interface FixedDishOrderItemInput {
+  itemKind: 'FIXED_DISH';
+  dishId: string;
+  dishSizeId: string | null;
+  quantity: number;
+  notes: string | null;
+  groupAddons: GroupAddonInput[];
+}
+
+export interface FixedBeverageOrderItemInput {
+  itemKind: 'FIXED_BEVERAGE';
+  beverageSizeId: string;
+  beverageFlavorId: string | null;
+  quantity: number;
+  notes: string | null;
+}
+
+export interface ComboPartInput {
+  comboComponentId: string;
+  beverageFlavorId: string | null;
+  notes: string | null;
+  groupAddons: GroupAddonInput[] | null;
+}
+
+/** O combo não tem `notes` nem adicionais próprios: as escolhas vão em `parts`. */
+export interface ComboOrderItemInput {
+  itemKind: 'COMBO';
+  comboId: string;
+  quantity: number;
+  notes: null;
+  parts: ComboPartInput[];
+}
+
+export type WebOrderItemInput = MarmitaOrderItemInput | FixedDishOrderItemInput | FixedBeverageOrderItemInput | ComboOrderItemInput;
+
 export interface PlaceWebOrderRequest {
+  /** Ausente = `MARMITA`. Precisa ser uma das `sections`. */
+  orderType: WebOrderType;
   fulfillmentType: FulfillmentType;
   customerName: string;
   customerPhone: string;
@@ -198,8 +344,11 @@ export type RejectionReasonCode =
   | 'OTHER'
   | 'BUSINESS_DAY_CLOSED';
 
+export type TrackingItemKind = 'MARMITA' | 'BEVERAGE' | 'FIXED_DISH' | 'FIXED_BEVERAGE' | 'COMBO' | 'COMBO_PART';
+
+/** `lineTotal` é só da linha: o total de um combo é a soma da árvore (combo + partes + adicionais das partes). */
 export interface TrackingItem {
-  itemKind: 'MARMITA' | 'BEVERAGE';
+  itemKind: TrackingItemKind;
   name: string;
   composition: string | null;
   quantity: number;
@@ -207,6 +356,8 @@ export interface TrackingItem {
   lineTotal: Money;
   notes: string | null;
   addons: { name: string; quantity: number; unitPrice: Money; lineTotal: Money }[];
+  /** `COMBO`: as partes (`COMBO_PART`). Demais: `[]`. */
+  parts?: TrackingItem[];
 }
 
 export interface WebOrderTracking {
