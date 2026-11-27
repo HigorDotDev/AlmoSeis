@@ -16,6 +16,11 @@ using AlmoSeis.Modules.Sync;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Configuração: appsettings + variáveis de ambiente (`Secao__Chave`) + user-secrets; Key Vault só com `KeyVault:Uri` (ADR-0060).
+builder.Configuration.AddAlmoSeisKeyVault();
+// OpenTelemetry só com `Otel:Endpoint` e/ou a connection string do Application Insights (ADR-0060).
+builder.AddAlmoSeisTelemetry();
+
 builder.Services.AddAlmoSeisInfrastructure(builder.Configuration);
 builder.Services.AddBillingModule(builder.Configuration);
 builder.Services.AddIdentityModule();
@@ -60,9 +65,12 @@ builder.Services.AddSingleton<IRealtimePublisher, SignalRRealtimePublisher>();
 builder.Services.AddOptions<AppVersionOptions>().BindConfiguration(AppVersionOptions.Section);
 builder.Services.AddOptions<RateLimitSettings>().BindConfiguration(RateLimitSettings.Section);
 builder.Services.AddAlmoSeisRateLimiting();
-builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
+// `/health/live` não consulta nada (o processo responde); `/health/ready` abre conexão com o banco, com tempo-limite curto
+// para o healthcheck do Compose não ficar pendurado quando o PostgreSQL some.
+builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tags: ["ready"], timeout: TimeSpan.FromSeconds(3));
 
 var app = builder.Build();
+app.WarnAboutIgnoredTelemetrySettings();
 
 // Primeiro: o IP e o esquema reais (proxy confiável de ForwardedHeaders) valem para o log de erro, o HSTS e o rate limit.
 app.UseForwardedHeaders();

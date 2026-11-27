@@ -1,5 +1,6 @@
 using AlmoSeis.Infrastructure.Audit;
 using AlmoSeis.Infrastructure.Concurrency;
+using AlmoSeis.Infrastructure.Email;
 using AlmoSeis.Infrastructure.Idempotency;
 using AlmoSeis.Infrastructure.Storage;
 using AlmoSeis.Infrastructure.Persistence;
@@ -27,7 +28,7 @@ public static class DependencyInjection
         services.AddScoped<TenantSessionConnectionInterceptor>();
         services.AddScoped<TenantGuardSaveChangesInterceptor>();
 
-        // Connection strings lidas na resolução (não no registro): Key Vault e testes sobrescrevem a configuração depois.
+        // Connection strings lidas na resolução (não no registro): os testes sobrescrevem a configuração depois do Program.
         services.AddDbContext<AppDbContext>((sp, options) => options
             .UseAlmoSeisNpgsql(RequiredConnectionString(sp, "App"))
             .AddInterceptors(
@@ -41,7 +42,21 @@ public static class DependencyInjection
         services.AddScoped<ITenantSession, TenantSession>();
         services.AddScoped<IConcurrencyContext, ConcurrencyContext>();
 
-        services.TryAddSingleton<AlmoSeis.Infrastructure.Email.IEmailSender, AlmoSeis.Infrastructure.Email.LoggingEmailSender>();
+        // E-mail (ADR-0040, ADR-0060): o provedor sai de Email:Provider na resolução; os testes substituem o IEmailSender.
+        services.AddOptions<EmailOptions>().Bind(configuration.GetSection(EmailOptions.Section)).ValidateOnStart();
+        services.AddSingleton<IValidateOptions<EmailOptions>, EmailOptionsValidator>();
+        services.AddSingleton<LoggingEmailSender>();
+        services.AddSingleton<SmtpEmailSender>();
+        services.AddSingleton<AcsEmailSender>();
+        services.TryAddSingleton<IEmailSender>(sp => sp.GetRequiredService<IOptions<EmailOptions>>().Value.Provider switch
+        {
+            EmailProvider.Smtp => sp.GetRequiredService<SmtpEmailSender>(),
+            EmailProvider.Acs => sp.GetRequiredService<AcsEmailSender>(),
+            _ => sp.GetRequiredService<LoggingEmailSender>(),
+        });
+
+        // Anel de chaves do Data Protection em diretório persistente (DataProtection:KeysPath, ADR-0060).
+        services.AddAlmoSeisDataProtection(configuration);
 
         services.AddOptions<IdempotencyOptions>().Bind(configuration.GetSection(IdempotencyOptions.Section));
         services.AddScoped<IIdempotencyStore, IdempotencyStore>();
@@ -56,7 +71,10 @@ public static class DependencyInjection
         services.AddOptions<R2Options>().Bind(configuration.GetSection(R2Options.Section));
         services.AddSingleton<IObjectStorage, R2ObjectStorage>();
 
-        services.AddOptions<JwtOptions>().Bind(configuration.GetSection(JwtOptions.Section));
+        // Segredos obrigatórios conferidos ao subir (falha clara em vez de erro na primeira requisição).
+        services.AddRequiredSecretsValidation();
+        services.AddOptions<JwtOptions>().Bind(configuration.GetSection(JwtOptions.Section)).ValidateOnStart();
+        services.AddSingleton<IValidateOptions<JwtOptions>, JwtOptionsValidator>();
         services.AddSingleton<IJwtTokenIssuer, JwtTokenIssuer>();
         services.AddSingleton<ISecretHasher, Sha256SecretHasher>();
 

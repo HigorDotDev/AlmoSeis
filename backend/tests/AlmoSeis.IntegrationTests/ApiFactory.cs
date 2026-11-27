@@ -23,6 +23,10 @@ public sealed class ApiFactory(PostgresFixture db, Action<IServiceCollection>? s
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    /// Um diretório por execução, compartilhado pelas fábricas (como as réplicas compartilhariam o volume).
+    public static readonly string DataProtectionKeysPath =
+        Path.Combine(Path.GetTempPath(), "almoseis-integration-tests", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), "dp-keys");
+
     /// Erros logados pela API durante o teste: anexados às falhas para diagnóstico.
     public ConcurrentQueue<string> ServerErrors { get; } = new();
 
@@ -62,6 +66,8 @@ public sealed class ApiFactory(PostgresFixture db, Action<IServiceCollection>? s
             // Push (ADR-0049): sem rede; manutenção (recibos e limpeza) só por RunOnceAsync.
             ["Push:Provider"] = "Fake",
             ["Push:MaintenanceJobEnabled"] = "false",
+            // Fora de Development a API não sobe sem o diretório do anel de chaves (ADR-0060).
+            ["DataProtection:KeysPath"] = DataProtectionKeysPath,
         }));
         if (services is not null)
         {
