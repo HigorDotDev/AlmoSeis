@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using AlmoSeis.Infrastructure.Observability;
 using Azure.Monitor.OpenTelemetry.Exporter;
 using OpenTelemetry;
 using OpenTelemetry.Exporter;
@@ -99,7 +100,8 @@ public static class Telemetry
                 metrics
                     .AddAspNetCoreInstrumentation()
                     .AddHttpClientInstrumentation()
-                    .AddMeter("System.Runtime", "Npgsql");
+                    // `AlmoSeis`: outbox, idempotência, pedidos e sync (07 §7.4); `AlmoSeis.Maps`: falhas do provedor de mapas.
+                    .AddMeter("System.Runtime", "Npgsql", AlmoSeisMetrics.MeterName, "AlmoSeis.Maps");
                 if (useOtlp)
                 {
                     metrics.AddOtlpExporter(o => ConfigureOtlp(o, settings, otlp, "v1/metrics"));

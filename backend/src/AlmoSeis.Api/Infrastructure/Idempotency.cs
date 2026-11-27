@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AlmoSeis.Infrastructure.Idempotency;
+using AlmoSeis.Infrastructure.Observability;
 using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Security;
 using AlmoSeis.Infrastructure.Tenancy;
@@ -55,6 +56,7 @@ internal sealed class IdempotencyFilter(
     ITenantContext tenant,
     IEnumerable<IReplaySecretSource> secrets,
     IOptions<JsonOptions> json,
+    AlmoSeisMetrics metrics,
     IdempotencyRoute route) : IAsyncActionFilter
 {
     public const string KeyHeader = "Idempotency-Key";
@@ -126,6 +128,8 @@ internal sealed class IdempotencyFilter(
     private void Replay(ActionExecutingContext context, StoredResponse response)
     {
         context.HttpContext.Response.Headers[ReplayedHeader] = "true";
+        // Template da rota (sem ids nem tokens): poucas séries (07 §7.4).
+        metrics.IdempotencyReplayed(context.HttpContext.Request.Method, context.ActionDescriptor.AttributeRouteInfo?.Template ?? "unknown");
         context.Result = new ContentResult
         {
             StatusCode = response.Status,

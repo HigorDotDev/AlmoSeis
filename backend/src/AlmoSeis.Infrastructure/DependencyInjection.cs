@@ -2,6 +2,7 @@ using AlmoSeis.Infrastructure.Audit;
 using AlmoSeis.Infrastructure.Concurrency;
 using AlmoSeis.Infrastructure.Email;
 using AlmoSeis.Infrastructure.Idempotency;
+using AlmoSeis.Infrastructure.Observability;
 using AlmoSeis.Infrastructure.Storage;
 using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Realtime;
@@ -27,13 +28,15 @@ public static class DependencyInjection
         services.AddScoped<ITenantContext, TenantContext>();
         services.AddScoped<TenantSessionConnectionInterceptor>();
         services.AddScoped<TenantGuardSaveChangesInterceptor>();
+        services.AddScoped<CommitCallbacks>();
 
         // Connection strings lidas na resolução (não no registro): os testes sobrescrevem a configuração depois do Program.
         services.AddDbContext<AppDbContext>((sp, options) => options
             .UseAlmoSeisNpgsql(RequiredConnectionString(sp, "App"))
             .AddInterceptors(
                 sp.GetRequiredService<TenantSessionConnectionInterceptor>(),
-                sp.GetRequiredService<TenantGuardSaveChangesInterceptor>()));
+                sp.GetRequiredService<TenantGuardSaveChangesInterceptor>(),
+                sp.GetRequiredService<CommitCallbacks>()));
 
         services.AddDbContext<PlatformDbContext>((sp, options) => options.UseAlmoSeisNpgsql(RequiredConnectionString(sp, "Platform")));
 
@@ -63,6 +66,10 @@ public static class DependencyInjection
 
         // O IRealtimePublisher é registrado pelo host (SignalR na Api).
         services.AddOptions<OutboxOptions>().Bind(configuration.GetSection(OutboxOptions.Section));
+        // Métricas próprias (Meter `AlmoSeis`) e a contagem do outbox do gauge e do `/health/ready` (07 §7.4).
+        services.AddMetrics();
+        services.AddSingleton<OutboxBacklogMonitor>();
+        services.AddSingleton<AlmoSeisMetrics>();
         services.AddSingleton<OutboxDispatcher>();
         services.AddHostedService(sp => sp.GetRequiredService<OutboxDispatcher>());
         services.AddSingleton<SyncRetentionJob>();

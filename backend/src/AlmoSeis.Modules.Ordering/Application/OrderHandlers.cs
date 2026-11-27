@@ -2,6 +2,7 @@ using System.Buffers.Text;
 using System.Text.Json;
 using AlmoSeis.Infrastructure.Audit;
 using AlmoSeis.Infrastructure.Concurrency;
+using AlmoSeis.Infrastructure.Observability;
 using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Persistence.Entities;
 using AlmoSeis.Infrastructure.Tenancy;
@@ -31,6 +32,8 @@ internal sealed class CreateOrderHandler(
     OrderNumberGenerator numbers,
     IAuditWriter audit,
     OrderDtoBuilder dtos,
+    IUnitOfWork unitOfWork,
+    AlmoSeisMetrics metrics,
     TimeProvider time) : ICommandHandler<CreateOrderCommand, OrderDto>
 {
     public async Task<OrderDto> HandleAsync(CreateOrderCommand command, CancellationToken cancellationToken)
@@ -88,6 +91,7 @@ internal sealed class CreateOrderHandler(
             totalAmount = order.TotalAmount.ToString(),
             order.CustomerId,
         });
+        OrderRules.CountCreated(unitOfWork, metrics, order);
         return await dtos.BuildAsync(order, cancellationToken);
     }
 }

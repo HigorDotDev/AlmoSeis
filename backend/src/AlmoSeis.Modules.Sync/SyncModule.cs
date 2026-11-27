@@ -1,3 +1,4 @@
+using AlmoSeis.Infrastructure.Observability;
 using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Persistence.Entities;
 using AlmoSeis.Infrastructure.Tenancy;
@@ -22,7 +23,7 @@ public static class SyncModule
 }
 
 /// GET /sync/changes (ADR-0032): compactado (a última alteração de cada entidade), filtrado pelo que quem chama pode ler.
-internal sealed class GetSyncChangesQueryHandler(AppDbContext db, ITenantContext tenant, IPermissionChecker permissions)
+internal sealed class GetSyncChangesQueryHandler(AppDbContext db, ITenantContext tenant, IPermissionChecker permissions, AlmoSeisMetrics metrics)
     : IQueryHandler<GetSyncChangesQuery, SyncChangesDto>
 {
     public const int MaxLimit = 500;
@@ -76,6 +77,7 @@ internal sealed class GetSyncChangesQueryHandler(AppDbContext db, ITenantContext
             var firstRetained = await db.Set<ChangeFeedEntry>().Where(e => e.TenantId == tenantId).MinAsync(e => (long?)e.Seq, cancellationToken);
             if (firstRetained is null || firstRetained > query.Since + 1)
             {
+                metrics.SyncCursorExpired();
                 throw new BusinessException(
                     ErrorCodes.SyncCursorExpired,
                     extensions: new Dictionary<string, object?> { ["currentSeq"] = currentSeq });

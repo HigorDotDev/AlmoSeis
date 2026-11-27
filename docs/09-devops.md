@@ -390,16 +390,17 @@ O instante sempre com fuso (`-03`). Sem `--time`, recupera até o último WAL do
 
 | O quê | Ferramenta (plano gratuito) | Condição | Aviso |
 |---|---|---|---|
-| API indisponível | UptimeRobot ou Better Stack: HTTP `https://api.{dominio}/health/ready` (espera `Healthy`) a cada 1 a 5 min | 2 falhas seguidas (~3 min) | e-mail (e push do app do monitor) |
+| API indisponível ou outbox atrasado | UptimeRobot ou Better Stack: monitor de **palavra-chave** em `https://api.{dominio}/health/ready` (espera `Healthy` no corpo) a cada 1 a 5 min | 2 falhas seguidas (~3 min) | e-mail (e push do app do monitor) |
 | Página indisponível | idem: `https://{dominio}/` | 2 falhas seguidas | e-mail |
 | App web | idem: `https://app.{dominio}/` | 2 falhas seguidas | e-mail |
 | Certificado | monitor de SSL do mesmo serviço | vence em < 14 dias (o Caddy renova em 30) | e-mail |
 | Base diária | *heartbeat* `BACKUP_HEARTBEAT_URL` (Better Stack ou Healthchecks.io) | sem sinal em 26 h ou `/fail` | e-mail |
 | *Archive* de WAL e disco | *heartbeat* `ARCHIVE_HEARTBEAT_URL` | sem sinal em 15 min ou `/fail` | e-mail |
 | Erros e latência (opcional) | OTLP (`Otel__Endpoint`) → Grafana Cloud, Better Stack ou Sentry | 5xx > 1% em 5 min; p95 > 1 s por 10 min (RNF-002) | e-mail do serviço |
-| Outbox atrasado (opcional) | métrica `almoseis.outbox.pending` / `lag_ms` no mesmo destino OTLP | `pending` > 100 ou `lag_ms` p95 > 3 s por 5 min | e-mail do serviço |
+| Outbox atrasado, detalhe (opcional) | métricas `almoseis.outbox.pending`, `almoseis.outbox.oldest_age_ms` e `almoseis.outbox.lag_ms` no mesmo destino OTLP | `pending` > 100, `oldest_age_ms` > 60 s ou `lag_ms` p95 > 3 s, por 5 min | e-mail do serviço |
 
-- **Sem OTLP**, os logs ficam só no `docker logs` (rotação de 10 MB × 5). Para investigar: `dc.sh logs --since 1h api`. As métricas próprias (`almoseis.outbox.pending`, `almoseis.outbox.lag_ms`, `almoseis.idempotency.replays`, `almoseis.orders.created`, `almoseis.sync.cursor_expired`) só saem com OTLP.
+- **`/health/ready` tem três respostas** (07 §7.4): `Healthy` (200); `Degraded` (**200**, corpo `Degraded`) quando o outbox tem mais de 100 mensagens disponíveis esperando ou a mais antiga espera há mais de 60 s (`Outbox__DegradedPendingThreshold`, `Outbox__DegradedOldestSeconds`); `Unhealthy` (503) com o banco fora. Como o atraso não muda o status HTTP, o healthcheck do Compose e o smoke do deploy (`curl -f`) seguem verdes e nada é reiniciado; **só o monitor por palavra-chave avisa**. Por isso o monitor da API precisa ser do tipo palavra-chave (`Healthy`), e não só HTTP 200. E-mail do monitor com a API respondendo: abrir `/health/ready` (se `Degraded`, é o outbox) e olhar `dc.sh logs --since 1h api | grep -i outbox` (mensagem desistida, consumidor falhando, réplica do dispatcher parada).
+- **Sem OTLP**, os logs ficam só no `docker logs` (rotação de 10 MB × 5). Para investigar: `dc.sh logs --since 1h api`. As métricas próprias (Meter `AlmoSeis`: `almoseis.outbox.pending`, `almoseis.outbox.oldest_age_ms`, `almoseis.outbox.lag_ms`, `almoseis.idempotency.replays`, `almoseis.orders.created`, `almoseis.sync.cursor_expired`; Meter `AlmoSeis.Maps`: `almoseis.maps.failures`) só saem com OTLP, e sem ele não custam nada (nem a consulta do gauge do outbox roda). Elas **não** têm `tenant.id` (cardinalidade cresceria com os estabelecimentos e estouraria o limite de séries do plano gratuito); o recorte por estabelecimento é pelo `tenant.id` dos traces.
 - **Nunca** gravar payloads, telefones nem tokens em log ou telemetria (ADR-0024). O Caddy não tem log de acesso e o PostgreSQL não grava parâmetros.
 - Recurso da VM: o painel da Oracle (CPU e memória da instância) e o alarme gratuito do OCI Monitoring (CPU > 80% por 15 min) por e-mail. Esses números alimentam o gatilho de migração (ADR-0060 item 10).
 - Os alertas vão por e-mail para o responsável técnico. Não há plantão no piloto.

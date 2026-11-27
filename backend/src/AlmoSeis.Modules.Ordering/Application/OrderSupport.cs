@@ -1,4 +1,5 @@
 using AlmoSeis.Infrastructure.Audit;
+using AlmoSeis.Infrastructure.Observability;
 using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Tenancy;
 using AlmoSeis.Modules.Catalog.Contracts;
@@ -325,6 +326,15 @@ internal sealed class OrderNumberGenerator(AppDbContext db, ITenantContext tenan
 
 internal static class OrderRules
 {
+    /// `almoseis.orders.created` (07 §7.4): só depois do commit, para o pedido desfeito no rollback não contar. Pedido do
+    /// app na criação; da página no aceite (é quando nasce para a cozinha, com `OrderCreated`).
+    public static void CountCreated(IUnitOfWork unitOfWork, AlmoSeisMetrics metrics, Order order)
+    {
+        var origin = UpperSnakeEnumConverter<OrderOrigin>.ToText(order.Origin);
+        var type = UpperSnakeEnumConverter<OrderType>.ToText(order.OrderType);
+        unitOfWork.OnCommitted(() => metrics.OrderCreated(origin, type));
+    }
+
     /// Módulo de cada modalidade (ADR-0054 item 12). A pergunta é sempre pelo módulo, nunca pelo comportamento.
     /// `A_LA_CARTE`: comanda no salão → `A_LA_CARTE`; entrega e retirada → `DELIVERY` (ADR-0058 item 1).
     public static TenantModule ModuleOf(OrderType orderType, FulfillmentType fulfillmentType = FulfillmentType.DineIn) => orderType switch

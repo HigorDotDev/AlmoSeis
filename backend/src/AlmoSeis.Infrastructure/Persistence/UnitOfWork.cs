@@ -15,6 +15,10 @@ public interface IUnitOfWork
     /// Evento de tempo real de uma entidade que não é agregado (ex.: `ClosingUpdated` de uma movimentação de caixa).
     /// Vai para o outbox no commit, com o `seq` da entidade, que precisa ter sido alterada nesta transação.
     void Enqueue(IntegrationEnvelope envelope, DateTimeOffset occurredAt);
+
+    /// Roda `action` só depois do commit da transação corrente (rollback descarta). Em memória e sem I/O: hoje, contadores
+    /// de métrica (`CommitCallbacks`). Fora de uma transação é erro de programação.
+    void OnCommitted(Action action);
 }
 
 /// Envelope de tempo real de 06 §6.14, montado pelos mappers de cada módulo.
@@ -51,6 +55,7 @@ internal sealed class UnitOfWork(
     AppDbContext db,
     IEnumerable<IIntegrationEventMapper> mappers,
     IIdGenerator ids,
+    CommitCallbacks callbacks,
     TimeProvider time) : IUnitOfWork
 {
     internal static readonly JsonSerializerOptions EnvelopeJson = new(JsonSerializerDefaults.Web);
@@ -61,6 +66,16 @@ internal sealed class UnitOfWork(
     private readonly List<(IntegrationEnvelope Envelope, DateTimeOffset OccurredAt)> _queued = [];
 
     public void Enqueue(IntegrationEnvelope envelope, DateTimeOffset occurredAt) => _queued.Add((envelope, occurredAt));
+
+    public void OnCommitted(Action action)
+    {
+        if (db.Database.CurrentTransaction is null)
+        {
+            throw new InvalidOperationException("OnCommitted fora de uma transação.");
+        }
+
+        callbacks.Add(action);
+    }
 
     public async Task CommitAsync(CancellationToken cancellationToken)
     {

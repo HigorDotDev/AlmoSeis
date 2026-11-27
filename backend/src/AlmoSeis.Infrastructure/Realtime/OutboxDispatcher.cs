@@ -1,3 +1,4 @@
+using AlmoSeis.Infrastructure.Observability;
 using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Persistence.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -48,6 +49,15 @@ public sealed class OutboxOptions
     /// Precisa passar do pior caso do consumidor (o push: lotes de 100 com até 5 s cada). Se a réplica cair no meio, outra
     /// pega a mensagem depois disso, e o consumidor deduplica (`push_deliveries`; apagar a imagem antiga de novo é inócuo).
     public int ConsumerLeaseSeconds { get; set; } = 120;
+
+    /// `/health/ready` fica `Degraded` (HTTP 200, corpo `Degraded`) com mais pendentes que isto (07 §7.4, 09 §9.8).
+    public int DegradedPendingThreshold { get; set; } = 100;
+
+    /// ... ou com a pendente mais antiga esperando há mais que isto.
+    public int DegradedOldestSeconds { get; set; } = 60;
+
+    /// Validade da contagem do `OutboxBacklogMonitor` (gauge e health check leem a mesma).
+    public int BacklogCacheSeconds { get; set; } = 5;
 }
 
 /// 07 §7.10: dois laços independentes sobre o outbox, cada um com `FOR UPDATE SKIP LOCKED` (seguro com várias réplicas).
@@ -64,6 +74,7 @@ public sealed class OutboxDispatcher(
     IEnumerable<IOutboxConsumer> consumers,
     IOptions<OutboxOptions> options,
     TimeProvider time,
+    AlmoSeisMetrics metrics,
     ILogger<OutboxDispatcher> logger) : BackgroundService
 {
     private readonly Dictionary<string, IOutboxConsumer> _consumers = consumers.ToDictionary(c => c.EventType);
@@ -133,6 +144,7 @@ public sealed class OutboxDispatcher(
             {
                 await publisher.PublishAsync(message.TenantId, message.EventType, message.Payload, cancellationToken);
                 message.ProcessedAt = time.GetUtcNow();
+                metrics.OutboxDelivered("realtime", message.ProcessedAt.Value - (message.AvailableAt ?? message.OccurredAt));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -202,6 +214,8 @@ public sealed class OutboxDispatcher(
             .ToListAsync(cancellationToken);
 
         var lease = now + TimeSpan.FromSeconds(o.ConsumerLeaseSeconds);
+        // Desde quando cada uma estava disponível (antes de o lease sobrescrever `available_at`), para o `lag_ms`.
+        var dueAt = batch.ToDictionary(m => m.Id, m => m.AvailableAt ?? m.OccurredAt);
         foreach (var message in batch)
         {
             // A tentativa conta na reserva: se a réplica cair no meio, a mensagem não volta para sempre.
@@ -211,7 +225,7 @@ public sealed class OutboxDispatcher(
 
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return batch.Select(m => new ReservedMessage(m.Id, m.TenantId, m.EventType, m.Payload, m.Attempts)).ToList();
+        return batch.Select(m => new ReservedMessage(m.Id, m.TenantId, m.EventType, m.Payload, m.Attempts, dueAt[m.Id])).ToList();
     }
 
     /// Uma instrução por mensagem (transação implícita e curta), só se ninguém a concluiu nesse meio-tempo.
@@ -223,9 +237,14 @@ public sealed class OutboxDispatcher(
 
         if (failure is null)
         {
-            await db.Database.ExecuteSqlAsync(
+            var completed = await db.Database.ExecuteSqlAsync(
                 $"UPDATE outbox_messages SET processed_at = {now}, available_at = NULL WHERE id = {message.Id} AND processed_at IS NULL",
                 cancellationToken);
+            if (completed > 0)
+            {
+                metrics.OutboxDelivered("consumer", now - message.DueAt);
+            }
+
             return;
         }
 
@@ -254,7 +273,7 @@ public sealed class OutboxDispatcher(
 
     private static string Truncate(string message) => message.Length > 500 ? message[..500] : message;
 
-    private sealed record ReservedMessage(Guid Id, Guid TenantId, string EventType, string Payload, int Attempts);
+    private sealed record ReservedMessage(Guid Id, Guid TenantId, string EventType, string Payload, int Attempts, DateTimeOffset DueAt);
 }
 
 // 07 §7.11: limpeza diária do feed (7 dias), da idempotência expirada e do outbox processado.

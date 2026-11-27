@@ -1,5 +1,6 @@
 using AlmoSeis.Infrastructure.Audit;
 using AlmoSeis.Infrastructure.Concurrency;
+using AlmoSeis.Infrastructure.Observability;
 using AlmoSeis.Infrastructure.Persistence;
 using AlmoSeis.Infrastructure.Tenancy;
 using AlmoSeis.Modules.Closing.Contracts;
@@ -50,6 +51,8 @@ internal sealed class AcceptOrderHandler(
     IEmployeeDirectory employees,
     IAuditWriter audit,
     OrderDtoBuilder dtos,
+    IUnitOfWork unitOfWork,
+    AlmoSeisMetrics metrics,
     TimeProvider time) : ICommandHandler<AcceptOrderCommand, OrderDto>
 {
     public async Task<OrderDto> HandleAsync(AcceptOrderCommand command, CancellationToken cancellationToken)
@@ -68,6 +71,7 @@ internal sealed class AcceptOrderHandler(
         audit.Add("OrderAccepted", order.SyncEntityType, order.Id, order.Id,
             before: new { acceptanceStatus = "AWAITING_ACCEPTANCE" },
             after: new { acceptanceStatus = "ACCEPTED", order.OrderNumber, order.EstimatedReadyMinutes, order.CustomerId, totalAmount = order.TotalAmount.ToString() });
+        OrderRules.CountCreated(unitOfWork, metrics, order);
         return await dtos.BuildAsync(order, cancellationToken);
     }
 }

@@ -13,6 +13,7 @@ using AlmoSeis.Modules.Ordering;
 using AlmoSeis.Modules.Payments;
 using AlmoSeis.Modules.Storefront;
 using AlmoSeis.Modules.Sync;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -66,8 +67,11 @@ builder.Services.AddOptions<AppVersionOptions>().BindConfiguration(AppVersionOpt
 builder.Services.AddOptions<RateLimitSettings>().BindConfiguration(RateLimitSettings.Section);
 builder.Services.AddAlmoSeisRateLimiting();
 // `/health/live` não consulta nada (o processo responde); `/health/ready` abre conexão com o banco, com tempo-limite curto
-// para o healthcheck do Compose não ficar pendurado quando o PostgreSQL some.
-builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tags: ["ready"], timeout: TimeSpan.FromSeconds(3));
+// para o healthcheck do Compose não ficar pendurado quando o PostgreSQL some. O outbox atrasado deixa o `ready` `Degraded`
+// (200, corpo `Degraded`): o monitor externo por palavra-chave avisa, nada é reiniciado (07 §7.4, 09 §9.8).
+builder.Services.AddHealthChecks()
+    .AddCheck<DatabaseHealthCheck>("database", tags: ["ready"], timeout: TimeSpan.FromSeconds(3))
+    .AddCheck<OutboxHealthCheck>("outbox", failureStatus: HealthStatus.Degraded, tags: ["ready"], timeout: TimeSpan.FromSeconds(3));
 
 var app = builder.Build();
 app.WarnAboutIgnoredTelemetrySettings();
