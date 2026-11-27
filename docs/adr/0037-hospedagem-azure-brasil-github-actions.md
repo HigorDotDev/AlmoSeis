@@ -1,6 +1,6 @@
 # ADR-0037 — Hospedagem Azure Brazil South, GitHub Actions e serviços de apoio
 
-- **Status:** Aceito
+- **Status:** Aceito — **suspenso para o piloto por ADR-0060** (2026-11-27)
 - **Data:** 2026-10-27
 - **Origem:** Lacuna em §5.2 ("hospedagem gerenciada", "Azure DevOps ou GitHub Actions"), RNF-005
 - **Relacionados:** ADR-0003, ADR-0009, ADR-0024, ADR-0035
@@ -36,3 +36,10 @@ Ambientes: `local`, `homolog` e `prod`, com bancos separados.
 
 - Custo fixo mensal mínimo (1 réplica + Flexible Server Burstable) precisa entrar no preço da assinatura.
 - O procedimento de restauração precisa ser **ensaiado** antes do piloto (RNF-005).
+
+## Suspenso para o piloto por ADR-0060 (2026-11-27)
+
+O custo fixo deste desenho (~R$ 1.000/mês) não cabe no início. Até o gatilho de migração do ADR-0060 (item 10: 50 estabelecimentos, necessidade de alta disponibilidade, receita que pague a infra gerenciada, recurso no limite, risco do provedor ou exigência de conformidade), homologação e produção rodam numa **VM única por ambiente** na Oracle Cloud São Paulo, com Docker Compose (Caddy, API, página, PostgreSQL 16 + WAL-G).
+
+- **Continuam valendo:** GitHub Actions, ghcr.io, R2 para as fotos de produto, computação e banco no Brasil, PITR de 14 dias com ensaio de restauração, papéis de banco separados, API sempre ativa (sem *scale-to-zero*) com SignalR em processo, OpenTelemetry (exportador opcional), EAS e os três ambientes.
+- **Suspensos:** Container Apps, PostgreSQL Flexible Server, Key Vault, Application Insights e Bicep. Continuam como alvo futuro (`docs/09-devops.md` §9.10).

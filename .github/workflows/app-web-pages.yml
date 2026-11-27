@@ -1,0 +1,102 @@
+# App do restaurante no navegador (ADR-0053, ADR-0060): `expo export --platform web` → Cloudflare Pages.
+#   - chamado pelo deploy.yml depois da API (homologação na main, produção na tag v*);
+#   - push na main só com mudança em mobile/ ou infra/pages/ → homologação;
+#   - manual → o ambiente escolhido (produção com aprovação do Environment).
+#
+# Configuração (infra/README.md §6):
+#   variável do repositório ALMOSEIS_DOMAIN; opcional IMAGES_ORIGIN_HOMOLOG / IMAGES_ORIGIN_PRODUCTION (origem pública
+#   das fotos no R2, ex.: https://img.almoseis.app) para a CSP.
+#   secrets (repositório ou Environment): CLOUDFLARE_API_TOKEN (permissão "Cloudflare Pages: Edit") e CLOUDFLARE_ACCOUNT_ID.
+#   Projetos do Pages criados antes: almoseis-app-homolog (app-homolog.{dominio}) e almoseis-app (app.{dominio}).
+name: app-web-pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mobile/**"
+      - "infra/pages/**"
+      - ".github/workflows/app-web-pages.yml"
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Ambiente
+        type: choice
+        options: [homolog, production]
+        default: homolog
+
+permissions:
+  contents: read
+
+jobs:
+  pages:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: ${{ inputs.environment || 'homolog' }}
+    concurrency:
+      group: app-web-${{ inputs.environment || 'homolog' }}
+      cancel-in-progress: false
+    env:
+      ENVIRONMENT: ${{ inputs.environment || 'homolog' }}
+      DOMAIN: ${{ vars.ALMOSEIS_DOMAIN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Endereços do ambiente
+        id: urls
+        env:
+          IMG_HOMOLOG: ${{ vars.IMAGES_ORIGIN_HOMOLOG }}
+          IMG_PRODUCTION: ${{ vars.IMAGES_ORIGIN_PRODUCTION }}
+        run: |
+          [ -n "$DOMAIN" ] || { echo "::error::defina a variável de repositório ALMOSEIS_DOMAIN"; exit 1; }
+          if [ "$ENVIRONMENT" = production ]; then
+            api="api.$DOMAIN"; page="https://$DOMAIN"; project=almoseis-app; img="${IMG_PRODUCTION:-https://img.$DOMAIN}"
+          else
+            api="api-homolog.$DOMAIN"; page="https://homolog.$DOMAIN"; project=almoseis-app-homolog; img="${IMG_HOMOLOG:-https://img-homolog.$DOMAIN}"
+          fi
+          {
+            echo "api_host=$api"
+            echo "page_url=$page"
+            echo "project=$project"
+            echo "img_origin=$img"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Export web
+        working-directory: mobile
+        env:
+          EXPO_PUBLIC_WEB_API_BASE_URL: https://${{ steps.urls.outputs.api_host }}
+          EXPO_PUBLIC_API_BASE_URL: https://${{ steps.urls.outputs.api_host }}
+          EXPO_PUBLIC_PUBLIC_PAGE_BASE_URL: ${{ steps.urls.outputs.page_url }}
+        run: |
+          npm ci --no-audit --no-fund
+          npx expo export --platform web --output-dir dist
+
+      # Cabeçalhos do Pages (ADR-0053 §2): CSP com a API e as imagens do ambiente, cache longo só nos arquivos com hash.
+      - name: _headers
+        env:
+          API_HOST: ${{ steps.urls.outputs.api_host }}
+          IMG_ORIGIN: ${{ steps.urls.outputs.img_origin }}
+        run: |
+          sed -e "s|__API_HOST__|$API_HOST|g" -e "s|__IMG_ORIGIN__|$IMG_ORIGIN|g" infra/pages/_headers > mobile/dist/_headers
+          cat mobile/dist/_headers
+
+      - name: Publica no Cloudflare Pages
+        working-directory: mobile
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PROJECT: ${{ steps.urls.outputs.project }}
+        run: |
+          npx --yes wrangler@4 pages deploy dist --project-name "$PROJECT" --branch main \
+            --commit-hash "$GITHUB_SHA" --commit-dirty=true

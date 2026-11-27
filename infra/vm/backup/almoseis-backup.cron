@@ -1,0 +1,10 @@
+# /etc/cron.d/almoseis — instalado por bootstrap-vm.sh (ADR-0060, docs/09-devops.md §9.7).
+# Horário da VM: America/Sao_Paulo (bootstrap-vm.sh). O WAL contínuo não depende do cron (archive_command).
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Base completa diária às 03:30, fora do horário dos restaurantes, + retenção (WALG_RETAIN_FULL).
+30 3 * * * deploy bash /opt/almoseis/infra/vm/backup/walg-backup.sh >> /var/log/almoseis/backup.log 2>&1
+
+# Conferência do archive de WAL e do disco a cada 5 min (heartbeat no monitor externo).
+*/5 * * * * deploy bash /opt/almoseis/infra/vm/backup/check-archive.sh >> /var/log/almoseis/archive-check.log 2>&1

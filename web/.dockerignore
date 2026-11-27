@@ -1,0 +1,14 @@
+# Contexto da imagem da página (web/Dockerfile).
+node_modules/
+.next/
+out/
+coverage/
+tests/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+Dockerfile
+.dockerignore
+AGENTS.md
+README.md

@@ -60,3 +60,10 @@ O repositório já tem `backend/` (.NET), `mobile/` (Expo, TypeScript) e `infra/
 - **Dados do navegador por slug** (ADR-0052 item 6): carrinho, dados do cliente ("Lembrar meus dados") e pedidos recentes ficam no `localStorage`, com o prefixo `almoseis:` e uma chave por restaurante (slug). Os pedidos recentes são até 10 por restaurante, dentro da validade do acompanhamento. A tentativa de envio em andamento (`Idempotency-Key` + corpo) fica no `sessionStorage`, para o reenvio usar a mesma chave mesmo depois de recarregar a página. "Esquecer meus dados" apaga tudo com o prefixo, de todos os restaurantes. Nada vai para o servidor fora do envio.
 - **Rotas:** `/{slug}` (perfil e cardápio), `/{slug}/carrinho` (carrinho, entrega e envio) e `/{slug}/pedido/{token}` (acompanhamento). A raiz `/` é só um aviso sem indexação, reservada ao marketplace (ADR-0044 item 17).
 - **Hospedagem, Cloudflare, CI/CD e domínio** (itens 6 a 9): ainda não implementados. Não há Container App, Dockerfile nem workflow de `web/`. Continuam como decisão, e a Q-07 segue aberta.
+
+## Complementado por ADR-0060 (2026-11-27)
+
+- **Item 6 (hospedagem):** no piloto, a página roda como contêiner `web` (imagem `almoseis-web`, Next.js *standalone*, por ambiente por causa das `NEXT_PUBLIC_*`) na VM de cada ambiente, atrás do Caddy, sempre ativa. O Container App `almoseis-web` fica para o alvo futuro.
+- **Item 7 (Cloudflare na frente):** no piloto, o DNS da página fica na Cloudflare em modo *DNS only*. O Caddy emite o certificado e vê o IP real do cliente. O proxy e o cache de borda de `/_next/static` ficam para depois.
+- **Item 9 (CI/CD):** `web-ci.yml` (tipos, testes, fumaça do build) e o deploy dentro do `deploy.yml`, junto com a API.
+- **Item 10:** métricas por OpenTelemetry só se `Otel:Endpoint` estiver configurado.

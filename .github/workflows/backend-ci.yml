@@ -1,0 +1,76 @@
+# CI do backend (docs/09-devops.md §9.4): build, testes unitários, de arquitetura e de integração (Testcontainers).
+name: backend-ci
+
+# Push na main e tags v*: rodado pelo deploy.yml (workflow_call) antes de publicar, para não duplicar.
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "docs/05-ddl*"
+      - ".github/workflows/backend-ci.yml"
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: backend
+
+env:
+  DOTNET_NOLOGO: "true"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+  NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: backend/global.json
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('backend/Directory.Packages.props', 'backend/**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore AlmoSeis.sln
+
+      # TreatWarningsAsErrors já está no Directory.Build.props.
+      - name: Build
+        run: dotnet build AlmoSeis.sln -c Release --no-restore
+
+      - name: Testes unitários (inclui DdlMigrationSyncTests)
+        run: dotnet test --project tests/AlmoSeis.UnitTests/AlmoSeis.UnitTests.csproj -c Release --no-build
+
+      - name: Testes de arquitetura
+        run: dotnet test --project tests/AlmoSeis.ArchitectureTests/AlmoSeis.ArchitectureTests.csproj -c Release --no-build
+
+      # O runner ubuntu já tem Docker: Testcontainers sobe o PostgreSQL 16. Inclui SchemaTests e o 05-ddl-smoke-test.sql.
+      - name: Testes de integração
+        run: dotnet test --project tests/AlmoSeis.IntegrationTests/AlmoSeis.IntegrationTests.csproj -c Release --no-build
+
+  # A imagem compila (amd64) — o build multi-arch de verdade fica no deploy.yml.
+  docker-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: Build da imagem da API e do migrator
+        run: |
+          docker buildx build --target api --cache-from type=gha,scope=api --cache-to type=gha,mode=max,scope=api backend
+          docker buildx build --target migrator --cache-from type=gha,scope=api backend

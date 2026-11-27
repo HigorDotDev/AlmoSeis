@@ -1,0 +1,45 @@
+# CI da página pública (web/, ADR-0051): tipos, testes e build de produção (standalone).
+name: web-ci
+
+# Push na main e tags v*: rodado pelo deploy.yml (workflow_call) antes de publicar, para não duplicar.
+on:
+  pull_request:
+    paths:
+      - "web/**"
+      - ".github/workflows/web-ci.yml"
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: web
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+      # Fumaça: next build de verdade + rotas geradas + o JS do navegador não leva o X-Web-Renderer-Key.
+      - run: npm run test:smoke
+        env:
+          NEXT_PUBLIC_API_BASE_URL: https://api.example.invalid
+          NEXT_PUBLIC_SITE_URL: https://example.invalid
+      - name: Saída standalone presente
+        run: test -f .next/standalone/server.js

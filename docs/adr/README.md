@@ -58,7 +58,7 @@ Quando um ADR conflita com o texto de um épico (`docs/01-epico-ep001.md`, `docs
 | [0034](0034-versao-explicita-etag-if-match.md) | Coluna `version` + ETag/If-Match; 409 com o estado atual | Aceito |
 | [0035](0035-versao-minima-app-eas-update.md) | Versão mínima do app (426), EAS Update, `/api/v1` | Aceito |
 | [0036](0036-notificacoes-primeiro-plano-sem-push.md) | Alertas só em primeiro plano; push fica para P1 | Aceito |
-| [0037](0037-hospedagem-azure-brasil-github-actions.md) | Azure Brazil South (Container Apps + PostgreSQL Flexible), R2, GitHub Actions | Aceito |
+| [0037](0037-hospedagem-azure-brasil-github-actions.md) | Azure Brazil South (Container Apps + PostgreSQL Flexible), R2, GitHub Actions | Aceito, **suspenso para o piloto por 0060** |
 
 ### Surgidas na consolidação do modelo de dados
 
@@ -73,7 +73,7 @@ O ADR-0026 também recebeu o item 9 (RLS das tabelas de vínculo por `user_id`).
 
 | ADR | Decisão | Status |
 |---|---|---|
-| [0040](0040-email-transacional-azure-communication-services.md) | E-mail transacional (recuperação de senha do proprietário) via Azure Communication Services | Aceito |
+| [0040](0040-email-transacional-azure-communication-services.md) | E-mail transacional (recuperação de senha do proprietário) via Azure Communication Services | Aceito (provedor trocado por SMTP no piloto, 0060) |
 | [0041](0041-limite-requisicoes-endpoints-publicos.md) | Rate limiting nativo do ASP.NET Core em login, PIN, convites e webhooks | Aceito |
 
 ### Surgidas na implementação
@@ -118,6 +118,14 @@ Em 2026-11-20, os ADRs 0044 a 0053 foram alinhados à implementação das fatias
 Complementados em 2026-11-22 (seção "Complementado por ADR-00xx" no próprio ADR, status mantido): 0005, 0017, 0020, 0021, 0024, 0025, 0028, 0038 (`Aceito`) e 0044, 0046, 0050 (`Proposto`; no 0050, nota no item 19).
 
 Complementado em 2026-11-23 (status mantido): 0025 (`Aceito`), com o padrão da ação do administrador que grava dentro de um tenant (sessão RLS do tenant, `app.user_id` vazio, auditoria `PLATFORM_ADMIN`, resposta mínima).
+
+### Infraestrutura do piloto
+
+| ADR | Decisão | Status |
+|---|---|---|
+| [0060](0060-infra-enxuta-piloto-vm-unica.md) | Infra enxuta até ~30 estabelecimentos: 1 VM Oracle Cloud São Paulo (ARM64) por ambiente com Docker Compose (Caddy, API, página, PostgreSQL 16 + WAL-G para o R2, RPO ~1 min, RTO < 1 h), app web no Cloudflare Pages, deploy por SSH, segredos em `.env` 600, e-mail por SMTP, monitor externo; gatilho de migração para infra gerenciada; Q-0060-1 (backup cifrado fora do Brasil) | Proposto |
+
+Afetados (seção "Suspenso/Alterado/Complementado por ADR-0060" no próprio ADR): 0037 (suspenso para o piloto), 0040 (provedor de e-mail), 0051 (itens 6, 7, 9 e 10) e 0053 (§2 e §6.4). Também toca, sem linha própria: 0024 (backup cifrado no R2, Q-0060-1) e 0035 (versão mínima pelo `.env`).
 
 ## Impacto no modelo do épico (§6)
 

@@ -1,0 +1,18 @@
+# Contexto da imagem da API (backend/Dockerfile): só o código-fonte de src/ e os arquivos da solution.
+**/bin/
+**/obj/
+**/TestResults/
+**/*.user
+**/.vs/
+**/.vscode/
+**/.idea/
+tests/
+tools/
+Dockerfile
+.dockerignore
+# Segredos locais nunca entram na imagem (user-secrets ficam fora do repositório, mas por garantia):
+**/secrets.json
+**/*.pfx
+**/*.pem
+**/.env
+**/.env.*

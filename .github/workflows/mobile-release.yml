@@ -1,0 +1,51 @@
+# Distribuição do app nativo pelo EAS (ADR-0035, docs/09-devops.md §9.4):
+#   push na main (mobile/**) → EAS Update no canal preview (homologação)
+#   tag mobile-v*            → EAS Build de produção + envio às lojas (Play: faixa interna; App Store: TestFlight)
+# Secret do repositório: EXPO_TOKEN. O app no navegador sai pelo app-web-pages.yml.
+name: mobile-release
+
+on:
+  push:
+    branches: [main]
+    tags: ["mobile-v*"]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/mobile-release.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: mobile
+
+jobs:
+  ci:
+    uses: ./.github/workflows/mobile-ci.yml
+
+  release:
+    needs: ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: EAS Update (preview)
+        if: github.ref == 'refs/heads/main'
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: npx --yes eas-cli@latest update --channel preview --non-interactive --message "${GITHUB_SHA::7}"
+      - name: EAS Build + Submit (produção)
+        if: startsWith(github.ref, 'refs/tags/mobile-v')
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: npx --yes eas-cli@latest build --profile production --platform all --non-interactive --no-wait --auto-submit

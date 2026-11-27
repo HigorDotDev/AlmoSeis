@@ -1,0 +1,37 @@
+# Caddy da VM (ADR-0060, docs/09-devops.md §9.3): TLS automático (Let's Encrypt) e proxy para a API e a página.
+# Domínios vêm do .env:
+#   API_DOMAIN=api.almoseis.app            WEB_DOMAIN=almoseis.app            (produção)
+#   API_DOMAIN=api-homolog.almoseis.app    WEB_DOMAIN=homolog.almoseis.app    (homologação)
+# Teste local sem TLS: API_DOMAIN=http://api.localhost e WEB_DOMAIN=http://web.localhost (o esquema http:// desliga o
+# certificado). CADDY_GLOBAL_OPTIONS aceita uma opção global extra, ex.: `local_certs` (CA interna) ou
+# `acme_ca https://acme-staging-v02.api.letsencrypt.org/directory` (staging do Let's Encrypt no primeiro teste).
+#
+# O app do restaurante no navegador (app.{dominio}) NÃO passa por aqui: é estático no Cloudflare Pages.
+#
+# Sem log de acesso, de propósito: a URL do acompanhamento leva o token do pedido (ADR-0047) e o ADR-0024 proíbe
+# token em log. Erros do próprio Caddy continuam no log do contêiner.
+{
+	email {$ACME_EMAIL}
+	{$CADDY_GLOBAL_OPTIONS}
+}
+
+(common) {
+	encode zstd gzip
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+	}
+}
+
+{$API_DOMAIN} {
+	import common
+	# WebSockets do SignalR (/hubs/realtime) passam direto; sem limite de tempo de leitura.
+	# X-Forwarded-For/-Proto são preenchidos pelo Caddy com o IP real do cliente (o que veio do cliente é descartado).
+	reverse_proxy api:8080
+}
+
+{$WEB_DOMAIN} {
+	import common
+	reverse_proxy web:3000
+}

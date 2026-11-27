@@ -189,3 +189,8 @@ O ADR-0017 vale igual na web. O app no navegador **não mostra preço, botão ne
   - reuso de refresh entre abas;
   - `deviceSecret` revogado.
 - Revisitar: impressora ou balança (Tauri/Electron); pedidos expirando no desktop (Web Push); muitos usuários em Firefox ou Safari.
+
+## Complementado por ADR-0060 (2026-11-27)
+
+- **§2 (onde é servido):** no piloto, o build estático vai para o **Cloudflare Pages** (projetos `almoseis-app` e `almoseis-app-homolog`, plano gratuito), no lugar do Azure Static Web Apps, em `app.{dominio}` e `app-homolog.{dominio}`. Os cabeçalhos (CSP com a API e as imagens do ambiente, `noindex`, `no-cache` no HTML e cache longo nos arquivos com hash) ficam em `infra/pages/_headers`.
+- **§2 (deploy) e §6.4 (ordem):** o workflow é o `app-web-pages.yml` (no lugar do `mobile-web.yml`). Na tag `v*` ele roda **depois** do deploy da API, dentro do `deploy.yml`, e a versão mínima de `WEB` só sobe depois.

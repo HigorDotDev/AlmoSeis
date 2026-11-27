@@ -20,11 +20,11 @@ ADRs com status `Proposto` já orientam a implementação, mas precisam ser revi
 | `docs/06-contratos-api.md` | **Contratos da API** com exemplos JSON literais, `errorCode`s, matriz de permissões e eventos SignalR. Fonte de verdade de payload |
 | `docs/07-backend.md` | Arquitetura .NET classe por classe: projetos, pipeline HTTP, ciclo de escrita, módulos, jobs, testes e regras de arquitetura |
 | `docs/08-mobile.md` | Arquitetura React Native/Expo tela por tela: rotas, camada de API, SQLite, escritas críticas, sync, tempo real, design system, testes |
-| `docs/09-devops.md` | Ambientes, Docker Compose local, imagem, pipelines GitHub Actions/EAS, Bicep, segredos, alertas, backup e restauração |
+| `docs/09-devops.md` | Ambientes (VM única por ambiente no piloto, ADR-0060), Docker Compose local e da VM, imagens, pipelines GitHub Actions/EAS/Pages, tabela de variáveis, backup WAL-G e restauração, monitoramento, checklist do piloto, alvo futuro Azure. Runbook do primeiro deploy em `infra/README.md` |
 | `docs/10-ux.md` | UX/UI: inventário das telas, diagnóstico de usabilidade, proposta de design system e telas (desenho no Figma) |
 | `docs/11-epico-ep002.md` | Épico EP-002: página de pedidos pela web (página pública por slug, aceite, taxa por distância, push, acompanhamento; Fase 2 pagamento online com split; Fase 3 marketplace) e questões em aberto |
 | `docs/12-epico-ep003.md` | Épico EP-003: tipo de estabelecimento (comportamentos `RESTAURANT`/`SNACK_BAR`, rótulos, módulos), abas por comportamento, cardápio fixo da lanchonete (pratos, bebidas, combos, adicionais, pausa), preço de site, modalidade à la carte, delivery por telefone, fatias e questões em aberto |
-| `docs/adr/` | Decisões ADR-0001 a ADR-0059 (ADR-0044 a ADR-0053 são do EP-002 e ADR-0054 a ADR-0059 do EP-003, todos `Proposto`) |
+| `docs/adr/` | Decisões ADR-0001 a ADR-0060 (ADR-0044 a ADR-0053 são do EP-002 e ADR-0054 a ADR-0059 do EP-003, todos `Proposto`; ADR-0060, `Proposto`, é a infra enxuta do piloto, que suspende o ADR-0037) |
 
 ## Decisões que mais pegam de surpresa
 
@@ -71,7 +71,7 @@ AlmoSeis/
   docs/                 # épico, padrões, agentes, ADRs
   backend/              # solution .NET 10 (ADR-0029)
   mobile/               # app Expo
-  infra/                # IaC Azure
+  infra/                # VM do piloto (Compose, Caddy, backup), papéis do banco, cabeçalhos do Pages (ADR-0060)
   docker-compose.yml    # ambiente local
   .github/workflows/    # CI/CD
   .claude/agents/       # subagentes

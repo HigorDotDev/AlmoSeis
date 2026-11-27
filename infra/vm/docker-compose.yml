@@ -1,0 +1,339 @@
+# VM única de homologação ou produção (ADR-0060, docs/09-devops.md §9.3). NÃO é o ambiente local de desenvolvimento
+# (esse é o docker-compose.yml da raiz).
+#
+# Sempre pelo wrapper, que junta os dois arquivos de variáveis (segredos + tags das imagens):
+#   /opt/almoseis/infra/vm/scripts/dc.sh up -d
+#   = docker compose -p almoseis --env-file /opt/almoseis/.env --env-file /opt/almoseis/images.env -f <este arquivo> ...
+#
+# Serviços: caddy (TLS e proxy) → api (.NET) e web (Next.js) → postgres (16 + WAL-G). Ferramentas sob perfil, que o
+# `up` não sobe: migrator (perfil tools) e walg-fetch / pg-restore-test (perfil restore).
+#
+# Regra: toda variável nova da API entra aqui, no .env.example e na tabela do docs/09-devops.md §9.6.
+# Sem `name:` fixo: o nome do projeto vem do dc.sh (-p almoseis), para não colidir com o compose local da raiz.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  caddy:
+    image: ${CADDY_IMAGE:-caddy:2.10-alpine}
+    restart: unless-stopped
+    <<: *hardening
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?defina API_DOMAIN no .env}
+      WEB_DOMAIN: ${WEB_DOMAIN:?defina WEB_DOMAIN no .env}
+      ACME_EMAIL: ${ACME_EMAIL:?defina ACME_EMAIL no .env}
+      CADDY_GLOBAL_OPTIONS: ${CADDY_GLOBAL_OPTIONS:-}
+    volumes:
+      # Diretório (não o arquivo): o deploy troca o Caddyfile no lugar e o contêiner enxerga a versão nova
+      # (um bind mount de arquivo ficaria preso ao inode antigo). Depois: caddy reload.
+      - ./caddy:/etc/caddy:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_started
+      web:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${CADDY_MEM_LIMIT:-256m}
+    logging: *logging
+
+  api:
+    image: ${API_IMAGE:?defina API_IMAGE (images.env, escrito pelo deploy)}
+    restart: unless-stopped
+    <<: *hardening
+    cap_drop: [ALL]
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+      Logging__LogLevel__Default: ${Logging__LogLevel__Default:-Information}
+      # Banco: senhas só no .env; host = este serviço postgres (rede interna).
+      ConnectionStrings__App: "Host=postgres;Port=5432;Database=almoseis;Username=almoseis_app_login;Password=${ALMOSEIS_APP_DB_PASSWORD:?};Maximum Pool Size=${DB_APP_POOL_SIZE:-40}"
+      ConnectionStrings__Platform: "Host=postgres;Port=5432;Database=almoseis;Username=almoseis_platform_login;Password=${ALMOSEIS_PLATFORM_DB_PASSWORD:?};Maximum Pool Size=${DB_PLATFORM_POOL_SIZE:-10}"
+      # Sem Key Vault no piloto: vazio desliga (ADR-0060).
+      KeyVault__Uri: ${KeyVault__Uri:-}
+      Jwt__SigningKeyPem: ${Jwt__SigningKeyPem:?defina Jwt__SigningKeyPem no .env}
+      Jwt__AllowEphemeralKey: "false"
+      # Chaves do Data Protection (token do "esqueci a senha") no volume dataprotection.
+      DataProtection__KeysPath: /var/lib/almoseis/dataprotection
+      App__MinSupportedAppVersion__ANDROID: ${App__MinSupportedAppVersion__ANDROID:-0.0.0}
+      App__MinSupportedAppVersion__IOS: ${App__MinSupportedAppVersion__IOS:-0.0.0}
+      App__MinSupportedAppVersion__WEB: ${App__MinSupportedAppVersion__WEB:-0.0.0}
+      App__StoreUrl__ANDROID: ${App__StoreUrl__ANDROID:-}
+      App__StoreUrl__IOS: ${App__StoreUrl__IOS:-}
+      Cors__RestaurantAppOrigins__0: ${Cors__RestaurantAppOrigins__0:?}
+      Cors__PublicPageOrigins__0: ${Cors__PublicPageOrigins__0:?}
+      # Só o Caddy (rede do compose) é proxy confiável para X-Forwarded-For (ADR-0041).
+      ForwardedHeaders__KnownNetworks__0: ${DOCKER_SUBNET:-172.30.0.0/24}
+      RateLimiting__Enabled: ${RateLimiting__Enabled:-true}
+      Billing__PlanCode: ${Billing__PlanCode:-PILOT}
+      Billing__MonthlyPrice: ${Billing__MonthlyPrice:-0}
+      Billing__Asaas__BaseUrl: ${Billing__Asaas__BaseUrl:-https://api.asaas.com/v3}
+      Billing__Asaas__ApiKey: ${Billing__Asaas__ApiKey:-}
+      Billing__Asaas__WebhookToken: ${Billing__Asaas__WebhookToken:-}
+      Storage__R2__AccountId: ${Storage__R2__AccountId:-}
+      Storage__R2__Bucket: ${Storage__R2__Bucket:-}
+      Storage__R2__AccessKeyId: ${Storage__R2__AccessKeyId:-}
+      Storage__R2__SecretAccessKey: ${Storage__R2__SecretAccessKey:-}
+      Storage__R2__PublicBaseUrl: ${Storage__R2__PublicBaseUrl:-}
+      Turnstile__Enabled: ${Turnstile__Enabled:-true}
+      Turnstile__SecretKey: ${Turnstile__SecretKey:-}
+      PublicPage__IpHashSecret: ${PublicPage__IpHashSecret:?}
+      PublicPage__TrackingTokenSecret: ${PublicPage__TrackingTokenSecret:?}
+      PublicPage__RendererKey: ${PublicPage__RendererKey:-}
+      Maps__Provider: ${Maps__Provider:-None}
+      Maps__AddressHashSecret: ${Maps__AddressHashSecret:?}
+      Maps__Google__ApiKey: ${Maps__Google__ApiKey:-}
+      Push__Provider: ${Push__Provider:-Expo}
+      Push__Expo__AccessToken: ${Push__Expo__AccessToken:-}
+      PasswordReset__LinkBaseUrl: ${PasswordReset__LinkBaseUrl:?}
+      Invitations__LinkBaseUrl: ${Invitations__LinkBaseUrl:?}
+      # E-mail transacional por SMTP (Brevo ou Amazon SES), ADR-0060. None/Fake só registram no log (recusados em Production).
+      Email__Provider: ${Email__Provider:-Smtp}
+      Email__From: ${Email__From:-}
+      Email__Smtp__Host: ${Email__Smtp__Host:-}
+      Email__Smtp__Port: ${Email__Smtp__Port:-587}
+      Email__Smtp__UseStartTls: ${Email__Smtp__UseStartTls:-true}
+      Email__Smtp__Username: ${Email__Smtp__Username:-}
+      Email__Smtp__Password: ${Email__Smtp__Password:-}
+      # Telemetria opcional por OTLP (Grafana Cloud, Better Stack, o endpoint OTLP do Sentry...). Vazio = desligada.
+      Otel__Endpoint: ${Otel__Endpoint:-}
+      Otel__Protocol: ${Otel__Protocol:-HttpProtobuf}
+      Otel__Headers: ${Otel__Headers:-}
+      Otel__ServiceName: almoseis-api
+      Otel__TraceSampleRatio: ${Otel__TraceSampleRatio:-0.2}
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment=${DEPLOY_ENVIRONMENT:-production}
+    volumes:
+      - dataprotection:/var/lib/almoseis/dataprotection
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: ${API_MEM_LIMIT:-1g}
+    logging: *logging
+
+  web:
+    image: ${WEB_IMAGE:?defina WEB_IMAGE (images.env, escrito pelo deploy)}
+    restart: unless-stopped
+    <<: *hardening
+    cap_drop: [ALL]
+    environment:
+      # Renderização no servidor: chama a API pela rede interna (sem passar pelo Caddy nem pela internet).
+      API_BASE_URL: http://api:8080
+      WEB_RENDERER_KEY: ${PublicPage__RendererKey:-}
+    depends_on:
+      api:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: ${WEB_MEM_LIMIT:-512m}
+    logging: *logging
+
+  postgres:
+    image: ${POSTGRES_IMAGE:?defina POSTGRES_IMAGE (images.env)}
+    restart: unless-stopped
+    <<: *hardening
+    shm_size: ${PG_SHM_SIZE:-256m}
+    stop_grace_period: 90s
+    environment:
+      POSTGRES_DB: almoseis
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --data-checksums"
+      # Só lidas pelo initdb (primeira subida) e por scripts/db-roles.sh.
+      ALMOSEIS_MIGRATOR_DB_PASSWORD: ${ALMOSEIS_MIGRATOR_DB_PASSWORD:?}
+      ALMOSEIS_APP_DB_PASSWORD: ${ALMOSEIS_APP_DB_PASSWORD:?}
+      ALMOSEIS_PLATFORM_DB_PASSWORD: ${ALMOSEIS_PLATFORM_DB_PASSWORD:?}
+      # WAL-G: archive contínuo + base diária (ADR-0060). Ver o bloco WAL-G do .env.example.
+      WALG_ENABLED: ${WALG_ENABLED:-true}
+      WALG_S3_PREFIX: ${WALG_S3_PREFIX:-}
+      AWS_ACCESS_KEY_ID: ${WALG_AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${WALG_AWS_SECRET_ACCESS_KEY:-}
+      AWS_ENDPOINT: ${WALG_AWS_ENDPOINT:-}
+      AWS_REGION: ${WALG_AWS_REGION:-auto}
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      WALG_LIBSODIUM_KEY: ${WALG_LIBSODIUM_KEY:-}
+      WALG_LIBSODIUM_KEY_TRANSFORM: hex
+      WALG_COMPRESSION_METHOD: ${WALG_COMPRESSION_METHOD:-brotli}
+      WALG_UPLOAD_CONCURRENCY: ${WALG_UPLOAD_CONCURRENCY:-4}
+      PGHOST: /var/run/postgresql
+      PGUSER: postgres
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=sh /almoseis/archive-wal.sh %p
+      # RPO ~1 min: troca de segmento de WAL a cada 60 s quando houve escrita.
+      - -c
+      - archive_timeout=${PG_ARCHIVE_TIMEOUT:-60}
+      # Usado só quando existe recovery.signal (restauração, backup/restore.sh).
+      - -c
+      - restore_command=wal-g wal-fetch %f %p
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-100}
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-512MB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-1536MB}
+      - -c
+      - work_mem=${PG_WORK_MEM:-8MB}
+      - -c
+      - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-128MB}
+      - -c
+      - max_wal_size=${PG_MAX_WAL_SIZE:-2GB}
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - log_min_duration_statement=${PG_LOG_MIN_DURATION_MS:-1000}
+      # LGPD (ADR-0024): o log de consulta lenta não leva os parâmetros (telefone, nome, endereço).
+      - -c
+      - log_parameter_max_length=0
+      - -c
+      - log_parameter_max_length_on_error=0
+      - -c
+      - log_checkpoints=on
+      - -c
+      - log_lock_waits=on
+    ports:
+      # Só no loopback da VM, para túnel SSH de administração. Nunca exposto na internet.
+      - "127.0.0.1:${PG_LOCAL_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+      - ./postgres/scripts:/almoseis:ro
+      - ../db:/almoseis-db:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d almoseis"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: ${PG_MEM_LIMIT:-2g}
+    logging: *logging
+
+  # ---------------------------------------------------------------------------------------------------------------
+  # Ferramentas (não sobem com `up`).
+
+  # Migrations (ADR-0042) com o login almoseis_migrator. Rodado pelo deploy antes de trocar a API:
+  #   scripts/dc.sh run --rm migrator
+  migrator:
+    image: ${MIGRATOR_IMAGE:-migrator-image-not-set}
+    profiles: [tools]
+    restart: "no"
+    <<: *hardening
+    cap_drop: [ALL]
+    environment:
+      ALMOSEIS_MIGRATOR_CONNECTION: "Host=postgres;Port=5432;Database=almoseis;Username=almoseis_migrator_login;Password=${ALMOSEIS_MIGRATOR_DB_PASSWORD:?}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *logging
+
+  # Restauração (backup/restore.sh): baixa uma base para o volume RESTORE_TARGET_VOLUME.
+  walg-fetch:
+    image: ${POSTGRES_IMAGE:?}
+    profiles: [restore]
+    restart: "no"
+    user: root
+    entrypoint: ["sh", "/almoseis/restore-fetch.sh"]
+    environment:
+      RESTORE_TARGET_TIME: ${RESTORE_TARGET_TIME:-}
+      WALG_S3_PREFIX: ${RESTORE_WALG_S3_PREFIX:-${WALG_S3_PREFIX:-}}
+      AWS_ACCESS_KEY_ID: ${WALG_AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${WALG_AWS_SECRET_ACCESS_KEY:-}
+      AWS_ENDPOINT: ${WALG_AWS_ENDPOINT:-}
+      AWS_REGION: ${WALG_AWS_REGION:-auto}
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      WALG_LIBSODIUM_KEY: ${WALG_LIBSODIUM_KEY:-}
+      WALG_LIBSODIUM_KEY_TRANSFORM: hex
+      WALG_DOWNLOAD_CONCURRENCY: ${WALG_DOWNLOAD_CONCURRENCY:-4}
+    volumes:
+      - restore:/restore
+      - ./postgres/scripts:/almoseis:ro
+    networks: [restore]
+    logging: *logging
+
+  # Ensaio de restauração: um PostgreSQL à parte, sobre o volume restaurado, sem archive (não suja o bucket) e numa
+  # rede só dele (a API não o enxerga).
+  pg-restore-test:
+    image: ${POSTGRES_IMAGE:?}
+    profiles: [restore]
+    restart: "no"
+    shm_size: 256m
+    environment:
+      PGHOST: /var/run/postgresql
+      PGUSER: postgres
+      WALG_S3_PREFIX: ${RESTORE_WALG_S3_PREFIX:-${WALG_S3_PREFIX:-}}
+      AWS_ACCESS_KEY_ID: ${WALG_AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${WALG_AWS_SECRET_ACCESS_KEY:-}
+      AWS_ENDPOINT: ${WALG_AWS_ENDPOINT:-}
+      AWS_REGION: ${WALG_AWS_REGION:-auto}
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      WALG_LIBSODIUM_KEY: ${WALG_LIBSODIUM_KEY:-}
+      WALG_LIBSODIUM_KEY_TRANSFORM: hex
+    command:
+      - postgres
+      - -c
+      - archive_mode=off
+      - -c
+      - restore_command=wal-g wal-fetch %f %p
+      - -c
+      - shared_buffers=256MB
+    volumes:
+      - restore:/var/lib/postgresql/data
+    networks: [restore]
+    deploy:
+      resources:
+        limits:
+          memory: ${PG_RESTORE_TEST_MEM_LIMIT:-1g}
+    logging: *logging
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${DOCKER_SUBNET:-172.30.0.0/24}
+  restore: {}
+
+volumes:
+  # Nomes fixos (prefixo VOLUME_PREFIX, padrão "almoseis") e o do banco trocável: a restauração de produção cria um
+  # volume novo e aponta PGDATA_VOLUME para ele, sem apagar o antigo (backup/restore.sh).
+  pgdata:
+    name: ${PGDATA_VOLUME:-${VOLUME_PREFIX:-almoseis}_pgdata}
+  restore:
+    name: ${RESTORE_TARGET_VOLUME:-${VOLUME_PREFIX:-almoseis}_restore_test}
+  dataprotection:
+    name: ${VOLUME_PREFIX:-almoseis}_dataprotection
+  caddy_data:
+    name: ${VOLUME_PREFIX:-almoseis}_caddy_data
+  caddy_config:
+    name: ${VOLUME_PREFIX:-almoseis}_caddy_config

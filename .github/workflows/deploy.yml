@@ -1,0 +1,261 @@
+# Deploy da VM (ADR-0060, docs/09-devops.md §9.4):
+#   push na main  → homologação (automático)
+#   tag v*        → produção (aprovação no GitHub Environment `production`)
+#   manual        → o ambiente escolhido
+#
+# CI (backend + web) → imagens multi-arch no ghcr.io → SSH na VM → deploy.sh (pull, migrations com
+# almoseis_migrator, up, smoke local) → smoke externo → app web do restaurante no Cloudflare Pages (depois da API,
+# ADR-0053 §6.4).
+#
+# Configuração (infra/README.md §6):
+#   variáveis do repositório: ALMOSEIS_DOMAIN (ex.: almoseis.app), TURNSTILE_SITE_KEY_HOMOLOG, TURNSTILE_SITE_KEY_PRODUCTION
+#   Environments homolog e production: variável DEPLOY_HOST (IP ou nome da VM);
+#     secrets DEPLOY_SSH_KEY (chave privada ed25519 do usuário deploy) e DEPLOY_SSH_KNOWN_HOSTS (ssh-keyscan da VM)
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "backend/**"
+      - "web/**"
+      - "infra/vm/**"
+      - "infra/db/**"
+      - "docs/05-ddl*"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Ambiente
+        type: choice
+        options: [homolog, production]
+        default: homolog
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || (startsWith(github.ref, 'refs/tags/v') && 'production' || 'homolog') }}
+  cancel-in-progress: false
+
+jobs:
+  meta:
+    runs-on: ubuntu-24.04
+    outputs:
+      environment: ${{ steps.m.outputs.environment }}
+      owner: ${{ steps.m.outputs.owner }}
+      api_url: ${{ steps.m.outputs.api_url }}
+      site_url: ${{ steps.m.outputs.site_url }}
+      turnstile_site_key: ${{ steps.m.outputs.turnstile_site_key }}
+      version_tag: ${{ steps.m.outputs.version_tag }}
+    steps:
+      - id: m
+        env:
+          INPUT_ENV: ${{ inputs.environment }}
+          DOMAIN: ${{ vars.ALMOSEIS_DOMAIN }}
+          TS_HOMOLOG: ${{ vars.TURNSTILE_SITE_KEY_HOMOLOG }}
+          TS_PRODUCTION: ${{ vars.TURNSTILE_SITE_KEY_PRODUCTION }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then env="$INPUT_ENV";
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then env=production;
+          else env=homolog; fi
+          [ -n "$DOMAIN" ] || { echo "::error::defina a variável de repositório ALMOSEIS_DOMAIN"; exit 1; }
+          if [ "$env" = production ]; then
+            api="https://api.$DOMAIN"; site="https://$DOMAIN"; ts="$TS_PRODUCTION"
+          else
+            api="https://api-homolog.$DOMAIN"; site="https://homolog.$DOMAIN"; ts="$TS_HOMOLOG"
+          fi
+          version=""
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then version="${GITHUB_REF_NAME}"; fi
+          {
+            echo "environment=$env"
+            echo "owner=${GITHUB_REPOSITORY_OWNER,,}"
+            echo "api_url=$api"
+            echo "site_url=$site"
+            echo "turnstile_site_key=$ts"
+            echo "version_tag=$version"
+          } >> "$GITHUB_OUTPUT"
+
+  backend-ci:
+    uses: ./.github/workflows/backend-ci.yml
+
+  web-ci:
+    uses: ./.github/workflows/web-ci.yml
+
+  build-api:
+    needs: [meta, backend-ci]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: API e migrator (linux/amd64 + linux/arm64)
+        env:
+          OWNER: ${{ needs.meta.outputs.owner }}
+          VERSION: ${{ needs.meta.outputs.version_tag }}
+        run: |
+          for target in api migrator; do
+            tags=(-t "ghcr.io/$OWNER/almoseis-$target:$GITHUB_SHA")
+            [ -n "$VERSION" ] && tags+=(-t "ghcr.io/$OWNER/almoseis-$target:$VERSION")
+            docker buildx build backend --target "$target" --platform linux/amd64,linux/arm64 \
+              --cache-from type=gha,scope=api --cache-to type=gha,mode=max,scope=api \
+              --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              --label "org.opencontainers.image.revision=$GITHUB_SHA" --label app=almoseis \
+              "${tags[@]}" --push
+          done
+
+  build-web:
+    needs: [meta, web-ci]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # NEXT_PUBLIC_* entram no JS no build: uma imagem por ambiente (tag <sha>-<ambiente>).
+      - name: Página (linux/amd64 + linux/arm64)
+        env:
+          OWNER: ${{ needs.meta.outputs.owner }}
+          ENVIRONMENT: ${{ needs.meta.outputs.environment }}
+          API_URL: ${{ needs.meta.outputs.api_url }}
+          SITE_URL: ${{ needs.meta.outputs.site_url }}
+          TURNSTILE: ${{ needs.meta.outputs.turnstile_site_key }}
+        run: |
+          docker buildx build web --platform linux/amd64,linux/arm64 \
+            --build-arg NEXT_PUBLIC_API_BASE_URL="$API_URL" \
+            --build-arg NEXT_PUBLIC_SITE_URL="$SITE_URL" \
+            --build-arg NEXT_PUBLIC_TURNSTILE_SITE_KEY="$TURNSTILE" \
+            --cache-from "type=gha,scope=web-$ENVIRONMENT" --cache-to "type=gha,mode=max,scope=web-$ENVIRONMENT" \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --label app=almoseis \
+            -t "ghcr.io/$OWNER/almoseis-web:$GITHUB_SHA-$ENVIRONMENT" --push
+
+  build-postgres:
+    needs: [meta]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
+    steps:
+      - uses: actions/checkout@v5
+      # Tag pelo conteúdo da pasta: sem mudança, a mesma imagem (o compose não recria o banco).
+      - id: tag
+        env:
+          OWNER: ${{ needs.meta.outputs.owner }}
+          HASH: ${{ hashFiles('infra/vm/postgres/Dockerfile') }}
+        run: echo "image=ghcr.io/$OWNER/almoseis-postgres:16-walg-${HASH:0:12}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: exists
+        env:
+          IMAGE: ${{ steps.tag.outputs.image }}
+        run: |
+          if docker buildx imagetools inspect "$IMAGE" >/dev/null 2>&1; then echo "found=true" >> "$GITHUB_OUTPUT"; else echo "found=false" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.exists.outputs.found != 'true'
+        uses: docker/setup-qemu-action@v3
+      - if: steps.exists.outputs.found != 'true'
+        uses: docker/setup-buildx-action@v3
+      - if: steps.exists.outputs.found != 'true'
+        name: PostgreSQL 16 + WAL-G (linux/amd64 + linux/arm64)
+        env:
+          IMAGE: ${{ steps.tag.outputs.image }}
+        run: |
+          docker buildx build infra/vm/postgres --platform linux/amd64,linux/arm64 \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --label app=almoseis \
+            -t "$IMAGE" --push
+
+  deploy:
+    needs: [meta, build-api, build-web, build-postgres]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: ${{ needs.meta.outputs.environment }}
+      url: ${{ needs.meta.outputs.site_url }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      OWNER: ${{ needs.meta.outputs.owner }}
+      ENVIRONMENT: ${{ needs.meta.outputs.environment }}
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: deploy
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Chave SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          [ -n "$DEPLOY_HOST" ] || { echo "::error::defina a variável DEPLOY_HOST no Environment $ENVIRONMENT"; exit 1; }
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # Sem known_hosts não há deploy (nada de StrictHostKeyChecking=no).
+          ssh -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" true
+
+      - name: Envia infra/vm e infra/db para /opt/almoseis/infra
+        run: |
+          tar -czf - infra/vm infra/db | ssh -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" 'tar -xzf - -C /opt/almoseis'
+
+      # Login de curta duração: o GITHUB_TOKEN do job (packages:read) vence ao fim do job; nenhum PAT fica na VM.
+      - name: Login do ghcr.io na VM
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$TOKEN" | ssh -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
+
+      - name: deploy.sh (pull, migrations, up, smoke local)
+        env:
+          PG_IMAGE: ${{ needs.build-postgres.outputs.image }}
+        run: |
+          ssh -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" bash /opt/almoseis/infra/vm/scripts/deploy.sh \
+            --api "ghcr.io/$OWNER/almoseis-api:$GITHUB_SHA" \
+            --migrator "ghcr.io/$OWNER/almoseis-migrator:$GITHUB_SHA" \
+            --web "ghcr.io/$OWNER/almoseis-web:$GITHUB_SHA-$ENVIRONMENT" \
+            --postgres "$PG_IMAGE"
+
+      - name: Logout do ghcr.io na VM
+        if: always()
+        run: ssh -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" 'docker logout ghcr.io' || true
+
+      - name: Smoke externo (DNS + TLS de verdade)
+        env:
+          API_URL: ${{ needs.meta.outputs.api_url }}
+          SITE_URL: ${{ needs.meta.outputs.site_url }}
+        run: |
+          curl -fsS --retry 12 --retry-delay 10 --retry-all-errors --max-time 10 "$API_URL/health/ready"
+          echo
+          curl -fsS --retry 6 --retry-delay 10 --retry-all-errors --max-time 10 -o /dev/null -w '%{http_code}\n' "$SITE_URL/"
+
+  # App do restaurante no navegador: só depois da API nova no ar (ADR-0053 §6.4).
+  app-web:
+    needs: [meta, deploy]
+    uses: ./.github/workflows/app-web-pages.yml
+    with:
+      environment: ${{ needs.meta.outputs.environment }}
+    secrets: inherit

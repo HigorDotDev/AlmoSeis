@@ -1,0 +1,20 @@
+# Cabeçalhos do app do restaurante no Cloudflare Pages (ADR-0053 §2). Modelo: o app-web-pages.yml troca
+# __API_HOST__ (ex.: api.almoseis.app) e __IMG_ORIGIN__ (ex.: https://img.almoseis.app) e grava em dist/_headers.
+# Sem scripts de terceiros. style-src 'unsafe-inline': o react-native-web injeta estilos em tempo de execução.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: __IMG_ORIGIN__; font-src 'self' data:; connect-src 'self' https://__API_HOST__ wss://__API_HOST__ __IMG_ORIGIN__; media-src 'self' data: blob:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: same-origin
+  X-Frame-Options: DENY
+  X-Robots-Tag: noindex, nofollow
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Cache-Control: no-cache
+
+# Arquivos com hash no nome: cache longo. O `! Cache-Control` tira o no-cache da regra /* (o Pages junta valores
+# repetidos com vírgula).
+/_expo/static/*
+  ! Cache-Control
+  Cache-Control: public, max-age=31536000, immutable
+/assets/*
+  ! Cache-Control
+  Cache-Control: public, max-age=31536000, immutable

@@ -1,6 +1,6 @@
 # ADR-0040 — E-mail transacional via Azure Communication Services
 
-- **Status:** Aceito (recomendação aceita pelo usuário em 2026-10-27)
+- **Status:** Aceito (recomendação aceita pelo usuário em 2026-10-27) — provedor trocado por SMTP no piloto (ADR-0060)
 - **Data:** 2026-10-27
 - **Origem:** Lacuna encontrada ao escrever `06-contratos-api.md` §6.3: o ADR-0018 exige e-mail do proprietário "para recuperação de senha", mas nenhum provedor de envio estava definido
 - **Relacionados:** ADR-0018, ADR-0027, ADR-0037
@@ -26,3 +26,7 @@ Funcionários recuperam a senha por código emitido pelo proprietário (ADR-0018
 
 - O domínio precisa estar configurado antes do piloto.
 - Confirmação de e-mail no cadastro fica fora do MVP: `email_confirmed` existe, mas não bloqueia nada.
+
+## Alterado por ADR-0060 (2026-11-27)
+
+No piloto, o envio é por **SMTP** (Brevo ou Amazon SES em `sa-east-1`), com o domínio verificado (SPF, DKIM e DMARC): `Email:Provider = Smtp` e `Email:Smtp:*` (`docs/09-devops.md` §9.6). O ACS continua suportado (`Email:Provider = Acs`) para o alvo futuro na Azure. Uso, `202` sempre e link de uso único não mudam.

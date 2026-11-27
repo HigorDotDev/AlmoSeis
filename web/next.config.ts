@@ -1,6 +1,8 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
+  // Imagem Docker enxuta (web/Dockerfile, docs/09-devops.md §9.4): `.next/standalone/server.js` sem node_modules inteiro.
+  output: 'standalone',
   poweredByHeader: false,
   reactStrictMode: true,
   async headers() {
