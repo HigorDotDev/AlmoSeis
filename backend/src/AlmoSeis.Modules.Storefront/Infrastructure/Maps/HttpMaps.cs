@@ -159,7 +159,9 @@ internal sealed class GoogleRouteDistance(HttpClient http, IOptions<MapsOptions>
 internal sealed class NominatimThrottle(IOptions<MapsOptions> options, TimeProvider time)
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private DateTimeOffset _last = DateTimeOffset.MinValue;
+    // Relógio monotônico (`GetTimestamp`), não o de parede: um ajuste do relógio do sistema (NTP) não pode encurtar o
+    // intervalo exigido pela política de uso do Nominatim. `null` = nenhuma chamada ainda.
+    private long? _last;
 
     public async Task<T> RunAsync<T>(Func<Task<T>> call, CancellationToken cancellationToken)
     {
@@ -167,7 +169,7 @@ internal sealed class NominatimThrottle(IOptions<MapsOptions> options, TimeProvi
         try
         {
             var interval = TimeSpan.FromMilliseconds(options.Value.Osm.NominatimMinIntervalMilliseconds);
-            var wait = _last + interval - time.GetUtcNow();
+            var wait = _last is { } last ? interval - time.GetElapsedTime(last) : TimeSpan.Zero;
             if (wait > TimeSpan.Zero)
             {
                 await Task.Delay(wait, time, cancellationToken);
@@ -179,7 +181,7 @@ internal sealed class NominatimThrottle(IOptions<MapsOptions> options, TimeProvi
             }
             finally
             {
-                _last = time.GetUtcNow();
+                _last = time.GetTimestamp();
             }
         }
         finally
