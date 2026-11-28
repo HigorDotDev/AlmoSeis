@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Semente do teste de carga (infra/load/RESULTS.md). Ferramenta de linha de comando, fora da solution do backend:
+    não entra no build nem nos testes da API. Usa o MESMO hasher de senha da API (PasswordHasher<T> do ASP.NET Core
+    Identity, IdentityModule.cs), então os usuários gerados entram pelo POST /auth/login normal.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>AlmoSeis.LoadSeed</RootNamespace>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Mesmas versões de backend/Directory.Packages.props. -->
+    <PackageReference Include="Npgsql" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Identity.Core" Version="10.0.14" />
+  </ItemGroup>
+
+</Project>

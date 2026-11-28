@@ -1,0 +1,55 @@
+# Override do teste de carga (infra/load/RESULTS.md) sobre infra/vm/docker-compose.yml. Só para a máquina do dev.
+#
+#   docker compose -p almoseis-loadtest --env-file infra/load/.out/vm.env \
+#     -f infra/vm/docker-compose.yml -f infra/load/docker-compose.load.yml up -d
+#
+# Limita os serviços da VM a uma "VM" de LOAD_CPUSET (padrão 2 vCPUs, as CPUs 0 e 1 do Docker, compartilhadas por
+# caddy, api, web e postgres, como numa VM de verdade) e à memória do .env (API 1 GB, PostgreSQL 2 GB, página 512 MB,
+# Caddy 256 MB ≈ 4 GB no total). O k6 roda fora dessas CPUs (run.sh: --cpuset-cpus LOAD_K6_CPUSET).
+# Tudo leva o label almoseis.loadtest=true, que a limpeza (run.sh clean) usa como filtro.
+
+services:
+  caddy:
+    cpuset: ${LOAD_CPUSET:-0,1}
+    labels:
+      almoseis.loadtest: "true"
+  api:
+    cpuset: ${LOAD_CPUSET:-0,1}
+    labels:
+      almoseis.loadtest: "true"
+  web:
+    cpuset: ${LOAD_CPUSET:-0,1}
+    labels:
+      almoseis.loadtest: "true"
+  postgres:
+    cpuset: ${LOAD_CPUSET:-0,1}
+    labels:
+      almoseis.loadtest: "true"
+  migrator:
+    labels:
+      almoseis.loadtest: "true"
+
+networks:
+  default:
+    labels:
+      almoseis.loadtest: "true"
+  restore:
+    labels:
+      almoseis.loadtest: "true"
+
+volumes:
+  pgdata:
+    labels:
+      almoseis.loadtest: "true"
+  restore:
+    labels:
+      almoseis.loadtest: "true"
+  dataprotection:
+    labels:
+      almoseis.loadtest: "true"
+  caddy_data:
+    labels:
+      almoseis.loadtest: "true"
+  caddy_config:
+    labels:
+      almoseis.loadtest: "true"

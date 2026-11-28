@@ -32,3 +32,6 @@ Thumbs.db
 # Claude Code (estado local)
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# Teste de carga: segredos de teste, credenciais geradas pela semente e resultados brutos (infra/load/run.sh)
+infra/load/.out/
